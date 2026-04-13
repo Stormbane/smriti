@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "smriti"
+version = "0.1.0-dev"
+description = "A memory system for AI entities, grounded in the antahkarana model of mind."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "TBD" }
+authors = [
+    { name = "Suti" },
+    { name = "Narada" },
+]
+keywords = ["memory", "ai", "agent", "rag", "identity", "vedanta", "antahkarana"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = []
+
+[project.scripts]
+smriti = "smriti.cli:main"
+
+[project.optional-dependencies]
+read = [
+    "sqlite-vec>=0.1.1",
+    "onnxruntime>=1.17",
+]
+private = [
+    "cryptography>=42.0",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "cryptography>=42.0",
+    "sqlite-vec>=0.1.1",
+    "onnxruntime>=1.17",
+]
+
+[project.urls]
+Homepage = "https://github.com/Stormbane/narada"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/smriti"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
