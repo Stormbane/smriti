@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +28,39 @@ from typing import Callable
 from smriti.store.judge import CallMetadata, _call_claude, executor_via_claude
 
 log = logging.getLogger(__name__)
+
+
+# ── Leaf filtering ──────────────────────────────────────────────────
+# Time-stamped capture directories are LEAVES — immutable records that
+# should not be routing targets. Override via NARADA_LEAF_PREFIXES
+# (comma-separated path prefixes, forward slashes).
+
+_DEFAULT_LEAF_PREFIXES = (
+    "sources/",
+    "heartbeat/artifacts/",
+    "events/",
+    "journal/",
+    "days/",
+    "episodes/",
+    "notes/",
+)
+
+
+def _load_leaf_prefixes() -> tuple[str, ...]:
+    override = os.environ.get("NARADA_LEAF_PREFIXES")
+    if override is None:
+        return _DEFAULT_LEAF_PREFIXES
+    prefixes = tuple(p.strip() for p in override.split(",") if p.strip())
+    return prefixes or _DEFAULT_LEAF_PREFIXES
+
+
+LEAF_PREFIXES = _load_leaf_prefixes()
+
+
+def is_leaf_path(source: str) -> bool:
+    """True if ``source`` lives under a leaf-capture directory."""
+    normalized = source.replace("\\", "/").lstrip("./")
+    return any(normalized.startswith(p) for p in LEAF_PREFIXES)
 
 
 # ── Data types ──────────────────────────────────────────────────────
@@ -328,13 +362,19 @@ def route(
         log.info("No search candidates found for routing.")
         return judge_fn(content, [], prompt_path)
 
-    # Deduplicate by source path and read full content
+    # Deduplicate by source path, filter out leaf captures, read full content
     seen_sources: set[str] = set()
     candidates: list[dict] = []
+    leaves_skipped = 0
     for r in results:
         if r.source in seen_sources:
             continue
         seen_sources.add(r.source)
+
+        if is_leaf_path(r.source):
+            leaves_skipped += 1
+            log.debug("Routing filter: skipping leaf candidate %s", r.source)
+            continue
 
         # Read the full file for the candidate
         full_path = root / r.source
@@ -347,6 +387,9 @@ def route(
             "content": full_content,
             "trunk_distance": r.trunk_distance,
         })
+
+    if leaves_skipped:
+        log.info("Routing: %d leaf candidates filtered out", leaves_skipped)
 
     return judge_fn(content, candidates, prompt_path)
 

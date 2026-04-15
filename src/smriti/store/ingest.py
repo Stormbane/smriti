@@ -193,6 +193,8 @@ def ingest(
         return result
 
     # Step 4: Execute routing actions
+    from smriti.store.router import is_leaf_path
+
     cascade_targets: list[Path] = []
 
     for action in routing_result.actions:
@@ -208,10 +210,23 @@ def ingest(
             result.actions_executed.append(action_record)
             continue
 
+        # Belt-and-braces: reject REVISE/CREATE on leaf paths. LINK to a leaf
+        # is allowed (cross-reference to a capture is fine); TASK to a leaf
+        # is weird but not damaging.
+        if action.action in ("REVISE", "CREATE") and is_leaf_path(action.target):
+            log.warning(
+                "Routing action %s on leaf path %s rejected (leaves are immutable)",
+                action.action, action.target,
+            )
+            action_record["executed"] = False
+            action_record["rejected_reason"] = "leaf-path"
+            result.actions_executed.append(action_record)
+            continue
+
         target_path = root / action.target
 
         if action.action == "REVISE":
-            # Safety: trunk files get PROMOTE treatment
+            # Protected files get PROMOTE treatment
             if target_path.name in PROTECTED_FILES:
                 log.info("REVISE on trunk file %s downgraded to PROMOTE", action.target)
                 action_record["action"] = "PROMOTE"
