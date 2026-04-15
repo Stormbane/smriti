@@ -1,0 +1,362 @@
+"""Search-informed routing for new content entering the memory tree.
+
+Routing is SEPARATE from cascade:
+- Routing = initial placement (search-informed, one-shot JUDGE call)
+- Cascade = transitive propagation (wikilink-following, recursive)
+
+The routing JUDGE searches the tree for candidate pages, then decides
+what action each candidate needs in ONE call. Actions:
+
+- REVISE: candidate page needs rewriting with new info (EXECUTOR called)
+- LINK:   candidate is related, add wikilink (no LLM)
+- TASK:   relevant to a goal/project, append todo (no LLM)
+- CREATE: no existing page fits, create a new concept page (EXECUTOR called)
+
+Candidates not in the routing table are implicitly skipped.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable
+
+from smriti.store.judge import CallMetadata, _call_claude, executor_via_claude
+
+log = logging.getLogger(__name__)
+
+
+# ── Data types ──────────────────────────────────────────────────────
+
+
+@dataclass
+class RoutingAction:
+    """A single routing decision for one candidate page."""
+
+    action: str       # REVISE | LINK | TASK | CREATE
+    target: str       # relative path (existing page or new path for CREATE)
+    direction: str    # instructions for EXECUTOR / task text / link note
+    reason: str
+
+
+@dataclass
+class RoutingResult:
+    """The full routing table from one JUDGE call."""
+
+    actions: list[RoutingAction] = field(default_factory=list)
+    meta: CallMetadata = field(default_factory=CallMetadata)
+
+
+# ── Action executors (no LLM) ──────────────────────────────────────
+
+
+def execute_link(
+    summary_path: Path,
+    target_path: Path,
+    root: Path,
+) -> bool:
+    """Add a wikilink between summary and target. Returns True if changed."""
+    target_rel = str(target_path.relative_to(root).with_suffix("")).replace("\\", "/")
+    link = f"[[{target_rel}]]"
+
+    try:
+        content = summary_path.read_text(encoding="utf-8")
+    except OSError:
+        log.warning("execute_link: cannot read %s", summary_path)
+        return False
+
+    # Already linked
+    if link in content:
+        return False
+
+    # Find or create a Related section
+    related_pat = re.compile(r"^##\s+(Related|See Also)\s*$", re.MULTILINE | re.IGNORECASE)
+    match = related_pat.search(content)
+
+    if match:
+        # Insert after the heading
+        insert_pos = match.end()
+        content = content[:insert_pos] + f"\n- {link}" + content[insert_pos:]
+    else:
+        content = content.rstrip() + f"\n\n## Related\n\n- {link}\n"
+
+    summary_path.write_text(content, encoding="utf-8")
+    log.info("LINK: %s -> %s", summary_path.relative_to(root), target_rel)
+    return True
+
+
+def execute_task(
+    target_path: Path,
+    task_description: str,
+    summary_path: Path,
+    root: Path,
+) -> bool:
+    """Append a task to the target page's task/todo section. Returns True if changed."""
+    summary_rel = str(summary_path.relative_to(root).with_suffix("")).replace("\\", "/")
+    task_line = f"- [ ] {task_description} (from [[{summary_rel}]])"
+
+    try:
+        content = target_path.read_text(encoding="utf-8")
+    except OSError:
+        log.warning("execute_task: cannot read %s", target_path)
+        return False
+
+    # Check for duplicate
+    if task_description in content:
+        return False
+
+    # Find an existing tasks/todo section
+    task_pat = re.compile(
+        r"^##\s+(Tasks|TODO|Action Items|Next)\s*$",
+        re.MULTILINE | re.IGNORECASE,
+    )
+    match = task_pat.search(content)
+
+    if match:
+        insert_pos = match.end()
+        content = content[:insert_pos] + f"\n{task_line}" + content[insert_pos:]
+    else:
+        content = content.rstrip() + f"\n\n## Tasks\n\n{task_line}\n"
+
+    target_path.write_text(content, encoding="utf-8")
+    log.info("TASK: %s -> %s", task_description[:60], target_path.relative_to(root))
+    return True
+
+
+def execute_create(
+    target_path: Path,
+    direction: str,
+    context: str,
+    root: Path,
+    executor_fn: Callable[..., str] = executor_via_claude,
+) -> Path:
+    """Create a new concept page via EXECUTOR. Returns the created path."""
+    # If target already exists, this should have been downgraded to REVISE
+    if target_path.exists():
+        raise FileExistsError(f"Cannot CREATE: {target_path} already exists")
+
+    prompt_direction = (
+        f"Create a new knowledge page about: {direction}\n\n"
+        f"Write clear, structured markdown with a heading. "
+        f"Include wikilinks to related concepts where appropriate."
+    )
+
+    content = executor_fn(context, prompt_direction, context)
+
+    # Ensure parent dirs exist
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Add frontmatter
+    page = (
+        f"---\ncreated_by: ingest\n---\n\n{content}\n"
+    )
+    target_path.write_text(page, encoding="utf-8")
+    log.info("CREATE: %s", target_path.relative_to(root))
+    return target_path
+
+
+# ── Routing JUDGE ───────────────────────────────────────────────────
+
+_DEFAULT_ROUTING_PROMPT = """\
+You are routing new content into an existing knowledge tree.
+
+Given the NEW CONTENT and a set of CANDIDATE PAGES, decide which candidates
+need action. Return a JSON array of actions.
+
+Each action object has these keys:
+- "action": one of REVISE, LINK, TASK, CREATE
+- "target": the candidate's relative path (for REVISE/LINK/TASK) or a new \
+relative path (for CREATE)
+- "direction": what to change (REVISE), the connection (LINK), the task \
+description (TASK), or what the new page should cover (CREATE)
+- "reason": brief rationale
+
+Action types:
+- REVISE: The candidate page needs rewriting to incorporate new information. \
+Use when the new content materially changes or extends what the candidate says.
+- LINK: The candidate is related but its content does not need changing. \
+Add a cross-reference. Use when there is a topical connection but no \
+information update.
+- TASK: The new content is relevant to a goal or project page. Add a review \
+task. Use for actionable items that a human should consider.
+- CREATE: No existing candidate captures a concept that deserves its own page. \
+Suggest a path under semantic/concepts/ and describe the topic. Use sparingly.
+
+Candidates not in your response are implicitly skipped (no action needed).
+
+Return ONLY a JSON array. If no actions are needed, return [].
+"""
+
+
+def routing_judge_auto_skip(
+    content: str,
+    candidates: list[dict],
+    prompt_path: Path | None = None,
+) -> RoutingResult:
+    """Always returns empty routing table. For testing without LLM calls."""
+    return RoutingResult()
+
+
+def routing_judge_via_claude(
+    content: str,
+    candidates: list[dict],
+    prompt_path: Path | None = None,
+) -> RoutingResult:
+    """Call ``claude -p`` with the routing JUDGE prompt.
+
+    Parameters
+    ----------
+    content:
+        The new content being ingested.
+    candidates:
+        List of dicts with keys: source, content, trunk_distance.
+    prompt_path:
+        Optional path to a custom prompt template.
+    """
+    if prompt_path and prompt_path.exists():
+        template = prompt_path.read_text(encoding="utf-8")
+    else:
+        template = _DEFAULT_ROUTING_PROMPT
+
+    # Build candidate listing
+    candidate_lines = []
+    for i, c in enumerate(candidates):
+        candidate_lines.append(
+            f"[{i + 1}] {c['source']} (trunk_distance: {c.get('trunk_distance', -1)})\n"
+            f"{c['content'][:2000]}"
+        )
+    candidates_text = "\n\n---\n\n".join(candidate_lines) if candidate_lines else "(no candidates found)"
+
+    prompt = (
+        f"{template}\n\n"
+        f"--- NEW CONTENT ---\n{content[:4000]}\n\n"
+        f"--- CANDIDATE PAGES ({len(candidates)}) ---\n{candidates_text}\n\n"
+        f"Respond with JSON array only."
+    )
+
+    raw, meta = _call_claude(prompt)
+
+    # Parse JSON array from response
+    actions = _parse_routing_response(raw)
+
+    return RoutingResult(actions=actions, meta=meta)
+
+
+def _parse_routing_response(raw: str) -> list[RoutingAction]:
+    """Extract RoutingAction list from LLM response."""
+    try:
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start >= 0 and end > start:
+            data = json.loads(raw[start:end])
+            actions = []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                action = item.get("action", "").upper()
+                if action not in ("REVISE", "LINK", "TASK", "CREATE"):
+                    log.warning("Unknown routing action: %s", action)
+                    continue
+                actions.append(RoutingAction(
+                    action=action,
+                    target=item.get("target", ""),
+                    direction=item.get("direction", ""),
+                    reason=item.get("reason", ""),
+                ))
+            return actions
+    except json.JSONDecodeError:
+        pass
+
+    log.warning("Could not parse routing response as JSON, returning empty actions")
+    return []
+
+
+# ── Main route function ────────────────────────────────────────────
+
+
+def route(
+    content: str,
+    root: Path,
+    *,
+    top_k: int = 10,
+    judge_fn: Callable[..., RoutingResult] | None = None,
+    prompt_path: Path | None = None,
+) -> RoutingResult:
+    """Search the tree for candidates and route new content to them.
+
+    Parameters
+    ----------
+    content:
+        The new content to route.
+    root:
+        Tree root path.
+    top_k:
+        Number of search candidates to consider.
+    judge_fn:
+        Routing judge function. Defaults to ``routing_judge_via_claude``.
+    prompt_path:
+        Optional path to a custom routing prompt.
+
+    Returns
+    -------
+    RoutingResult
+        The routing table with actions for relevant candidates.
+    """
+    from smriti.core.tree import smriti_db_path
+    from smriti.store.schema import ensure_schema
+    from smriti.store.search import search
+
+    if judge_fn is None:
+        judge_fn = routing_judge_via_claude
+
+    db_path = smriti_db_path()
+    if not db_path.exists():
+        log.warning("No search index found. Routing skipped. Run 'smriti index' first.")
+        return RoutingResult()
+
+    # Open index and search for candidates
+    conn = ensure_schema(db_path, _get_dimension(db_path))
+    try:
+        results = search(conn, content[:1000], top_k=top_k, use_reranker=False)
+    finally:
+        conn.close()
+
+    if not results:
+        log.info("No search candidates found for routing.")
+        return judge_fn(content, [], prompt_path)
+
+    # Deduplicate by source path and read full content
+    seen_sources: set[str] = set()
+    candidates: list[dict] = []
+    for r in results:
+        if r.source in seen_sources:
+            continue
+        seen_sources.add(r.source)
+
+        # Read the full file for the candidate
+        full_path = root / r.source
+        try:
+            full_content = full_path.read_text(encoding="utf-8")
+        except OSError:
+            full_content = r.content  # fall back to chunk
+        candidates.append({
+            "source": r.source,
+            "content": full_content,
+            "trunk_distance": r.trunk_distance,
+        })
+
+    return judge_fn(content, candidates, prompt_path)
+
+
+def _get_dimension(db_path: Path) -> int:
+    """Read embedding dimension from the index metadata."""
+    import sqlite3
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key = 'dimension'").fetchone()
+        return int(row[0]) if row else 384
+    finally:
+        conn.close()

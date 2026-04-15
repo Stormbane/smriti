@@ -174,10 +174,10 @@ def executor_via_claude(
     direction: str,
     child_content: str,
     prompt_path: Path | None = None,
-) -> tuple[str, CallMetadata]:
+) -> str:
     """Call ``claude -p`` with the EXECUTOR prompt.
 
-    Returns ``(revised_content, metadata)``.
+    Returns the revised content as a string. Metadata is logged internally.
     """
     if prompt_path and prompt_path.exists():
         template = prompt_path.read_text(encoding="utf-8")
@@ -195,4 +195,9 @@ def executor_via_claude(
         f"Return ONLY the revised page content."
     )
 
-    return _call_claude(prompt)
+    text, meta = _call_claude(prompt)
+    log.info(
+        "EXECUTOR: model=%s tokens_in=%d tokens_out=%d cost=$%.4f elapsed=%dms",
+        meta.model, meta.tokens_in, meta.tokens_out, meta.cost_usd, meta.elapsed_ms,
+    )
+    return text

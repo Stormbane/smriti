@@ -177,7 +177,12 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
     from smriti.core.tree import tree_root
     from smriti.metrics import get_logger
     from smriti.store.cascade import cognitive_cascade
-    from smriti.store.judge import executor_echo, judge_auto_keep
+    from smriti.store.judge import (
+        executor_echo,
+        executor_via_claude,
+        judge_auto_keep,
+        judge_via_claude,
+    )
     from smriti.store.queue import complete, dequeue, pending_count
 
     root = tree_root()
@@ -187,15 +192,27 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
         print("Queue empty — nothing to process. No sleep needed.")
         return 0
 
+    # Real judge/executor by default, stubs with --dry-run
+    if args.dry_run:
+        judge_fn = judge_auto_keep
+        executor_fn = executor_echo
+        mode = "dry-run (stubs)"
+    else:
+        judge_fn = judge_via_claude
+        executor_fn = executor_via_claude
+        mode = "claude -p"
+
     n = count if args.all else min(args.n, count)
-    print(f"Sleep cycle: processing {n} of {count} pending tasks...")
+    print(f"Sleep cycle: processing {n} of {count} pending tasks ({mode})...")
 
     t0 = _time.monotonic()
-    metrics.log("sleep_started", pending_count=count, tasks_to_process=n)
+    metrics.log("sleep_started", pending_count=count, tasks_to_process=n, mode=mode)
 
     processed = 0
     failed = 0
     total_depth = 0
+    total_verdicts = 0
+    total_changed = 0
     tasks = dequeue(n)
 
     for task in tasks:
@@ -207,15 +224,20 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
                     stats = cognitive_cascade(
                         path,
                         root,
-                        judge_fn=judge_auto_keep,
-                        executor_fn=executor_echo,
+                        judge_fn=judge_fn,
+                        executor_fn=executor_fn,
                     )
                     total_depth = max(total_depth, stats["max_depth"])
-                    print(
-                        f"    depth={stats['max_depth']}, "
-                        f"verdicts={len(stats['verdicts'])}, "
-                        f"changed={len(stats['files_changed'])}"
-                    )
+                    total_verdicts += len(stats["verdicts"])
+                    total_changed += len(stats["files_changed"])
+                    for v in stats["verdicts"]:
+                        print(f"    {v['verdict']}: {v['parent']} — {v['reason']}")
+                    if stats["promoted"]:
+                        for p in stats["promoted"]:
+                            print(f"    PROMOTE: {p} (needs human review)")
+                    if stats["files_changed"]:
+                        for f in stats["files_changed"]:
+                            print(f"    REVISED: {f}")
                 else:
                     print("    skipped (file not found)")
             complete(task.id)
@@ -234,10 +256,14 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
         tasks_failed=failed,
         elapsed_ms=elapsed,
         max_depth=total_depth,
+        total_verdicts=total_verdicts,
+        total_changed=total_changed,
+        mode=mode,
     )
 
     print(f"\nSleep complete: {processed} processed, {failed} failed, {elapsed}ms.")
-    print(f"{remaining} tasks remaining in queue.")
+    print(f"  Verdicts: {total_verdicts}, Files changed: {total_changed}, Max depth: {total_depth}")
+    print(f"  {remaining} tasks remaining in queue.")
     return 0
 
 
@@ -266,10 +292,84 @@ def _cmd_queue(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_daemon(args: argparse.Namespace) -> int:
+    """Foreground queue worker. Loops until interrupted."""
+    import time as _time
+
+    from smriti.core.tree import tree_root
+    from smriti.metrics import get_logger
+    from smriti.store.cascade import cognitive_cascade
+    from smriti.store.judge import executor_via_claude, judge_via_claude
+    from smriti.store.queue import complete, dequeue, pending_count
+
+    if args.subcommand == "status":
+        count = pending_count()
+        print(f"smriti daemon: not running (foreground only)")
+        print(f"Queue: {count} pending tasks")
+        return 0
+
+    # args.subcommand == "start"
+    root = tree_root()
+    metrics = get_logger()
+    poll_interval = args.interval
+
+    print(f"smriti daemon started (poll every {poll_interval}s, Ctrl+C to stop)")
+    metrics.log("daemon_started", poll_interval=poll_interval)
+
+    processed_total = 0
+    failed_total = 0
+
+    try:
+        while True:
+            count = pending_count()
+            if count == 0:
+                _time.sleep(poll_interval)
+                continue
+
+            tasks = dequeue(1)
+            for task in tasks:
+                print(f"  [{task.type}] {task.path}")
+                try:
+                    if task.type == "cognitive_cascade":
+                        path = root / task.path
+                        if path.exists():
+                            stats = cognitive_cascade(
+                                path,
+                                root,
+                                judge_fn=judge_via_claude,
+                                executor_fn=executor_via_claude,
+                            )
+                            print(
+                                f"    depth={stats['max_depth']}, "
+                                f"verdicts={len(stats['verdicts'])}, "
+                                f"changed={len(stats['files_changed'])}"
+                            )
+                        else:
+                            print("    skipped (file not found)")
+                    complete(task.id)
+                    processed_total += 1
+                except Exception as exc:
+                    complete(task.id, error=str(exc))
+                    failed_total += 1
+                    print(f"    FAILED: {exc}")
+
+    except KeyboardInterrupt:
+        print(f"\nDaemon stopped. Processed: {processed_total}, failed: {failed_total}")
+        metrics.log("daemon_stopped", processed=processed_total, failed=failed_total)
+
+    return 0
+
+
 def _cmd_eval(args: argparse.Namespace) -> int:
     from smriti.eval.metrics import compute_metrics, enrich_from_metrics_log
     from smriti.eval.report import json_report, terminal_report
     from smriti.eval.runner import run_cascade_cases, run_judge_cases, run_search_cases
+
+    judge_fn = None
+    if args.real:
+        from smriti.store.judge import judge_via_claude
+        judge_fn = judge_via_claude
+        print("Using claude -p for JUDGE evaluation.")
 
     judge_results = []
     search_results = []
@@ -277,7 +377,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 
     if not args.search_only and not args.cascade_only:
         print("Running JUDGE cases...")
-        judge_results = run_judge_cases()
+        judge_results = run_judge_cases(judge_fn=judge_fn)
     if not args.judge_only and not args.cascade_only:
         print("Running SEARCH cases...")
         try:
@@ -310,6 +410,52 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         )
         print(f"Baseline saved: {baseline_path}")
 
+    return 0
+
+
+def _cmd_ingest(args: argparse.Namespace) -> int:
+    from smriti.store.ingest import ingest
+
+    source = args.source
+    print(f"Ingesting: {source}")
+
+    try:
+        result = ingest(
+            source,
+            branch=args.branch,
+            dry_run=args.dry_run,
+            no_route=args.no_route,
+            route_top_k=args.top_k,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}")
+        return 1
+
+    print(f"Source: {result.source} ({result.source_type})")
+    if result.summary_path:
+        from smriti.core.tree import tree_root
+        print(f"Summary: {result.summary_path.relative_to(tree_root())}")
+
+    if result.routing.actions:
+        print(f"Routing: {len(result.routing.actions)} actions")
+        for action in result.routing.actions:
+            prefix = "  DRY " if args.dry_run else "  "
+            print(f"{prefix}{action.action:8s} {action.target} — {action.direction[:80]}")
+    elif not args.no_route:
+        print("Routing: no actions needed")
+
+    if result.actions_executed:
+        executed = sum(1 for a in result.actions_executed if a.get("executed"))
+        promoted = sum(1 for a in result.actions_executed if a.get("action") == "PROMOTE")
+        print(f"Executed: {executed} actions", end="")
+        if promoted:
+            print(f" ({promoted} promoted for human review)", end="")
+        print()
+
+    if result.cascade_queued:
+        print(f"Cascade: queued {result.cascade_queued} tasks")
+
+    print(f"Done ({result.elapsed_ms}ms)")
     return 0
 
 
@@ -382,18 +528,39 @@ def main(argv: list[str] | None = None) -> int:
     p_sleep = sub.add_parser("sleep", help="Process queued cascade tasks (sleep cycle)")
     p_sleep.add_argument("--all", action="store_true", help="Process entire queue")
     p_sleep.add_argument("-n", type=int, default=1, help="Number of tasks to process")
+    p_sleep.add_argument("--dry-run", action="store_true", help="Use test stubs instead of claude -p")
 
     # ── queue ────────────────────────────────────────────────────────
     p_queue = sub.add_parser("queue", help="Show queue status")
     p_queue.add_argument("--cleanup", action="store_true", help="Remove completed tasks")
+
+    # ── daemon ───────────────────────────────────────────────────────
+    p_daemon = sub.add_parser("daemon", help="Foreground queue worker")
+    p_daemon_sub = p_daemon.add_subparsers(dest="subcommand")
+    p_daemon_start = p_daemon_sub.add_parser("start", help="Start foreground worker")
+    p_daemon_start.add_argument(
+        "--interval", type=float, default=5.0,
+        help="Poll interval in seconds (default: 5.0)"
+    )
+    p_daemon_sub.add_parser("status", help="Show queue status")
+    p_daemon.set_defaults(subcommand="start", interval=5.0)
 
     # ── eval ─────────────────────────────────────────────────────────
     p_eval = sub.add_parser("eval", help="Run evaluation cases")
     p_eval.add_argument("--judge", dest="judge_only", action="store_true", help="JUDGE cases only")
     p_eval.add_argument("--search", dest="search_only", action="store_true", help="Search cases only")
     p_eval.add_argument("--cascade", dest="cascade_only", action="store_true", help="Cascade cases only")
+    p_eval.add_argument("--real", action="store_true", help="Use claude -p for JUDGE (default: stubs)")
     p_eval.add_argument("--json", action="store_true", help="JSON output")
     p_eval.add_argument("--baseline", action="store_true", help="Save results as baseline")
+
+    # ── ingest ──────────────────────────────────────────────────────
+    p_ingest = sub.add_parser("ingest", help="Ingest content into the memory tree")
+    p_ingest.add_argument("source", help="File or directory to ingest")
+    p_ingest.add_argument("--branch", default="sources", help="Branch for summary (default: sources)")
+    p_ingest.add_argument("--dry-run", action="store_true", help="Route but don't execute actions")
+    p_ingest.add_argument("--no-route", action="store_true", help="Skip routing (summary only)")
+    p_ingest.add_argument("-k", "--top-k", type=int, default=10, help="Routing candidates (default: 10)")
 
     # ── metrics ──────────────────────────────────────────────────────
     p_metrics = sub.add_parser("metrics", help="Show metrics summary")
@@ -407,6 +574,13 @@ def main(argv: list[str] | None = None) -> int:
     else:
         logging.basicConfig(level=logging.WARNING)
 
+    # Wire private layer if vault already exists (idempotent)
+    from smriti.core.tree import tree_root as _tree_root
+    from smriti.private.store import PrivateStore as _PrivateStore
+    _private_root = _tree_root() / "private"
+    if _private_root.exists():
+        _PrivateStore(_tree_root()).init()
+
     if args.command is None:
         parser.print_help()
         return 0
@@ -419,8 +593,10 @@ def main(argv: list[str] | None = None) -> int:
         "watch": _cmd_watch,
         "sleep": _cmd_sleep,
         "queue": _cmd_queue,
+        "daemon": _cmd_daemon,
         "eval": _cmd_eval,
         "metrics": _cmd_metrics,
+        "ingest": _cmd_ingest,
     }
     return handlers[args.command](args)
 

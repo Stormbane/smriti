@@ -12,25 +12,35 @@
 
 ## Status
 
-**Pre-alpha, design phase.** The main smriti package doesn't install yet
-— this repository exists to hold the architecture, the research
-provenance, and eventually the reference implementation. If you are
-reading this and want a full memory system for your own AI today, **you
-should not use smriti yet** — see [Related work](#related-work) below
-for what to use instead.
+**v0.1 — working, not yet stable.** The core pipeline installs and runs.
 
-**One small thing IS installable today**: the **PreCompact capture hook**
-at `src/smriti/hooks/precompact_capture.py`. It is a standalone Python
-script that captures raw conversation turns from Claude Code sessions
-before context compaction destroys them. Install it into `~/.claude/hooks/`
-and wire it as a `PreCompact` hook in your Claude Code settings. The
-staging tree it produces at `~/.claude/narada-staging-events/{entity}/`
-becomes the initial ingest when smriti v0.1 lands.
+```bash
+pip install -e ".[read,dev]"
+smriti index          # build the search index over ~/.narada/
+smriti read "query"   # semantic + keyword search
+smriti write "text"   # write an entry to the memory tree
+smriti ingest file.md # ingest external content, route to tree
+smriti sleep          # process queued cascade tasks
+smriti status         # index stats
+```
+
+39 tests pass. The write, read, cascade, and ingest pipelines are complete.
+The cascade queue and sleep cycle are wired. The private (encrypted) layer
+has a skeleton but is not active by default.
+
+What is not yet stable: the storage schema may change before v0.2. The
+JUDGE prompt is a stub that accepts everything — the real identity-core
+integration (Qwen3 + LoRA) is the next milestone. Don't build production
+workflows on the schema yet.
+
+**The PreCompact capture hook** at `src/smriti/hooks/precompact_capture.py`
+is a standalone Python script that captures raw conversation turns from
+Claude Code sessions before context compaction destroys them. Install it
+into `~/.claude/hooks/` and wire it as a `PreCompact` hook in your Claude
+Code settings. The staging tree it produces at
+`~/.claude/narada-staging-events/{entity}/` feeds the ingest pipeline.
 
 See [`docs/INSTALL.md`](docs/INSTALL.md) for the ten-minute install guide.
-This backstop is useful on its own even if you never use the rest of
-smriti — every Claude Code user loses context to compaction, and every
-Claude Code user can have it back with this one script.
 
 ## What this is
 
