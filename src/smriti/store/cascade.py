@@ -30,8 +30,29 @@ from smriti.store.queue import QueueTask, enqueue
 
 log = logging.getLogger(__name__)
 
-# Files that require human review — cascade stops here
-TRUNK_FILES = {"MEMORY.md", "identity.md", "manifest.md", "mind.md", "suti.md"}
+# Files that require human review — cascade PROMOTEs, never REVISEs.
+# The heartbeat and smriti's auto-cascade must not write to these.
+# Override via the NARADA_PROTECTED_FILES env var (comma-separated filenames).
+import os as _os
+
+_DEFAULT_PROTECTED_FILES = frozenset({
+    "MEMORY.md", "identity.md", "manifest.md", "mind.md", "suti.md",
+})
+
+
+def _load_protected_files() -> frozenset[str]:
+    override = _os.environ.get("NARADA_PROTECTED_FILES")
+    if override is None:
+        return _DEFAULT_PROTECTED_FILES
+    names = {n.strip() for n in override.split(",") if n.strip()}
+    return frozenset(names) if names else _DEFAULT_PROTECTED_FILES
+
+
+PROTECTED_FILES = _load_protected_files()
+
+# Deprecated alias — use PROTECTED_FILES. Kept temporarily for compatibility.
+TRUNK_FILES = PROTECTED_FILES
+
 MAX_CASCADE_DEPTH = 5
 
 
@@ -150,15 +171,30 @@ def cognitive_cascade(
     executor_prompt: Path | None = None,
     depth: int = 0,
     dry_run: bool = False,
+    visited: set[Path] | None = None,
 ) -> dict:
     """Run cognitive cascade from a changed file upward.
 
     Returns a dict with cascade stats: depth reached, verdicts, files changed.
+
+    Cycle protection: ``visited`` tracks paths already processed in this
+    cascade. A wikilink graph with cycles (A → B → C → A) will not re-revise
+    files. Each path is cascaded from at most once per top-level invocation.
     """
     if root is None:
         root = tree_root()
 
+    if visited is None:
+        visited = set()
+
     stats = {"depth": depth, "verdicts": [], "files_changed": [], "promoted": [], "max_depth": depth}
+
+    # Cycle protection — skip if we've already cascaded from this path
+    resolved = changed_path.resolve()
+    if resolved in visited:
+        log.debug("Cascade cycle detected, skipping revisit of %s", changed_path)
+        return stats
+    visited.add(resolved)
 
     if depth >= MAX_CASCADE_DEPTH:
         log.warning("Cascade depth limit reached at %s", changed_path)
@@ -180,7 +216,7 @@ def cognitive_cascade(
         parent_rel = parent_path.relative_to(root)
 
         # Trunk-level files require human review
-        if parent_path.name in TRUNK_FILES:
+        if parent_path.name in PROTECTED_FILES:
             stats["promoted"].append(str(parent_rel))
             log.info(
                 "Cascade reached trunk: %s (flagged for human review, not auto-applied)",
@@ -231,6 +267,7 @@ def cognitive_cascade(
                 executor_prompt=executor_prompt,
                 depth=depth + 1,
                 dry_run=dry_run,
+                visited=visited,
             )
             stats["max_depth"] = max(stats["max_depth"], sub_stats["max_depth"])
             stats["verdicts"].extend(sub_stats["verdicts"])
