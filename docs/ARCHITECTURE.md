@@ -11,6 +11,52 @@ the document is written with them in mind alongside the others.
 
 ---
 
+## Implementation status (2026-04-15)
+
+What is built and live:
+
+- **Index + search**: hybrid vector (sqlite-vec) + FTS5 with trunk-distance
+  scoring. CLI: `smriti index`, `smriti read`.
+- **Write path**: dated-entry writes under branches with frontmatter. CLI:
+  `smriti write`.
+- **Structural cascade**: auto-regenerates `index.md` files from directory
+  listings on every write (no LLM).
+- **Cognitive cascade**: upward wikilink propagation with a pluggable JUDGE
+  (KEEP/REVISE/REJECT/PROMOTE). Cycle-protected via a `visited` set. Stops
+  at `PROTECTED_FILES` (default: identity.md, manifest.md, mind.md, suti.md,
+  MEMORY.md; overridable via `NARADA_PROTECTED_FILES` env var).
+- **Ingest pipeline**: `smriti ingest <path>` reads a file/directory,
+  summarizes via EXECUTOR, routes via search-informed JUDGE, executes
+  REVISE/LINK/TASK/CREATE actions, queues cascades. Leaf-directory filter
+  excludes `sources/`, `events/`, `journal/`, `days/`, `episodes/`, `notes/`,
+  `heartbeat/artifacts/` from routing targets (overridable via
+  `NARADA_LEAF_PREFIXES`).
+- **Routing JUDGE**: one claude -p call per ingest, returns a JSON routing
+  table scoring all candidates together. `routing_judge_via_claude` is the
+  default; `routing_judge_auto_skip` is a test stub.
+- **Queue + sleep**: deferred cognitive cascade processing. CLI: `smriti
+  sleep` (with `--dry-run` for stubs), `smriti daemon start` for a
+  long-running worker.
+- **Eval framework**: JUDGE cases, search cases, cascade cases. `smriti
+  eval --real` runs live claude -p.
+- **MCP server**: `mcp_server.py` exposes `smriti_read`, `smriti_write`,
+  `smriti_status` over JSON-RPC stdio.
+- **Metrics**: JSONL at `~/.narada/.smriti/metrics.jsonl` with
+  per-operation token/cost/timing.
+
+What is NOT built yet:
+
+- **Full EXTRACT phase**: candidates are produced by the EXECUTOR during
+  ingest, not as a separate capability-LLM step.
+- **CROSSLINK entity resolution**: wikilinks are written by the EXECUTOR in
+  prose, not via a structured extraction pass.
+- **Lint** (Karpathy-style health pass): orphan pages, broken wikilinks,
+  contradictions — not yet.
+- **Qwen3+LoRA as JUDGE**: currently all judges are `claude -p`; the
+  pluggable interface is in place so the swap is a function-pointer change.
+
+---
+
 ## 1. The Principle (load-bearing, do not violate)
 
 **Capability and judgment are separate concerns. The identity core is the

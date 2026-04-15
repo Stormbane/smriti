@@ -72,23 +72,55 @@ def executor_echo(
 # ── Claude -p implementations ───────────────────────────────────────
 
 
+# Resolve the claude CLI absolute path once, so we bypass per-spawn PATH
+# lookup. Observed 2026-04-15 on Windows: the 3rd consecutive subprocess
+# call (summary + route + revise) would fail with FileNotFoundError
+# despite `claude` being on PATH. Using the absolute path avoids that.
+_CLAUDE_PATH: str | None = None
+
+
+def _get_claude_path() -> str:
+    global _CLAUDE_PATH
+    if _CLAUDE_PATH is None:
+        import shutil
+        resolved = shutil.which("claude")
+        _CLAUDE_PATH = resolved if resolved else "claude"
+        if resolved:
+            log.debug("Resolved claude CLI to %s", resolved)
+    return _CLAUDE_PATH
+
+
 def _call_claude(prompt: str, *, timeout: int = 120) -> tuple[str, CallMetadata]:
     """Call ``claude -p`` and return ``(text, metadata)``.
 
     Parses the JSON response for token counts, cost, and model info.
+
+    Uses the absolute path to ``claude`` resolved once via shutil.which to
+    avoid per-spawn PATH lookup flakiness on Windows. Retries once on
+    FileNotFoundError as a last-resort safety net.
     """
     t0 = time.monotonic()
     meta = CallMetadata()
+    claude = _get_claude_path()
+    cmd = [claude, "-p", prompt, "--output-format", "json"]
+
+    def _spawn() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout,
+        )
 
     try:
-        result = subprocess.run(
-            ["claude", "-p", prompt, "--output-format", "json"],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except FileNotFoundError:
-        raise RuntimeError("claude CLI not found. Is Claude Code installed?")
+        try:
+            result = _spawn()
+        except FileNotFoundError:
+            log.warning("claude CLI not found on first try; retrying once")
+            time.sleep(0.5)
+            try:
+                result = _spawn()
+            except FileNotFoundError:
+                raise RuntimeError(
+                    f"claude CLI not found at '{claude}'. Is Claude Code installed?"
+                )
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"claude -p timed out after {timeout}s")
 

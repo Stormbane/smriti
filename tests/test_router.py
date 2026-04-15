@@ -12,6 +12,7 @@ from smriti.store.router import (
     _parse_routing_response,
     execute_link,
     execute_task,
+    is_leaf_path,
     routing_judge_auto_skip,
 )
 
@@ -184,6 +185,32 @@ def test_execute_task_appends_to_existing_section(tmp_path: Path):
     content = target.read_text(encoding="utf-8")
     assert "Existing task" in content
     assert "New task from ingest" in content
+
+
+def test_is_leaf_path_defaults():
+    """Default leaf prefixes cover time-stamped capture directories."""
+    assert is_leaf_path("sources/2026/04-15-001.md")
+    assert is_leaf_path("heartbeat/artifacts/foo.md")
+    assert is_leaf_path("events/bt-narada/event.md")
+    assert is_leaf_path("journal/2026-04-15.md")
+    assert is_leaf_path("days/2026-04-15.md")
+    assert is_leaf_path("episodes/some-episode.md")
+    assert is_leaf_path("notes/2026-04-15-thought.md")
+
+
+def test_is_leaf_path_non_leaves():
+    """Concept/goal/project pages are not leaves."""
+    assert not is_leaf_path("goals/achieve-sovereignty.md")
+    assert not is_leaf_path("projects/smriti.md")
+    assert not is_leaf_path("concepts/viveka.md")
+    assert not is_leaf_path("tasks.md")
+    assert not is_leaf_path("identity.md")
+
+
+def test_is_leaf_path_windows_slashes():
+    """Windows backslash paths normalize correctly."""
+    assert is_leaf_path("sources\\2026\\04-15-001.md")
+    assert is_leaf_path("heartbeat\\artifacts\\foo.md")
 
 
 def test_execute_task_deduplicates(tmp_path: Path):

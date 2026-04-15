@@ -182,6 +182,60 @@ def test_cognitive_cascade_trunk_protection(cascade_tree: Path) -> None:
     assert "cascade touched this" not in identity_content
 
 
+def test_cognitive_cascade_cycle_protection(tmp_path: Path) -> None:
+    """Cascade with a wikilink cycle A → B → C → A doesn't re-revise files."""
+    # Build a cyclic reference graph
+    (tmp_path / "a.md").write_text("# A\n\nRefs [[b]].\n", encoding="utf-8")
+    (tmp_path / "b.md").write_text("# B\n\nRefs [[c]].\n", encoding="utf-8")
+    (tmp_path / "c.md").write_text("# C\n\nRefs [[a]].\n", encoding="utf-8")
+
+    revise_counts: dict[str, int] = {}
+
+    def counting_judge(parent: str, child: str, prompt: Path | None = None) -> JudgmentResult:
+        return JudgmentResult(
+            seeing="Test.", verdict="REVISE",
+            direction="Update.", reason="Test cycle.",
+        )
+
+    def counting_executor(parent: str, direction: str, child: str, prompt: Path | None = None) -> str:
+        # Count how many times this file is revised by inspecting the child arg
+        revise_counts[child[:20]] = revise_counts.get(child[:20], 0) + 1
+        return parent + "\n*revised*\n"
+
+    # Start cascade from a.md — with a cycle, each file should be revised at most once
+    stats = cognitive_cascade(
+        tmp_path / "a.md",
+        tmp_path,
+        judge_fn=counting_judge,
+        executor_fn=counting_executor,
+    )
+
+    # Each unique file should appear in files_changed at most once
+    assert len(stats["files_changed"]) == len(set(stats["files_changed"]))
+    # With cycle protection, the max_depth is bounded by graph size, not MAX_CASCADE_DEPTH
+    assert stats["max_depth"] < 5
+
+
+def test_protected_files_env_override(tmp_path: Path, monkeypatch) -> None:
+    """NARADA_PROTECTED_FILES env var overrides the default set."""
+    import importlib
+
+    monkeypatch.setenv("NARADA_PROTECTED_FILES", "my-special.md, another.md")
+
+    # Reload cascade module so the env var is picked up
+    import smriti.store.cascade as cascade_mod
+    importlib.reload(cascade_mod)
+
+    assert "my-special.md" in cascade_mod.PROTECTED_FILES
+    assert "another.md" in cascade_mod.PROTECTED_FILES
+    assert "identity.md" not in cascade_mod.PROTECTED_FILES
+
+    # Reload with env cleared to restore defaults for other tests
+    monkeypatch.delenv("NARADA_PROTECTED_FILES")
+    importlib.reload(cascade_mod)
+    assert "identity.md" in cascade_mod.PROTECTED_FILES
+
+
 # ── Queue tests ──────────────────────────────────────────────────────
 
 
