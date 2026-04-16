@@ -9,30 +9,24 @@ In v0.1 we go directly:
 
     write_entry() -> file on disk -> index_tree() on that one file
 
-The JUDGE step is left as a stub. When the Qwen+LoRA viveka is stable,
-JUDGE will sit between the caller and write_entry: the caller proposes,
-the viveka disposes, and only approved content reaches the filesystem.
-
 Entry format
 ------------
-Each entry is appended to a daily file at <tree_root>/<branch>/YYYY/MM-DD.md.
-Multiple writes on the same day accumulate in the same file, separated by
-horizontal rules. The frontmatter on each entry records provenance.
+Journal entries use a cascading time structure:
 
-Concurrency: file creation uses O_CREAT|O_EXCL for atomic first-writer-wins.
-Appends use O_APPEND for atomic append semantics. Two sessions writing to the
-same branch at the same time will both succeed without data loss.
+    journal/YYYY/MM/weekN/MM-DD.md
 
-Example layout:
+where weekN is the week within the month (week1=days 1-7, week2=8-14,
+week3=15-21, week4=22-28, week5=29-31). Summary files at each level
+(weekN.md, MM.md, YYYY.md) are created by the journal_rollup sleep
+task and updated by cognitive cascade.
 
-    ~/.narada/
-        journal/
-            2026/
-                04-13.md    (may contain multiple entries)
-                04-14.md
-        notes/
-            2026/
-                04-13.md
+Non-journal branches use the simpler flat structure:
+
+    <branch>/YYYY/MM-DD.md
+
+Multiple writes on the same day append to the same daily file,
+separated by horizontal rules. Concurrency-safe via O_CREAT|O_EXCL
+for creation and O_APPEND for appends.
 """
 
 from __future__ import annotations
@@ -43,6 +37,43 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+
+def _week_of_month(day: int) -> int:
+    """Return the week number within a month (1-5).
+
+    week1 = days 1-7, week2 = 8-14, week3 = 15-21,
+    week4 = 22-28, week5 = 29-31.
+    """
+    return (day - 1) // 7 + 1
+
+
+def _journal_path(root: Path, branch: str, now: datetime) -> Path:
+    """Compute the daily file path for a journal entry.
+
+    Returns: <root>/journal/YYYY/MM/weekN/MM-DD.md
+    """
+    year_str = now.strftime("%Y")
+    month_str = now.strftime("%m")
+    mmdd_str = now.strftime("%m-%d")
+    week = _week_of_month(now.day)
+
+    entry_dir = root / branch / year_str / month_str / f"week{week}"
+    entry_dir.mkdir(parents=True, exist_ok=True)
+    return entry_dir / f"{mmdd_str}.md"
+
+
+def _flat_path(root: Path, branch: str, now: datetime) -> Path:
+    """Compute the daily file path for a non-journal entry.
+
+    Returns: <root>/<branch>/YYYY/MM-DD.md
+    """
+    year_str = now.strftime("%Y")
+    mmdd_str = now.strftime("%m-%d")
+
+    entry_dir = root / branch / year_str
+    entry_dir.mkdir(parents=True, exist_ok=True)
+    return entry_dir / f"{mmdd_str}.md"
 
 
 def write_entry(
@@ -85,15 +116,12 @@ def write_entry(
         root = tree_root()
 
     now = datetime.now(timezone.utc)
-    year_str = now.strftime("%Y")
-    mmdd_str = now.strftime("%m-%d")
 
-    # Directory: <root>/<branch>/<YYYY>/
-    branch_year_dir = root / branch / year_str
-    branch_year_dir.mkdir(parents=True, exist_ok=True)
-
-    filename = f"{mmdd_str}.md"
-    entry_path = branch_year_dir / filename
+    # Journal uses cascading time structure; other branches use flat
+    if branch == "journal" or branch.startswith("journal/"):
+        entry_path = _journal_path(root, branch, now)
+    else:
+        entry_path = _flat_path(root, branch, now)
 
     heading = title or f"Entry {now.strftime('%Y-%m-%d %H:%M UTC')}"
 
@@ -133,21 +161,18 @@ def write_entry(
     # Structural cascade: update parent index.md files
     _structural_cascade(entry_path, root)
 
+    # Queue journal rollup if summary files are missing
+    if branch == "journal" or branch.startswith("journal/"):
+        _queue_journal_rollup(entry_path, root)
+
     return entry_path
 
 
 def _append_entry(path: Path, entry_block: str) -> None:
-    """Append an entry to a daily file, creating it atomically if needed.
-
-    Uses O_CREAT|O_EXCL for first-writer-wins creation and O_APPEND for
-    atomic appends. Two concurrent writers to the same file will both
-    succeed without data loss or clobbering.
-    """
+    """Append an entry to a daily file, creating it atomically if needed."""
     data = entry_block.encode("utf-8")
 
     if not path.exists():
-        # Try atomic creation -- if another process just created it,
-        # fall through to the append path.
         try:
             fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
             try:
@@ -156,15 +181,75 @@ def _append_entry(path: Path, entry_block: str) -> None:
                 os.close(fd)
             return
         except FileExistsError:
-            pass  # Another writer created it first, fall through to append
+            pass
 
-    # Append with separator
     separator = b"\n---\n\n"
     fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT)
     try:
         os.write(fd, separator + data)
     finally:
         os.close(fd)
+
+
+def _queue_journal_rollup(entry_path: Path, root: Path) -> None:
+    """Check if journal summary files exist, queue rollup tasks if not.
+
+    After writing a daily journal entry, check for the existence of
+    week, month, and year summary files. Queue journal_rollup tasks
+    for any that are missing so smriti sleep can create them.
+    """
+    try:
+        from smriti.store.queue import QueueTask, enqueue
+
+        rel = entry_path.relative_to(root)
+        parts = rel.parts  # e.g. ('journal', '2026', '04', 'week3', '04-17.md')
+
+        if len(parts) < 5:
+            return  # Not in the expected journal structure
+
+        _branch, year, month, week_dir, _daily = parts
+
+        # Check week summary: journal/YYYY/MM/weekN/weekN.md
+        week_summary = root / _branch / year / month / week_dir / f"{week_dir}.md"
+        if not week_summary.exists():
+            enqueue(
+                QueueTask(
+                    type="journal_rollup",
+                    path=str(week_summary.relative_to(root)),
+                    priority=3,
+                ),
+                root=root,
+            )
+            log.info("Queued journal_rollup for %s", week_summary.relative_to(root))
+
+        # Check month summary: journal/YYYY/MM/MM.md
+        month_summary = root / _branch / year / month / f"{month}.md"
+        if not month_summary.exists():
+            enqueue(
+                QueueTask(
+                    type="journal_rollup",
+                    path=str(month_summary.relative_to(root)),
+                    priority=2,
+                ),
+                root=root,
+            )
+            log.info("Queued journal_rollup for %s", month_summary.relative_to(root))
+
+        # Check year summary: journal/YYYY/YYYY.md
+        year_summary = root / _branch / year / f"{year}.md"
+        if not year_summary.exists():
+            enqueue(
+                QueueTask(
+                    type="journal_rollup",
+                    path=str(year_summary.relative_to(root)),
+                    priority=1,
+                ),
+                root=root,
+            )
+            log.info("Queued journal_rollup for %s", year_summary.relative_to(root))
+
+    except Exception as exc:
+        log.warning("Failed to queue journal rollup: %s", exc)
 
 
 def _reindex_one(path: Path, root: Path) -> None:
@@ -180,7 +265,6 @@ def _reindex_one(path: Path, root: Path) -> None:
             stats["chunks"],
         )
     except Exception as exc:
-        # Non-fatal: entry is on disk even if indexing failed.
         log.warning("Reindex after write failed: %s", exc)
 
 
@@ -192,11 +276,9 @@ def _structural_cascade(path: Path, root: Path) -> None:
         updated = structural_cascade(path, root)
         if updated:
             log.info("Structural cascade updated %d index files", len(updated))
-            # Queue cognitive cascade for upstream review
             all_changed = [path] + updated
             queued = queue_cognitive_cascade(all_changed, root)
             if queued:
                 log.info("Queued %d cognitive cascade tasks", queued)
     except Exception as exc:
-        # Non-fatal: the write succeeded, cascade is bonus.
         log.warning("Structural cascade failed: %s", exc)

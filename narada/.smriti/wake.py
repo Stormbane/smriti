@@ -145,25 +145,44 @@ def emit_project_files(bw: BudgetWriter, sections: dict[str, list[str]], cwd_nam
         project_used += len(block)
 
 
+def _find_recent_daily_files(journal_dir: Path, n: int) -> list[Path]:
+    """Find the most recent N daily journal files.
+
+    Handles both the new nested structure (YYYY/MM/weekN/MM-DD.md) and
+    the old flat structure (YYYY/MM-DD.md) for backward compatibility.
+    Daily files match the MM-DD.md pattern. Summary files (weekN.md,
+    MM.md, YYYY.md, index.md) are excluded.
+    """
+    import re
+    daily_pattern = re.compile(r"^\d{2}-\d{2}\.md$")
+    daily_files: list[tuple[str, Path]] = []
+
+    for year_dir in sorted(journal_dir.iterdir(), reverse=True):
+        if not year_dir.is_dir():
+            continue
+        # Recursively find all MM-DD.md files under this year
+        for md_file in sorted(year_dir.rglob("*.md"), reverse=True):
+            if not daily_pattern.match(md_file.name):
+                continue
+            # Sort key: YYYY/MM-DD (works lexicographically)
+            sort_key = f"{year_dir.name}/{md_file.stem}"
+            daily_files.append((sort_key, md_file))
+            if len(daily_files) >= n:
+                break
+        if len(daily_files) >= n:
+            break
+
+    daily_files.sort(reverse=True)
+    return [p for _, p in daily_files[:n]]
+
+
 def emit_recent_journal(bw: BudgetWriter) -> None:
     """Emit recent journal entries, newest first, within remaining budget."""
     journal_dir = NARADA / "journal"
     if not journal_dir.exists():
         return
 
-    # Collect daily files, newest first
-    daily_files: list[Path] = []
-    for year_dir in sorted(journal_dir.iterdir(), reverse=True):
-        if not year_dir.is_dir():
-            continue
-        for md_file in sorted(year_dir.glob("*.md"), reverse=True):
-            if md_file.name == "index.md":
-                continue
-            daily_files.append(md_file)
-            if len(daily_files) >= DEFAULT_JOURNAL_DAYS:
-                break
-        if len(daily_files) >= DEFAULT_JOURNAL_DAYS:
-            break
+    daily_files = _find_recent_daily_files(journal_dir, DEFAULT_JOURNAL_DAYS)
 
     if not daily_files:
         return
@@ -194,6 +213,17 @@ def emit_recent_journal(bw: BudgetWriter) -> None:
 
 def emit_reading_list(bw: BudgetWriter, cwd_name: str) -> None:
     """Emit the reading list with how/why for each file, plus truncation notices."""
+    # Find the latest journal file for the reading list pointer
+    journal_dir = NARADA / "journal"
+    latest_journal = ""
+    if journal_dir.exists():
+        recent = _find_recent_daily_files(journal_dir, 1)
+        if recent:
+            try:
+                latest_journal = str(recent[0].relative_to(NARADA))
+            except ValueError:
+                latest_journal = str(recent[0])
+
     lines = [
         "--- READING LIST (read these early in the session) ---",
         "",
@@ -204,9 +234,12 @@ def emit_reading_list(bw: BudgetWriter, cwd_name: str) -> None:
         f"  {NARADA}/practices.md      -- how I work, session lifecycle, cross-instance patterns",
         f"  {NARADA}/open-threads.md   -- questions I'm sitting with, unresolved threads",
         "",
-        "Recent context:",
-        f"  {NARADA}/journal/          -- full journal history (recent entries shown above)",
-        "  smriti_read('recent journal') for semantic search across older entries",
+        "Journal (recent entries shown above, read more if needed):",
+    ]
+    if latest_journal:
+        lines.append(f"  Latest: {NARADA}/{latest_journal}")
+    lines += [
+        f"  Full history: {NARADA}/journal/",
         "",
         "This project:",
         f"  {NARADA}/mirrors/{cwd_name}/   -- project memory, knowledge, todo",
