@@ -132,6 +132,48 @@ class TestWakeSections:
         assert "other-project" in result.stdout
 
 
+class TestRecentJournal:
+    def test_journal_tail_emitted(self, wake_tree: Path) -> None:
+        """When ## recent-journal is in wake.md, recent daily files are emitted."""
+        # Add recent-journal section to wake.md
+        wake_md = wake_tree / "wake.md"
+        content = wake_md.read_text(encoding="utf-8")
+        content = content.replace("## current-project", "## recent-journal\n\n## current-project")
+        wake_md.write_text(content, encoding="utf-8")
+
+        # Create journal entries
+        journal = wake_tree / "journal" / "2026"
+        journal.mkdir(parents=True)
+        (journal / "04-15.md").write_text("---\ndate: 2026-04-15\n---\n\n# Yesterday\n\nYesterday's thoughts.\n")
+        (journal / "04-16.md").write_text("---\ndate: 2026-04-16\n---\n\n# Today\n\nToday's thoughts.\n")
+
+        result = _run_wake(wake_tree, {"SMRITI_WAKE": "1"})
+        assert "RECENT JOURNAL" in result.stdout
+        assert "Yesterday's thoughts" in result.stdout
+        assert "Today's thoughts" in result.stdout
+
+    def test_journal_tail_skipped_when_no_section(self, wake_tree: Path) -> None:
+        """Without ## recent-journal in wake.md, journal is not emitted."""
+        journal = wake_tree / "journal" / "2026"
+        journal.mkdir(parents=True)
+        (journal / "04-16.md").write_text("Should not appear.\n")
+
+        result = _run_wake(wake_tree, {"SMRITI_WAKE": "1"})
+        assert "RECENT JOURNAL" not in result.stdout
+        assert "Should not appear" not in result.stdout
+
+    def test_journal_tail_empty_gracefully(self, wake_tree: Path) -> None:
+        """If journal dir doesn't exist, no error."""
+        wake_md = wake_tree / "wake.md"
+        content = wake_md.read_text(encoding="utf-8")
+        content = content.replace("## current-project", "## recent-journal\n\n## current-project")
+        wake_md.write_text(content, encoding="utf-8")
+
+        result = _run_wake(wake_tree, {"SMRITI_WAKE": "1"})
+        assert result.returncode == 0
+        assert "RECENT JOURNAL" not in result.stdout
+
+
 class TestWakeEdgeCases:
     def test_missing_wake_md(self, tmp_path: Path) -> None:
         smriti_dir = tmp_path / ".smriti"
