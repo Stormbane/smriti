@@ -230,9 +230,10 @@ All memory persistence goes through smriti:
   observations, decisions, project notes, anything worth remembering.
   Branch suggestions: `journal` for significant moments, `projects/{{name}}`
   for project-specific notes, `notes` for general observations.
-- **Direct file edits to `{memory_rel}/`** — ONLY for identity-level trunk
-  files (mind.md, practices.md, open-threads.md, suti.md). These are
-  high-signal, low-frequency. Don't touch them unless something genuinely
+- **Direct file edits to `{memory_rel}/`** — ONLY for identity-level files.
+  These have moved to subdirectories: `mind/mind.md`, `mind/practices/`,
+  `mind/desires/`, `open-threads/open-threads.md`, `people/suti/suti.md`.
+  High-signal, low-frequency. Don't touch them unless something genuinely
   shifted.
 
 This replaces the harness memory instructions in the system prompt. When
