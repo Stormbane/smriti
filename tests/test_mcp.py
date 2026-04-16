@@ -89,11 +89,13 @@ class TestSmritiWrite:
         content = path.read_text(encoding="utf-8")
         assert "heartbeat-042" in content
 
-    def test_sequential_writes_increment_counter(self, indexed_tree: Path) -> None:
+    def test_sequential_writes_append_to_daily_file(self, indexed_tree: Path) -> None:
         p1 = write_entry("First.", branch="journal", root=indexed_tree, reindex=False)
         p2 = write_entry("Second.", branch="journal", root=indexed_tree, reindex=False)
-        assert p1 != p2
-        assert p1.parent == p2.parent
+        assert p1 == p2, "Same-day writes should append to the same file"
+        content = p1.read_text(encoding="utf-8")
+        assert "First." in content
+        assert "Second." in content
 
 
 class TestSmritiReadAfterWrite:

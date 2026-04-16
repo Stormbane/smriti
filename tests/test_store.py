@@ -105,16 +105,18 @@ def test_write_entry(mini_tree: Path) -> None:
     assert "branch: notes" in content
 
 
-def test_write_increments_counter(mini_tree: Path) -> None:
-    """Two writes on the same day get different counters."""
+def test_write_appends_to_daily_file(mini_tree: Path) -> None:
+    """Two writes on the same day append to the same file."""
     from smriti.store.writer import write_entry
 
     p1 = write_entry("First entry.", branch="journal", root=mini_tree, reindex=False)
     p2 = write_entry("Second entry.", branch="journal", root=mini_tree, reindex=False)
 
-    assert p1 != p2, "Two writes produced the same path"
+    assert p1 == p2, "Two writes on the same day should produce the same path"
     assert p1.exists()
-    assert p2.exists()
+    content = p1.read_text(encoding="utf-8")
+    assert "First entry." in content
+    assert "Second entry." in content
 
 
 def test_write_then_read(mini_tree: Path) -> None:

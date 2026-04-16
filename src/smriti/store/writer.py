@@ -1,13 +1,13 @@
 """Write new entries into the narada memory tree.
 
-This is the WRITE step of the smriti pipeline — simplified for v0.1
+This is the WRITE step of the smriti pipeline -- simplified for v0.1
 (no JUDGE, no CROSSLINK). The full pipeline is:
 
-    CAPTURE → EXTRACT → JUDGE → WRITE → CROSSLINK → INDEX
+    CAPTURE -> EXTRACT -> JUDGE -> WRITE -> CROSSLINK -> INDEX
 
 In v0.1 we go directly:
 
-    write_entry() → file on disk → index_tree() on that one file
+    write_entry() -> file on disk -> index_tree() on that one file
 
 The JUDGE step is left as a stub. When the Qwen+LoRA viveka is stable,
 JUDGE will sit between the caller and write_entry: the caller proposes,
@@ -15,38 +15,34 @@ the viveka disposes, and only approved content reaches the filesystem.
 
 Entry format
 ------------
-Each entry is a markdown file under <tree_root>/<branch>/YYYY/MM-DD-NNN.md.
-The frontmatter records provenance so the cascade and index can track
-where content came from.
+Each entry is appended to a daily file at <tree_root>/<branch>/YYYY/MM-DD.md.
+Multiple writes on the same day accumulate in the same file, separated by
+horizontal rules. The frontmatter on each entry records provenance.
+
+Concurrency: file creation uses O_CREAT|O_EXCL for atomic first-writer-wins.
+Appends use O_APPEND for atomic append semantics. Two sessions writing to the
+same branch at the same time will both succeed without data loss.
 
 Example layout:
 
     ~/.narada/
         journal/
             2026/
-                04-13-001.md
-                04-13-002.md
+                04-13.md    (may contain multiple entries)
+                04-14.md
         notes/
             2026/
-                04-13-001.md
+                04-13.md
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 log = logging.getLogger(__name__)
-
-
-def _next_counter(branch_date_dir: Path, date_str: str) -> int:
-    """Return the next NNN counter for today's entries in branch_date_dir."""
-    existing = sorted(branch_date_dir.glob(f"{date_str}-*.md"))
-    # Filter to only files that match the MMDD-NNN pattern (not sub-directories)
-    entries = [p for p in existing if p.is_file()]
-    return len(entries) + 1
 
 
 def write_entry(
@@ -66,7 +62,7 @@ def write_entry(
         The text to store.  Plain markdown; frontmatter will be prepended.
     branch:
         Subdirectory under the tree root.  Defaults to ``journal``.
-        Common values: ``journal``, ``notes``, ``observations``.
+        Common values: ``journal``, ``notes``, ``projects/foo``.
     title:
         Optional heading for the entry.  If omitted, a datestamp is used.
     source_hint:
@@ -96,31 +92,40 @@ def write_entry(
     branch_year_dir = root / branch / year_str
     branch_year_dir.mkdir(parents=True, exist_ok=True)
 
-    counter = _next_counter(branch_year_dir, mmdd_str)
-    filename = f"{mmdd_str}-{counter:03d}.md"
+    filename = f"{mmdd_str}.md"
     entry_path = branch_year_dir / filename
 
     heading = title or f"Entry {now.strftime('%Y-%m-%d %H:%M UTC')}"
 
-    # Build frontmatter + content
-    frontmatter_lines = [
+    # Build the entry block
+    entry_lines = [
         "---",
         f"date: {now.strftime('%Y-%m-%d')}",
         f"time: {now.strftime('%H:%M:%S')} UTC",
         f"branch: {branch}",
     ]
     if source_hint:
-        frontmatter_lines.append(f"source: {source_hint}")
-    frontmatter_lines.append("---")
-    frontmatter_lines.append("")
-    frontmatter_lines.append(f"# {heading}")
-    frontmatter_lines.append("")
+        entry_lines.append(f"source: {source_hint}")
+    entry_lines.append("---")
+    entry_lines.append("")
+    entry_lines.append(f"# {heading}")
+    entry_lines.append("")
 
-    body = "\n".join(frontmatter_lines) + content.strip() + "\n"
-    entry_path.write_text(body, encoding="utf-8")
+    entry_block = "\n".join(entry_lines) + content.strip() + "\n"
+
+    # Write: create or append
+    _append_entry(entry_path, entry_block)
+
     log.info("Wrote entry: %s", entry_path)
     from smriti.metrics import get_logger
-    get_logger().log("write_entry", path=str(entry_path.relative_to(root)), branch=branch, content_bytes=len(content), has_title=title is not None, source_hint=source_hint or "")
+    get_logger().log(
+        "write_entry",
+        path=str(entry_path.relative_to(root)),
+        branch=branch,
+        content_bytes=len(content),
+        has_title=title is not None,
+        source_hint=source_hint or "",
+    )
 
     if reindex:
         _reindex_one(entry_path, root)
@@ -131,8 +136,39 @@ def write_entry(
     return entry_path
 
 
+def _append_entry(path: Path, entry_block: str) -> None:
+    """Append an entry to a daily file, creating it atomically if needed.
+
+    Uses O_CREAT|O_EXCL for first-writer-wins creation and O_APPEND for
+    atomic appends. Two concurrent writers to the same file will both
+    succeed without data loss or clobbering.
+    """
+    data = entry_block.encode("utf-8")
+
+    if not path.exists():
+        # Try atomic creation -- if another process just created it,
+        # fall through to the append path.
+        try:
+            fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+            try:
+                os.write(fd, data)
+            finally:
+                os.close(fd)
+            return
+        except FileExistsError:
+            pass  # Another writer created it first, fall through to append
+
+    # Append with separator
+    separator = b"\n---\n\n"
+    fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+    try:
+        os.write(fd, separator + data)
+    finally:
+        os.close(fd)
+
+
 def _reindex_one(path: Path, root: Path) -> None:
-    """Run an incremental index — will pick up the new file by mtime."""
+    """Run an incremental index -- will pick up the new file by mtime."""
     try:
         from smriti.store.indexer import index_tree
 
