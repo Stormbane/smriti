@@ -252,8 +252,17 @@ def main() -> int:
     except (AttributeError, OSError):
         pass
 
-    cwd_name = Path(os.getcwd()).name
+    cwd = Path(os.getcwd())
+    cwd_name = cwd.name
     bw = BudgetWriter(TOTAL_BUDGET)
+
+    # 0. Project context line (if in a project with a mirror)
+    mirror = MIRRORS / cwd_name
+    if mirror.exists():
+        bw.write_line(f"--- PROJECT: {cwd_name} ({cwd}) | mirror: {mirror} ---")
+    else:
+        bw.write_line(f"--- SESSION: {cwd} (no project mirror) ---")
+    bw.write_line("")
 
     # 1. Identity + threads briefing
     emit_context(bw)
