@@ -119,7 +119,7 @@ class TestSmritiMCPRegistered:
 
 
 class TestWakeHookWired:
-    """Verify the SessionStart hook calls wake.py with NARADA_WAKE=1."""
+    """Verify the SessionStart hook calls wake.py with SMRITI_WAKE=1."""
 
     def test_session_start_hook_exists(self) -> None:
         settings = CLAUDE_DIR / "settings.json"
@@ -133,8 +133,8 @@ class TestWakeHookWired:
         for group in session_start:
             for hook in group.get("hooks", []):
                 cmd = hook.get("command", "")
-                if "wake.py" in cmd and "NARADA_WAKE" in cmd:
+                if "wake.py" in cmd and "SMRITI_WAKE" in cmd:
                     wake_found = True
                     break
 
-        assert wake_found, "SessionStart hook does not call wake.py with NARADA_WAKE"
+        assert wake_found, "SessionStart hook does not call wake.py with SMRITI_WAKE"

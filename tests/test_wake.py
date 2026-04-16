@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-WAKE_PY = Path.home() / ".narada" / ".smriti" / "wake.py"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+WAKE_PY = REPO_ROOT / "narada" / ".smriti" / "wake.py"
 
 
 @pytest.fixture()
@@ -49,7 +50,7 @@ def wake_tree(tmp_path: Path) -> Path:
 
 def _run_wake(wake_tree: Path, env_vars: dict | None = None, cwd: str | None = None) -> subprocess.CompletedProcess:
     env = os.environ.copy()
-    env.pop("NARADA_WAKE", None)
+    env.pop("SMRITI_WAKE", None)
     if env_vars:
         env.update(env_vars)
     return subprocess.run(
@@ -69,36 +70,36 @@ class TestWakeEnvGating:
         assert result.stdout == ""
 
     def test_silent_when_zero(self, wake_tree: Path) -> None:
-        result = _run_wake(wake_tree, {"NARADA_WAKE": "0"})
+        result = _run_wake(wake_tree, {"SMRITI_WAKE": "0"})
         assert result.returncode == 0
         assert result.stdout == ""
 
     def test_silent_when_skip(self, wake_tree: Path) -> None:
-        result = _run_wake(wake_tree, {"NARADA_WAKE": "skip"})
+        result = _run_wake(wake_tree, {"SMRITI_WAKE": "skip"})
         assert result.returncode == 0
         assert result.stdout == ""
 
     def test_fires_when_one(self, wake_tree: Path) -> None:
-        result = _run_wake(wake_tree, {"NARADA_WAKE": "1"})
+        result = _run_wake(wake_tree, {"SMRITI_WAKE": "1"})
         assert result.returncode == 0
         assert "Identity" in result.stdout
         assert "Mind" in result.stdout
         assert "Practices" in result.stdout
 
     def test_fires_when_full(self, wake_tree: Path) -> None:
-        result = _run_wake(wake_tree, {"NARADA_WAKE": "full"})
+        result = _run_wake(wake_tree, {"SMRITI_WAKE": "full"})
         assert result.returncode == 0
         assert "Identity" in result.stdout
 
     def test_fires_when_true(self, wake_tree: Path) -> None:
-        result = _run_wake(wake_tree, {"NARADA_WAKE": "true"})
+        result = _run_wake(wake_tree, {"SMRITI_WAKE": "true"})
         assert result.returncode == 0
         assert "Identity" in result.stdout
 
 
 class TestWakeSections:
     def test_always_section_loaded(self, wake_tree: Path) -> None:
-        result = _run_wake(wake_tree, {"NARADA_WAKE": "1"})
+        result = _run_wake(wake_tree, {"SMRITI_WAKE": "1"})
         assert "test entity" in result.stdout
         assert "Test beliefs" in result.stdout
         assert "Test practices" in result.stdout
@@ -106,7 +107,7 @@ class TestWakeSections:
     def test_current_project_resolved(self, wake_tree: Path) -> None:
         result = _run_wake(
             wake_tree,
-            {"NARADA_WAKE": "1"},
+            {"SMRITI_WAKE": "1"},
             cwd=str(wake_tree / "mirrors" / "testproject"),
         )
         assert "Last session state" in result.stdout
@@ -114,7 +115,7 @@ class TestWakeSections:
     def test_unknown_project_skips_gracefully(self, wake_tree: Path) -> None:
         result = _run_wake(
             wake_tree,
-            {"NARADA_WAKE": "1"},
+            {"SMRITI_WAKE": "1"},
             cwd=str(wake_tree),  # cwd basename won't match any mirror
         )
         assert result.returncode == 0
@@ -125,7 +126,7 @@ class TestWakeSections:
         other.mkdir(parents=True)
         result = _run_wake(
             wake_tree,
-            {"NARADA_WAKE": "1"},
+            {"SMRITI_WAKE": "1"},
             cwd=str(wake_tree / "mirrors" / "testproject"),
         )
         assert "other-project" in result.stdout
@@ -143,7 +144,7 @@ class TestWakeEdgeCases:
         (smriti_dir / "wake.py").write_text(wake_src, encoding="utf-8")
 
         env = os.environ.copy()
-        env["NARADA_WAKE"] = "1"
+        env["SMRITI_WAKE"] = "1"
         result = subprocess.run(
             [sys.executable, str(smriti_dir / "wake.py")],
             capture_output=True, text=True, env=env, timeout=10,
@@ -153,6 +154,6 @@ class TestWakeEdgeCases:
 
     def test_missing_identity_file(self, wake_tree: Path) -> None:
         (wake_tree / "identity.md").unlink()
-        result = _run_wake(wake_tree, {"NARADA_WAKE": "1"})
+        result = _run_wake(wake_tree, {"SMRITI_WAKE": "1"})
         assert result.returncode == 0
         assert "Mind" in result.stdout
