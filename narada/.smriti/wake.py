@@ -148,24 +148,28 @@ def emit_project_files(bw: BudgetWriter, sections: dict[str, list[str]], cwd_nam
 def _find_recent_daily_files(journal_dir: Path, n: int) -> list[Path]:
     """Find the most recent N daily journal files.
 
-    Handles both the new nested structure (YYYY/MM/weekN/MM-DD.md) and
-    the old flat structure (YYYY/MM-DD.md) for backward compatibility.
-    Daily files match the MM-DD.md pattern. Summary files (weekN.md,
-    MM.md, YYYY.md, index.md) are excluded.
+    Handles three formats for backward compatibility:
+    - New nested:  YYYY/MM/weekN/MM-DD.md
+    - Old daily:   YYYY/MM-DD.md
+    - Old numbered: YYYY/MM-DD-NNN.md
+
+    Summary files (weekN.md, MM.md, YYYY.md, index.md) are excluded.
     """
     import re
-    daily_pattern = re.compile(r"^\d{2}-\d{2}\.md$")
+    # Match MM-DD.md or MM-DD-NNN.md (daily entries in any format)
+    daily_pattern = re.compile(r"^(\d{2}-\d{2})(?:-\d+)?\.md$")
     daily_files: list[tuple[str, Path]] = []
 
     for year_dir in sorted(journal_dir.iterdir(), reverse=True):
         if not year_dir.is_dir():
             continue
-        # Recursively find all MM-DD.md files under this year
+        # Recursively find all daily files under this year
         for md_file in sorted(year_dir.rglob("*.md"), reverse=True):
-            if not daily_pattern.match(md_file.name):
+            m = daily_pattern.match(md_file.name)
+            if not m:
                 continue
             # Sort key: YYYY/MM-DD (works lexicographically)
-            sort_key = f"{year_dir.name}/{md_file.stem}"
+            sort_key = f"{year_dir.name}/{m.group(1)}"
             daily_files.append((sort_key, md_file))
             if len(daily_files) >= n:
                 break
