@@ -31,6 +31,9 @@ read = [
     "sqlite-vec>=0.1.1",
     "onnxruntime>=1.17",
 ]
+api = [
+    "anthropic>=0.40",
+]
 private = [
     "cryptography>=42.0",
 ]
@@ -41,6 +44,7 @@ dev = [
     "cryptography>=42.0",
     "sqlite-vec>=0.1.1",
     "onnxruntime>=1.17",
+    "anthropic>=0.40",
 ]
 
 [project.urls]
