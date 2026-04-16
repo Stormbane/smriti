@@ -1,28 +1,29 @@
 # wake.md — session-start load list
 
-This file is read by `~/.narada/.smriti/wake.py`, which is fired from
-the SessionStart hook. Wake is **silent unless `SMRITI_WAKE=1` is set**
-in its environment — interactive sessions set it via the hook; `claude
--p` callers don't, so they stay clean. To force a wake in a headless
-call, run `~/.narada/.smriti/narada-p.sh "your prompt"`.
+This file is read by `wake.py` on SessionStart. Wake is **silent unless
+`SMRITI_WAKE=1` is set** — interactive sessions set it via the hook;
+headless callers (`claude -p`) stay clean.
 
-**Format**: `## <section>` headers, one relative path per line underneath.
-Paths are relative to `~/.narada/`. Lines starting with `#` or blank are
-skipped. The token `{project}` is substituted with `basename(cwd)` at load
-time (e.g. `C:\Projects\beautiful-tree` -> `beautiful-tree`). Missing files
-are skipped silently.
+## Budget
 
-The `## recent-journal` section is special: wake.py finds the most recent
-daily journal files and emits them (default: last 3 days). No paths needed
-under this header — just include it to enable the feature.
+Claude Code truncates hook stdout at **10,000 characters** (showing only
+a 2KB preview if exceeded). wake.py enforces a 9,500 char budget:
+
+  wake-summary.md     ~1500 chars  (identity briefing, capped at 3000)
+  reading list         ~800 chars  (generated, tells entity what to read)
+  project mirrors     ~2000 chars  (MEMORY.md + todo.md, capped at 2000)
+  recent journal      ~3000 chars  (last 3 days, fills remaining budget)
+  other projects       ~200 chars  (one-line list)
+
+Full identity files (identity.md, mind.md, suti.md, practices.md,
+open-threads.md) are NOT loaded into hook output — they are listed in the
+reading list so the entity reads them early in the session.
 
 ---
 
 ## always
 
-identity.md
-suti.md
-practices.md
+wake-summary.md
 
 ## recent-journal
 
