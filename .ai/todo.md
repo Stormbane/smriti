@@ -22,7 +22,15 @@
 - [x] Project template + setup_project.py
 - [x] Installer (install.py)
 - [x] 39 tests passing
-- [ ] Clean up stale mirror junctions across existing projects (working/ -> ai/)
+- [x] Clean up stale mirror junctions across existing projects (working/ -> ai/)
+- [x] Tree restructure: identity cascade topology (mind/, open-threads/, people/)
+- [x] Journal.md monolith migrated to daily files in YYYY/MM/weekN/MM-DD.md
+- [x] Wake budget enforcement (9.5K chars, under 10K harness limit)
+- [x] Journal cascade structure with rollup pipeline
+- [x] Writer: local time for dates, atomic append, one file per day
+- [ ] Run `smriti sleep` to generate wake-context.md from EXECUTOR (currently hand-written)
+- [ ] Run `smriti sleep` to generate first journal rollup summaries (week/month/year)
+- [ ] Rebuild search index (`smriti index --full`) after tree restructure
 - [ ] Schema stabilization before v0.2
 
 ## v0.2 -- Identity core integration
