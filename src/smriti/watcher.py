@@ -29,7 +29,7 @@ from smriti.core.tree import tree_root
 from smriti.store.cascade import structural_cascade
 from smriti.store.queue import QueueTask, enqueue
 from smriti.store.router import is_leaf_path
-from smriti.store.wake_summary import is_trunk_file
+from smriti.store.wake_summary import is_identity_file
 
 log = logging.getLogger(__name__)
 
@@ -63,10 +63,10 @@ def _on_change(event_type: str, file_path: Path) -> None:
         if updated:
             log.info("Structural cascade updated %d index files", len(updated))
 
-        # Queue wake-summary rebuild if a trunk identity file changed
-        if is_trunk_file(rel):
+        # Queue wake-context rebuild if an identity file changed
+        if is_identity_file(rel):
             enqueue(QueueTask(type="wake_summary", path=rel, priority=3), root=root)
-            log.info("Queued wake_summary rebuild (trunk file changed: %s)", rel)
+            log.info("Queued wake_context rebuild (identity file changed: %s)", rel)
 
         # Queue async work based on file type
         if is_leaf_path(rel):
