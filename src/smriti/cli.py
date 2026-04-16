@@ -240,6 +240,18 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
                             print(f"    REVISED: {f}")
                 else:
                     print("    skipped (file not found)")
+            elif task.type == "ingest":
+                path = root / task.path
+                if path.exists():
+                    from smriti.store.ingest import ingest
+                    ing = ingest(str(path), root=root)
+                    print(
+                        f"    summary={ing.summary_path.relative_to(root) if ing.summary_path else '(none)'}, "
+                        f"actions={len(ing.routing.actions)}, cascade_queued={ing.cascade_queued}"
+                    )
+                    total_verdicts += len(ing.routing.actions)
+                else:
+                    print("    skipped (file not found)")
             complete(task.id)
             processed += 1
         except Exception as exc:
@@ -414,48 +426,70 @@ def _cmd_eval(args: argparse.Namespace) -> int:
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
+    from smriti.core.tree import tree_root
     from smriti.store.ingest import ingest
+    from smriti.store.queue import QueueTask, enqueue
 
-    source = args.source
-    print(f"Ingesting: {source}")
+    sources = args.source if isinstance(args.source, list) else [args.source]
+    root = tree_root()
 
-    try:
-        result = ingest(
-            source,
-            branch=args.branch,
-            dry_run=args.dry_run,
-            no_route=args.no_route,
-            route_top_k=args.top_k,
-        )
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"Error: {exc}")
-        return 1
+    if args.queue:
+        enqueued = 0
+        for source in sources:
+            src_path = Path(source).resolve()
+            if not src_path.exists():
+                print(f"skip (not found): {source}")
+                continue
+            try:
+                rel = str(src_path.relative_to(root))
+            except ValueError:
+                # Source is outside the tree — store the absolute path instead
+                rel = str(src_path)
+            enqueue(QueueTask(type="ingest", path=rel), root=root)
+            enqueued += 1
+        print(f"Queued {enqueued} ingest task(s). Run 'smriti sleep' to process.")
+        return 0
 
-    print(f"Source: {result.source} ({result.source_type})")
-    if result.summary_path:
-        from smriti.core.tree import tree_root
-        print(f"Summary: {result.summary_path.relative_to(tree_root())}")
+    # Direct ingest (original behavior)
+    for source in sources:
+        print(f"Ingesting: {source}")
+        try:
+            result = ingest(
+                source,
+                branch=args.branch,
+                dry_run=args.dry_run,
+                no_route=args.no_route,
+                route_top_k=args.top_k,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"Error: {exc}")
+            return 1
 
-    if result.routing.actions:
-        print(f"Routing: {len(result.routing.actions)} actions")
-        for action in result.routing.actions:
-            prefix = "  DRY " if args.dry_run else "  "
-            print(f"{prefix}{action.action:8s} {action.target} — {action.direction[:80]}")
-    elif not args.no_route:
-        print("Routing: no actions needed")
+        print(f"Source: {result.source} ({result.source_type})")
+        if result.summary_path:
+            print(f"Summary: {result.summary_path.relative_to(root)}")
 
-    if result.actions_executed:
-        executed = sum(1 for a in result.actions_executed if a.get("executed"))
-        promoted = sum(1 for a in result.actions_executed if a.get("action") == "PROMOTE")
-        print(f"Executed: {executed} actions", end="")
-        if promoted:
-            print(f" ({promoted} promoted for human review)", end="")
-        print()
+        if result.routing.actions:
+            print(f"Routing: {len(result.routing.actions)} actions")
+            for action in result.routing.actions:
+                prefix = "  DRY " if args.dry_run else "  "
+                print(f"{prefix}{action.action:8s} {action.target} — {action.direction[:80]}")
+        elif not args.no_route:
+            print("Routing: no actions needed")
 
-    if result.cascade_queued:
-        print(f"Cascade: queued {result.cascade_queued} tasks")
+        if result.actions_executed:
+            executed = sum(1 for a in result.actions_executed if a.get("executed"))
+            promoted = sum(1 for a in result.actions_executed if a.get("action") == "PROMOTE")
+            print(f"Executed: {executed} actions", end="")
+            if promoted:
+                print(f" ({promoted} promoted for human review)", end="")
+            print()
 
-    print(f"Done ({result.elapsed_ms}ms)")
+        if result.cascade_queued:
+            print(f"Cascade: queued {result.cascade_queued} tasks")
+
+        print(f"Done ({result.elapsed_ms}ms)")
+
     return 0
 
 
@@ -556,11 +590,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── ingest ──────────────────────────────────────────────────────
     p_ingest = sub.add_parser("ingest", help="Ingest content into the memory tree")
-    p_ingest.add_argument("source", help="File or directory to ingest")
+    p_ingest.add_argument("source", nargs="+", help="File(s) or directory to ingest")
     p_ingest.add_argument("--branch", default="sources", help="Branch for summary (default: sources)")
     p_ingest.add_argument("--dry-run", action="store_true", help="Route but don't execute actions")
     p_ingest.add_argument("--no-route", action="store_true", help="Skip routing (summary only)")
     p_ingest.add_argument("-k", "--top-k", type=int, default=10, help="Routing candidates (default: 10)")
+    p_ingest.add_argument("--queue", action="store_true",
+                          help="Enqueue the source(s) for async ingest via 'smriti sleep' instead of running now")
 
     # ── metrics ──────────────────────────────────────────────────────
     p_metrics = sub.add_parser("metrics", help="Show metrics summary")
