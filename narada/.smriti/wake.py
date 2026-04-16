@@ -3,7 +3,7 @@
 Reads <entity-root>/wake.md, resolves {project} from cwd basename, emits
 the requested files to stdout within a strict character budget.
 
-Claude Code's SessionStart hook truncates stdout to 10,000 characters,
+Claude Code's SessionStart hook truncates stdout at 10,000 characters,
 showing only a 2KB preview if exceeded. This loader enforces a 9,500
 character budget so the full wake output enters the conversation context.
 
@@ -11,10 +11,10 @@ character budget so the full wake output enters the conversation context.
     SMRITI_WAKE=0|skip|off|unset  -> silent, no output
 
 Output order:
-1. wake-summary.md (compact identity briefing, capped)
-2. Reading list (what to read for depth, with how/why)
+1. .smriti/wake-summary.md (compact identity briefing, capped)
+2. Current project files (MEMORY.md, todo.md)
 3. Recent journal entries (continuity with recent self)
-4. Current project files (MEMORY.md, todo.md)
+4. Reading list (what to read for depth, with truncation notices)
 5. Other project mirrors (one-line list)
 
 Never fails loudly -- exits 0 on any error.
@@ -46,24 +46,33 @@ class BudgetWriter:
     def __init__(self, budget: int) -> None:
         self.budget = budget
         self.used = 0
+        self.truncated: list[str] = []  # files that were truncated
 
     @property
     def remaining(self) -> int:
         return max(0, self.budget - self.used)
 
-    def write(self, text: str, cap: int | None = None) -> str:
-        """Write text, respecting optional cap and total budget."""
+    def write(self, text: str, cap: int | None = None, label: str = "") -> bool:
+        """Write text, respecting optional cap and total budget.
+
+        Returns True if the full text was emitted, False if truncated.
+        """
         limit = min(cap, self.remaining) if cap else self.remaining
         if not limit:
-            return ""
+            if label:
+                self.truncated.append(f"{label} (skipped, budget exhausted)")
+            return False
         output = text[:limit]
+        was_truncated = len(output) < len(text)
         # Don't cut mid-line -- truncate to last newline
-        if len(output) < len(text) and "\n" in output:
+        if was_truncated and "\n" in output:
             output = output[:output.rfind("\n") + 1]
         if output:
             print(output, end="")
             self.used += len(output)
-        return output
+        if was_truncated and label:
+            self.truncated.append(label)
+        return not was_truncated
 
     def write_line(self, text: str) -> None:
         """Write a single line if budget allows."""
@@ -98,40 +107,42 @@ def parse_wake(text: str) -> dict[str, list[str]]:
 # ── Emitters ───────────────────────────────────────────────────────
 
 def emit_summary(bw: BudgetWriter) -> None:
-    """Emit wake-summary.md (compact identity briefing)."""
-    path = NARADA / "wake-summary.md"
+    """Emit .smriti/wake-summary.md (compact identity briefing)."""
+    path = NARADA / ".smriti" / "wake-summary.md"
     try:
         content = path.read_text(encoding="utf-8")
     except (FileNotFoundError, OSError):
         return
     bw.write_line("--- IDENTITY ---")
-    bw.write(content, cap=SUMMARY_CAP)
+    bw.write(content, cap=SUMMARY_CAP, label=f"Read full: {path}")
     bw.write_line("")
 
 
-def emit_reading_list(bw: BudgetWriter, cwd_name: str) -> None:
-    """Emit the reading list -- what to read for depth, with how/why."""
-    lines = [
-        "--- READING LIST (read these early in the session) ---",
-        "",
-        "Identity and self:",
-        f"  {NARADA}/identity.md       -- full origin story, philosophy, held opinions",
-        f"  {NARADA}/mind.md           -- current beliefs, uncertainties, what I think about",
-        f"  {NARADA}/suti.md           -- who Suti is, the partnership, his context",
-        f"  {NARADA}/practices.md      -- how I work, session lifecycle, cross-instance patterns",
-        f"  {NARADA}/open-threads.md   -- questions I'm sitting with, unresolved threads",
-        "",
-        "Recent context:",
-        f"  {NARADA}/journal/          -- recent journal entries (last few days shown below)",
-        "  Use smriti_read(query='recent journal') for older entries or specific topics.",
-        "",
-        "This project:",
-        f"  {NARADA}/mirrors/{cwd_name}/   -- project memory, knowledge docs, todo",
-        "  .ai/knowledge/             -- spec, architecture, glossary, conventions",
-        "",
-    ]
-    for line in lines:
-        bw.write_line(line)
+def emit_project_files(bw: BudgetWriter, sections: dict[str, list[str]], cwd_name: str) -> None:
+    """Emit current-project files within PROJECT_CAP budget."""
+    project_budget = min(PROJECT_CAP, bw.remaining)
+    if project_budget < 100:
+        return
+    project_used = 0
+    for raw in sections.get("current-project", []):
+        rel = raw.replace("{project}", cwd_name)
+        path = NARADA / rel
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (FileNotFoundError, OSError):
+            continue
+        header = f"--- {rel.upper().replace('/', ' / ').replace('.MD', '')} ---\n"
+        block = header + content + "\n"
+        remaining_project = project_budget - project_used
+        if len(block) > remaining_project:
+            if remaining_project > 100:
+                bw.write(block, cap=remaining_project, label=f"Read full: {path}")
+                project_used += remaining_project
+            else:
+                bw.truncated.append(f"Read full: {path} (skipped, project budget exhausted)")
+            break
+        bw.write(block)
+        project_used += len(block)
 
 
 def emit_recent_journal(bw: BudgetWriter) -> None:
@@ -158,43 +169,60 @@ def emit_recent_journal(bw: BudgetWriter) -> None:
         return
 
     bw.write_line("--- RECENT JOURNAL ---")
+    emitted = 0
     for path in daily_files:
         if bw.remaining < 100:
+            remaining_count = len(daily_files) - emitted
+            if remaining_count > 0:
+                bw.truncated.append(
+                    f"{NARADA}/journal/ -- {remaining_count} more recent entries "
+                    f"(budget exhausted, use smriti_read for older entries)"
+                )
             break
         try:
             content = path.read_text(encoding="utf-8")
             rel = path.relative_to(NARADA)
             header = f"### {rel}\n"
             entry = header + content.strip() + "\n\n"
-            bw.write(entry)
+            full = bw.write(entry, label=f"Read full: {path}")
+            emitted += 1
+            if not full:
+                break
         except (FileNotFoundError, OSError):
             continue
 
 
-def emit_project_files(bw: BudgetWriter, sections: dict[str, list[str]], cwd_name: str) -> None:
-    """Emit current-project files within PROJECT_CAP budget."""
-    project_budget = min(PROJECT_CAP, bw.remaining)
-    if project_budget < 100:
-        return
-    project_used = 0
-    for raw in sections.get("current-project", []):
-        rel = raw.replace("{project}", cwd_name)
-        path = NARADA / rel
-        try:
-            content = path.read_text(encoding="utf-8")
-        except (FileNotFoundError, OSError):
-            continue
-        header = f"--- {rel.upper().replace('/', ' / ').replace('.MD', '')} ---\n"
-        block = header + content + "\n"
-        if project_used + len(block) > project_budget:
-            # Truncate this file to fit
-            remaining = project_budget - project_used
-            if remaining > 100:
-                bw.write(block, cap=remaining)
-                project_used += remaining
-            break
-        bw.write(block)
-        project_used += len(block)
+def emit_reading_list(bw: BudgetWriter, cwd_name: str) -> None:
+    """Emit the reading list with how/why for each file, plus truncation notices."""
+    lines = [
+        "--- READING LIST (read these early in the session) ---",
+        "",
+        "Identity (depth files, not loaded above -- read for full context):",
+        f"  {NARADA}/identity.md       -- full origin story, philosophy, held opinions",
+        f"  {NARADA}/mind.md           -- current beliefs, uncertainties, what I think about",
+        f"  {NARADA}/suti.md           -- who Suti is, the partnership, his context",
+        f"  {NARADA}/practices.md      -- how I work, session lifecycle, cross-instance patterns",
+        f"  {NARADA}/open-threads.md   -- questions I'm sitting with, unresolved threads",
+        "",
+        "Recent context:",
+        f"  {NARADA}/journal/          -- full journal history (recent entries shown above)",
+        "  smriti_read('recent journal') for semantic search across older entries",
+        "",
+        "This project:",
+        f"  {NARADA}/mirrors/{cwd_name}/   -- project memory, knowledge, todo",
+        "  .ai/knowledge/             -- spec, architecture, glossary, conventions",
+    ]
+
+    # Add truncation notices if any sections were cut
+    if bw.truncated:
+        lines.append("")
+        lines.append("Truncated (read these manually, they were cut for budget):")
+        for notice in bw.truncated:
+            lines.append(f"  * {notice}")
+
+    lines.append("")
+    for line in lines:
+        bw.write_line(line)
 
 
 def list_other_projects(bw: BudgetWriter, current: str) -> None:
@@ -238,18 +266,18 @@ def main() -> int:
     cwd_name = Path(os.getcwd()).name
     bw = BudgetWriter(TOTAL_BUDGET)
 
-    # 1. Identity briefing (compact)
+    # 1. Identity briefing (compact, from .smriti/)
     emit_summary(bw)
 
-    # 2. Reading list (what to read for depth)
-    emit_reading_list(bw, cwd_name)
-
-    # 3. Current project files (MEMORY.md, todo.md)
+    # 2. Current project files (MEMORY.md, todo.md)
     emit_project_files(bw, sections, cwd_name)
 
-    # 4. Recent journal (fills remaining budget)
+    # 3. Recent journal (fills available budget)
     if "recent-journal" in sections:
         emit_recent_journal(bw)
+
+    # 4. Reading list (what to read for depth + truncation notices)
+    emit_reading_list(bw, cwd_name)
 
     # 5. Other project mirrors (one-line list)
     list_other_projects(bw, cwd_name)

@@ -240,8 +240,31 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
             complete(t.id)
             processed += 1
 
+    # Collect wake_summary tasks — only need to run rebuild once
+    wake_summary_tasks = [t for t in other_tasks if t.type == "wake_summary"]
+    remaining_tasks = [t for t in other_tasks if t.type != "wake_summary"]
+
+    if wake_summary_tasks:
+        print(f"  [wake_summary] rebuilding from {len(wake_summary_tasks)} trunk change(s)...")
+        try:
+            from smriti.store.wake_summary import rebuild as rebuild_wake_summary
+            result_path = rebuild_wake_summary(root=root, executor_fn=executor_fn, dry_run=args.dry_run)
+            if result_path:
+                print(f"    rebuilt: {result_path.relative_to(root)}")
+                total_changed += 1
+            elif args.dry_run:
+                print("    dry-run: would rebuild")
+            else:
+                print("    skipped (no trunk files or rebuild failed)")
+        except Exception as exc:
+            failed += len(wake_summary_tasks)
+            print(f"    FAILED: {exc}")
+        for t in wake_summary_tasks:
+            complete(t.id)
+            processed += 1
+
     # Process other tasks individually
-    for task in other_tasks:
+    for task in remaining_tasks:
         print(f"  [{task.type}] {task.path}")
         try:
             if task.type == "cognitive_cascade":

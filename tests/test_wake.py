@@ -16,13 +16,13 @@ WAKE_PY = REPO_ROOT / "narada" / ".smriti" / "wake.py"
 @pytest.fixture()
 def wake_tree(tmp_path: Path) -> Path:
     """Minimal memory root with wake-summary and identity files."""
-    (tmp_path / "wake-summary.md").write_text("# Test Entity\nI am the test entity. Test beliefs. Test practices.\n")
     (tmp_path / "identity.md").write_text("# Identity\nI am the test entity.\n")
     (tmp_path / "mind.md").write_text("# Mind\nTest beliefs.\n")
     (tmp_path / "practices.md").write_text("# Practices\nTest practices.\n")
 
     smriti_dir = tmp_path / ".smriti"
     smriti_dir.mkdir()
+    (smriti_dir / "wake-summary.md").write_text("# Test Entity\nI am the test entity. Test beliefs. Test practices.\n")
 
     wake_md = tmp_path / "wake.md"
     wake_md.write_text(
@@ -192,7 +192,7 @@ class TestWakeEdgeCases:
         assert result.stdout == ""
 
     def test_missing_summary_file(self, wake_tree: Path) -> None:
-        (wake_tree / "wake-summary.md").unlink()
+        (wake_tree / ".smriti" / "wake-summary.md").unlink()
         result = _run_wake(wake_tree, {"SMRITI_WAKE": "1"})
         assert result.returncode == 0
         # Reading list should still appear even without the summary
