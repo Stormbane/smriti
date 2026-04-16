@@ -15,7 +15,8 @@ WAKE_PY = REPO_ROOT / "narada" / ".smriti" / "wake.py"
 
 @pytest.fixture()
 def wake_tree(tmp_path: Path) -> Path:
-    """Minimal memory root with wake.md and identity files."""
+    """Minimal memory root with wake-summary and identity files."""
+    (tmp_path / "wake-summary.md").write_text("# Test Entity\nI am the test entity. Test beliefs. Test practices.\n")
     (tmp_path / "identity.md").write_text("# Identity\nI am the test entity.\n")
     (tmp_path / "mind.md").write_text("# Mind\nTest beliefs.\n")
     (tmp_path / "practices.md").write_text("# Practices\nTest practices.\n")
@@ -27,16 +28,14 @@ def wake_tree(tmp_path: Path) -> Path:
     wake_md.write_text(
         "# wake.md\n\n"
         "## always\n\n"
-        "identity.md\n"
-        "mind.md\n"
-        "practices.md\n\n"
+        "wake-summary.md\n\n"
         "## current-project\n\n"
-        "mirrors/{project}/working/working.md\n"
+        "mirrors/{project}/ai/todo.md\n"
     )
 
-    mirrors = tmp_path / "mirrors" / "testproject" / "working"
-    mirrors.mkdir(parents=True)
-    (mirrors / "working.md").write_text("# Working\nLast session state.\n")
+    mirrors_ai = tmp_path / "mirrors" / "testproject" / "ai"
+    mirrors_ai.mkdir(parents=True)
+    (mirrors_ai / "todo.md").write_text("# TODO\n- [ ] Test task\n")
 
     wake_src = WAKE_PY.read_text(encoding="utf-8")
     wake_src = wake_src.replace(
@@ -82,9 +81,8 @@ class TestWakeEnvGating:
     def test_fires_when_one(self, wake_tree: Path) -> None:
         result = _run_wake(wake_tree, {"SMRITI_WAKE": "1"})
         assert result.returncode == 0
-        assert "Identity" in result.stdout
-        assert "Mind" in result.stdout
-        assert "Practices" in result.stdout
+        assert "test entity" in result.stdout
+        assert "READING LIST" in result.stdout
 
     def test_fires_when_full(self, wake_tree: Path) -> None:
         result = _run_wake(wake_tree, {"SMRITI_WAKE": "full"})
@@ -101,8 +99,7 @@ class TestWakeSections:
     def test_always_section_loaded(self, wake_tree: Path) -> None:
         result = _run_wake(wake_tree, {"SMRITI_WAKE": "1"})
         assert "test entity" in result.stdout
-        assert "Test beliefs" in result.stdout
-        assert "Test practices" in result.stdout
+        assert "IDENTITY" in result.stdout
 
     def test_current_project_resolved(self, wake_tree: Path) -> None:
         result = _run_wake(
@@ -110,7 +107,7 @@ class TestWakeSections:
             {"SMRITI_WAKE": "1"},
             cwd=str(wake_tree / "mirrors" / "testproject"),
         )
-        assert "Last session state" in result.stdout
+        assert "Test task" in result.stdout
 
     def test_unknown_project_skips_gracefully(self, wake_tree: Path) -> None:
         result = _run_wake(
@@ -194,8 +191,9 @@ class TestWakeEdgeCases:
         assert result.returncode == 0
         assert result.stdout == ""
 
-    def test_missing_identity_file(self, wake_tree: Path) -> None:
-        (wake_tree / "identity.md").unlink()
+    def test_missing_summary_file(self, wake_tree: Path) -> None:
+        (wake_tree / "wake-summary.md").unlink()
         result = _run_wake(wake_tree, {"SMRITI_WAKE": "1"})
         assert result.returncode == 0
-        assert "Mind" in result.stdout
+        # Reading list should still appear even without the summary
+        assert "READING LIST" in result.stdout
