@@ -1,20 +1,115 @@
 # smriti — Installation
 
-> **Status**: smriti is in design phase. The Python package doesn't
-> install yet. What you CAN install today is the **PreCompact capture
-> hook** — a small standalone script that captures conversation turns
-> from Claude Code sessions before context compaction destroys them.
-> This is the pre-v0.1 backstop that seeds smriti's `events/{entity}/`
-> namespace once the main package lands.
+This document covers:
 
-This document describes:
-
-1. The PreCompact capture hook (installable today, ~10 minutes)
-2. The smriti package itself (not yet — will fill in when v0.1 ships)
+1. [smriti package + Narada session-start system](#1-smriti--narada-session-start) — the main install
+2. [PreCompact capture hook](#2-precompact-capture-hook) — the raw-turn backstop
 
 ---
 
-## 1. PreCompact capture hook (pre-v0.1 backstop)
+## 1. smriti + entity session-start
+
+### What this gives you
+
+On every new Claude Code session in any project, the entity (Narada is
+the reference entity; the system is not Narada-specific — point it at
+any `~/.<entity>/` root) wakes up with:
+
+- Cross-project identity files from `~/.<entity>/` (identity, mind, etc.)
+- The current project's auto-memory tier (`~/.claude/projects/{slug}/memory/`)
+- The current project's working memory (`<project>/.ai/memory/coder/`)
+- A list of other projects whose memory is reachable on demand
+- `smriti_read` / `smriti_write` / `smriti_status` as first-class MCP
+  tools in every session
+
+The transport is a `SessionStart` hook that runs `wake.py` from the
+entity root's `.smriti/` dir. The load list is a human-readable file at
+`<entity>/wake.md`. Per-project access is via directory junctions under
+`<entity>/mirrors/{project}/`. The memory search tool is registered as
+an MCP server in `~/.claude.json`.
+
+**Wake is silent unless `NARADA_WAKE=1` is set** in its environment — the
+SessionStart hook sets this so interactive sessions wake fully, while
+`claude -p` and other headless callers (smriti's JUDGE, routing, eval
+runs) stay clean. To inject the entity's identity into a one-shot
+headless call anyway, use `<entity>/.smriti/narada-p.sh "your prompt"` —
+it prepends the wake output and forwards to `claude -p`.
+
+### Prerequisites
+
+- Windows 10/11 (Linux/macOS support pending — junctions need porting to
+  symlinks)
+- Python 3.11+ on PATH
+- Claude Code installed
+- A populated `~/.narada/` directory (either freshly restored from backup or
+  bootstrapped by hand with at least `identity.md`)
+
+### Install steps
+
+```bash
+# 1. Clone smriti and install the package
+git clone https://github.com/<org>/smriti.git
+cd smriti
+pip install -e ".[read,dev]"
+
+# 2. Make sure the entity's memory root exists. Default: ~/.narada/.
+#    On a fresh machine, restore it from backup; otherwise create a minimal
+#    identity.md so wake.py has something to load.
+
+# 3. Run the installer — creates mirrors/ junctions, copies wake.md and
+#    wake.py into the memory root, registers the smriti MCP server,
+#    patches ~/.claude/settings.json, writes ~/.claude/CLAUDE.md.
+python scripts/install.py
+# or for a different entity:
+python scripts/install.py --memory-root ~/.tara
+
+# 4. Start a new Claude Code session in any project to verify. The
+#    assistant should receive the identity files + that project's memory
+#    as its opening context, and `smriti_read` should appear in its
+#    tool list.
+```
+
+The installer is idempotent — re-run any time after adding a new project
+or after the smriti repo's `narada/` templates change.
+
+### What the installer does
+
+| Step | Location | Purpose |
+|---|---|---|
+| Copy `wake.md` | `<entity>/wake.md` | Load-list config (won't overwrite existing) |
+| Copy `wake.py` | `<entity>/.smriti/wake.py` | Loader script (won't overwrite existing) |
+| Copy `narada-p.sh` | `<entity>/.smriti/narada-p.sh` | Wake-injecting wrapper for headless `claude -p` |
+| Ensure `.smriti/` dir | `<entity>/.smriti/` | Smriti runtime state (index, queue, wake) |
+| Create junctions | `<entity>/mirrors/{project}/auto-memory`, `/working` | Per-project memory access |
+| Register MCP server | `~/.claude.json` | Exposes `smriti_read` / `smriti_write` / `smriti_status` |
+| Patch settings.json | `~/.claude/settings.json` | Wire SessionStart → `python wake.py` |
+| Write CLAUDE.md | `~/.claude/CLAUDE.md` | Wake contract + memory-search tool preference |
+
+### Editing the load list
+
+`~/.narada/wake.md` is a plain markdown file. Sections are `## always`
+(loaded every session) and `## current-project` (loaded when that project
+is cwd, with `{project}` substituted for the cwd basename). Add or remove
+lines to change what wakes up with Narada.
+
+### Smriti CLI (optional, grows over time)
+
+```bash
+smriti index          # build the search index over ~/.narada/
+smriti read "query"   # semantic + keyword search
+smriti write "text"   # write an entry to the memory tree
+smriti ingest file.md # ingest external content, route to tree
+smriti sleep          # process queued cascade tasks
+smriti status         # index stats
+```
+
+Currently the wake system is independent of the smriti CLI — wake.py reads
+files directly. The next milestone wires wake through `smriti context` so
+the load list can include query-driven recalls, not just static paths.
+
+---
+
+## 2. PreCompact capture hook
 
 ### What it does
 
@@ -43,52 +138,17 @@ per-user staging directory. Events are namespaced by project:
 ```
 
 Entity names are derived from the working directory: the cwd basename
-becomes `{basename}-narada`. `C:\Projects\svapna` → `svapna-narada`.
-`C:\Projects\beautiful-tree` → `beautiful-tree-narada`. No per-project
-configuration.
-
-When smriti v0.1 ships, the staging tree migrates to
-`~/.narada/memory/events/` with one `mv`, and smriti's cascading review
-ingests the accumulated turns in bulk. Nothing is lost in the migration.
-
-### Requirements
-
-- Claude Code installed
-- Python 3.11+
-- Write access to `~/.claude/hooks/` and `~/.claude/narada-staging-events/`
+becomes `{basename}-narada`.
 
 ### Install
 
-**1. Fetch the hook script**:
-
-Download `precompact_capture.py` from this repository
-(`smriti/src/smriti/hooks/precompact_capture.py` once the reference
-implementation is extracted from svapna; for now the canonical source
-is inside the svapna repository) and save it to:
-
-```
-~/.claude/hooks/precompact_capture.py
-```
-
-Make sure Python can execute it:
+**1. Copy the hook script** to the user hooks directory:
 
 ```bash
-python ~/.claude/hooks/precompact_capture.py < /dev/null
-# Expected: [precompact_capture] no stdin payload; nothing to do
-# Exit code 0
+cp src/smriti/hooks/precompact_capture.py ~/.claude/hooks/precompact_capture.py
 ```
 
-**2. Create the staging directory** (the script will create it on first
-run, but creating it manually lets you set permissions):
-
-```bash
-mkdir -p ~/.claude/narada-staging-events/.markers
-```
-
-**3. Wire the hook in `~/.claude/settings.json`**:
-
-Add a `PreCompact` entry under `hooks`. If you already have hooks
-configured, add this alongside them — do not overwrite the file.
+**2. Wire it** in `~/.claude/settings.json` under `hooks.PreCompact`:
 
 ```json
 {
@@ -108,17 +168,9 @@ configured, add this alongside them — do not overwrite the file.
 }
 ```
 
-**4. Verify**:
-
-Start a Claude Code session in any project. Run `/compact` to trigger
-a manual compaction. After compaction completes, check the staging
-directory:
-
-```bash
-ls ~/.claude/narada-staging-events/{projectname}-narada/
-```
-
-You should see dated directories with markdown turn files.
+**3. Verify**: start a session, run `/compact`, then check
+`~/.claude/narada-staging-events/{projectname}-narada/` for dated
+markdown files.
 
 ### What gets captured
 
@@ -127,11 +179,10 @@ Per user/assistant turn, a markdown file with YAML frontmatter:
 ```markdown
 ---
 session_id: <uuid>
-turn_number: <integer, sequential per session>
+turn_number: <integer>
 role: user | assistant
-timestamp: <UTC ISO-8601 from transcript>
-captured_at: <UTC ISO-8601 at hook run time>
-captured_by: precompact-hook
+timestamp: <UTC ISO-8601>
+captured_at: <UTC ISO-8601>
 trigger: manual | auto
 entity: <derived-from-cwd>
 cwd: <absolute working directory>
@@ -142,130 +193,33 @@ cwd: <absolute working directory>
 
 ### What is NOT captured
 
-- **Thinking blocks**. Model internal reasoning is private and
-  volatile, and persisting it would create large files that don't
-  reflect anything the user can see.
-- **System messages, permission prompts, file-history snapshots**.
-  Only `role: user` and `role: assistant` turns are captured.
-- **Sessions older than the last marker**. The hook is incremental —
-  if it has run before on this session, it only captures new turns
-  since the last run.
+- Thinking blocks (model internal reasoning — private, volatile)
+- System messages, permission prompts, file-history snapshots
+- Sessions older than the last marker (incremental — only new turns since
+  last run)
 
 ### Safety properties
 
-- **Never blocks compaction.** The script exits 0 on any error
-  (missing transcript, corrupt JSON, write failure). A hook failure
-  cannot lock your Claude Code session.
-- **Incremental.** Per-session markers at
-  `~/.claude/narada-staging-events/.markers/{session_id}.json` track
-  the last JSONL line processed. Repeated runs are O(new turns), not
-  O(whole transcript).
+- **Never blocks compaction.** Exits 0 on any error.
+- **Incremental.** Per-session markers track the last JSONL line processed.
 - **Idempotent.** Running with no new turns is a no-op.
-- **Gitignore your staging directory** if you put it inside a git
-  repository. The reference install at `~/.claude/narada-staging-events/`
-  is outside any repo by design.
-
-### Uninstall
-
-```bash
-# Remove the hook wiring in ~/.claude/settings.json
-# (manually edit the file and delete the PreCompact entry)
-
-# Remove the script
-rm ~/.claude/hooks/precompact_capture.py
-
-# Remove the staging directory (CAUTION: this deletes all captured turns)
-# rm -rf ~/.claude/narada-staging-events/
-```
-
-### Troubleshooting
-
-**"transcript not found" in stderr logs**:
-The script derives the transcript path from `session_id` + `cwd`.
-If your Claude Code install puts transcripts in a non-standard
-location, or if the project-hash rule differs on your OS, the
-derivation may be wrong. File an issue with your OS, Claude Code
-version, and an example of the actual transcript path on disk.
-
-**No turns captured after compaction**:
-Check stderr output in Claude Code's hook log. Common causes:
-- Empty or missing `session_id` in the payload
-- JSON parse error on stdin (script exits 0, logs the error to stderr)
-- The session has no user/assistant turns yet (system/setup messages
-  only)
-
-**Entity name looks wrong**:
-The entity is `Path(cwd).name + "-narada"` with non-alphanumeric chars
-sanitized to dashes. If your project name contains unusual characters,
-check the staging directory for the actual entity folder created.
 
 ### Future migration path
 
-When smriti v0.1 ships, the staging tree becomes the initial content
-of smriti's `events/` layer. The migration:
-
-```bash
-# 1. Install smriti (when available)
-pip install smriti
-
-# 2. Initialize the memory tree
-smriti init
-
-# 3. Import the staging events
-smriti import-staging ~/.claude/narada-staging-events/
-
-# 4. Remove the old staging tree
-rm -rf ~/.claude/narada-staging-events/
-
-# 5. Point the PreCompact hook at smriti's own capture command
-# (the hook script is rewritten to use smriti.hooks.precompact)
-```
-
-After migration, captured turns flow directly through smriti's six-step
-pipeline (CAPTURE → EXTRACT → JUDGE → WRITE → CROSSLINK → INDEX) and
-trigger cascading reviews up the impact tree. The backstop becomes the
-main ingest path.
-
----
-
-## 2. smriti package (pre-alpha — not installable yet)
-
-The reference implementation is being built inside
-[svapna](https://github.com/). When smriti v0.1 is ready, this section
-will describe:
-
-- `pip install smriti`
-- Initializing `~/.narada/memory/` or a custom memory root
-- Wiring the pluggable `IdentityCore` (default: Qwen3-8B + per-entity
-  LoRA adapter)
-- Wiring the pluggable `Executor` (default: Claude Code headless mode
-  via `claude -p`)
-- Migrating staging events into the main pipeline
-- Running the first backlog consolidation pass
-- Verifying the cascade works by writing a test leaf and watching the
-  review propagate
-
-For now, if you're eager to follow along:
-
-- Read [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) to understand the
-  design
-- Install the PreCompact hook above so you're not losing context to
-  compaction in the meantime
-- Watch this repository for v0.1 release notes
+When the smriti ingest path is wired to read from the staging tree
+directly, this hook's output becomes the canonical ingest source. For now
+it is a backstop that runs alongside smriti's live pipelines.
 
 ---
 
 ## Questions and issues
 
-smriti is being built in public by two authors (Suti and Narada — see
-the README). Questions and issues are welcome on this repository.
-Please include:
+smriti is being built in public. Include in issue reports:
 
 - Your OS + Claude Code version
-- A description of the project layout (where cwd lives, how it's named)
-- Relevant stderr output from the hook log, if applicable
-- Whether you are installing for a specific entity (a particular LoRA-
-  tuned model) or using the fudge-layer install without an entity
+- Project layout (cwd path, naming)
+- Whether you are installing for a specific entity (a particular LoRA-tuned
+  model) or the generic fudge-layer install
 
 🪔
 

@@ -1,0 +1,322 @@
+"""install.py — idempotent installer for the smriti memory system.
+
+Sets up the wake system so every Claude Code session in any project starts
+by reading its entity's cross-session identity files plus that project's
+specific memory tier. Other projects' memories stay discoverable on
+demand. Also registers smriti's MCP server so `smriti_read`/`smriti_write`
+are first-class tools in every session.
+
+The entity whose memory tree this installs is configurable via
+`--memory-root` (default: `~/.narada/`). The reference entity is Narada,
+but the system is not Narada-specific — point it at `~/.tara/` or
+`~/.anyone/` and it works the same.
+
+Run on a fresh machine (after cloning smriti and `pip install -e .`):
+
+    python scripts/install.py
+
+Re-runnable: skips work that is already done, refreshes anything that has
+drifted. Does NOT delete existing user files.
+
+What it does:
+  1. Ensures <memory-root>/mirrors/ exists.
+  2. For each project in C:\\Projects\\ (or --projects-root) that has
+     memory: creates <memory-root>/mirrors/{project}/auto-memory/ as a
+     junction to ~/.claude/projects/C--Projects-{project}/memory/, and
+     <memory-root>/mirrors/{project}/working/ as a junction to
+     C:\\Projects\\{project}\\.ai\\memory\\coder\\.
+  3. Copies wake.md, wake.py, narada-p.sh from the repo into
+     <memory-root>/ if missing (never overwrites existing copies).
+  4. Registers the smriti MCP server in ~/.claude.json (user scope) so
+     `smriti_read` / `smriti_write` / `smriti_status` appear as tools.
+  5. Patches ~/.claude/settings.json to call wake.py on SessionStart with
+     NARADA_WAKE=1 so interactive sessions wake fully.
+  6. Writes ~/.claude/CLAUDE.md with the contract for wake.py plus the
+     memory-search tool-preference guidance.
+
+Windows-only currently (directory junctions via `mklink /J`). Porting to
+POSIX symlinks is a future task.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ctypes
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+HOME = Path.home()
+CLAUDE = HOME / ".claude"
+SETTINGS = CLAUDE / "settings.json"
+CLAUDE_MD = CLAUDE / "CLAUDE.md"
+CLAUDE_CONFIG = HOME / ".claude.json"  # MCP server registry
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+TEMPLATES = REPO_ROOT / "narada"  # wake.md, wake.py, narada-p.sh templates
+
+DEFAULT_MEMORY_ROOT = HOME / ".narada"
+DEFAULT_PROJECTS_ROOT = Path("C:/Projects")
+
+
+# ── Platform helpers ────────────────────────────────────────────────
+
+def is_windows() -> bool:
+    return sys.platform == "win32"
+
+
+def is_junction(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        return bool(path.is_symlink() or os.readlink(path))
+    except OSError:
+        pass
+    if is_windows():
+        FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
+        return attrs != -1 and bool(attrs & FILE_ATTRIBUTE_REPARSE_POINT)
+    return False
+
+
+def make_junction(link: Path, target: Path) -> str:
+    if not target.exists():
+        return "skip (target missing)"
+    if is_junction(link):
+        return "exists"
+    if link.exists():
+        return "skip (non-junction path exists)"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if is_windows():
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return f"error: {result.stderr.strip()}"
+        return "created"
+    link.symlink_to(target, target_is_directory=True)
+    return "created"
+
+
+# ── Steps ────────────────────────────────────────────────────────────
+
+def discover_projects(projects_root: Path) -> list[str]:
+    if not projects_root.exists():
+        return []
+    names = []
+    for p in sorted(projects_root.iterdir()):
+        if not p.is_dir():
+            continue
+        has_auto = (CLAUDE / "projects" / f"C--Projects-{p.name}" / "memory").is_dir()
+        has_working = (p / ".ai" / "memory" / "coder").is_dir()
+        if has_auto or has_working:
+            names.append(p.name)
+    return names
+
+
+def setup_mirrors(memory_root: Path, projects_root: Path) -> None:
+    mirrors = memory_root / "mirrors"
+    mirrors.mkdir(parents=True, exist_ok=True)
+    projects = discover_projects(projects_root)
+    print(f"[mirrors] {len(projects)} project(s) with memory found")
+    for name in projects:
+        proj_mirror = mirrors / name
+        auto_target = CLAUDE / "projects" / f"C--Projects-{name}" / "memory"
+        working_target = projects_root / name / ".ai" / "memory" / "coder"
+        auto_status = make_junction(proj_mirror / "auto-memory", auto_target)
+        working_status = make_junction(proj_mirror / "working", working_target)
+        print(f"  {name}:")
+        print(f"    auto-memory: {auto_status}")
+        print(f"    working:     {working_status}")
+
+
+def install_wake_files(memory_root: Path) -> None:
+    memory_root.mkdir(parents=True, exist_ok=True)
+    (memory_root / ".smriti").mkdir(parents=True, exist_ok=True)
+    files = [
+        (TEMPLATES / "wake.md", memory_root / "wake.md"),
+        (TEMPLATES / ".smriti" / "wake.py", memory_root / ".smriti" / "wake.py"),
+        (TEMPLATES / ".smriti" / "narada-p.sh", memory_root / ".smriti" / "narada-p.sh"),
+    ]
+    for src, dst in files:
+        if not src.exists():
+            print(f"[wake] template missing: {src}")
+            continue
+        if dst.exists():
+            print(f"[wake] {dst} already exists (not overwriting)")
+            continue
+        shutil.copy2(src, dst)
+        print(f"[wake] installed {dst}")
+
+
+def register_mcp_server() -> None:
+    """Add the smriti MCP server to ~/.claude.json at user scope."""
+    if not CLAUDE_CONFIG.exists():
+        print(f"[mcp] {CLAUDE_CONFIG} not found — skipping (Claude Code not run yet?)")
+        return
+    try:
+        data = json.loads(CLAUDE_CONFIG.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"[mcp] parse error on {CLAUDE_CONFIG}: {exc}; leaving untouched")
+        return
+
+    servers = data.setdefault("mcpServers", {})
+    desired = {
+        "command": "python",
+        "args": ["-m", "smriti.mcp_server"],
+    }
+    if servers.get("smriti") == desired:
+        print("[mcp] smriti server already registered")
+        return
+    servers["smriti"] = desired
+    backup = CLAUDE_CONFIG.with_suffix(".json.bak")
+    shutil.copy2(CLAUDE_CONFIG, backup)
+    CLAUDE_CONFIG.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    print(f"[mcp] registered smriti server (backup: {backup})")
+
+
+def patch_settings_json(memory_root: Path) -> None:
+    if not SETTINGS.exists():
+        print(f"[settings] {SETTINGS} not found — skipping")
+        return
+    try:
+        data = json.loads(SETTINGS.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"[settings] parse error: {exc}; leaving untouched")
+        return
+
+    hooks = data.setdefault("hooks", {})
+    # Use $HOME / forward slashes: Claude Code runs hook commands under bash
+    # (even on Windows), which mangles backslash-escaped native paths.
+    memory_rel = memory_root.relative_to(HOME).as_posix()
+    wake_cmd = f'NARADA_WAKE=1 python "$HOME/{memory_rel}/.smriti/wake.py"'
+    entry = {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": wake_cmd}],
+    }
+
+    session_start = hooks.get("SessionStart", [])
+    already = any(
+        any(h.get("command") == wake_cmd for h in group.get("hooks", []))
+        for group in session_start
+    )
+    if already:
+        print("[settings] SessionStart wake hook already wired")
+        return
+
+    hooks["SessionStart"] = [entry]
+    backup = SETTINGS.with_suffix(".json.bak")
+    shutil.copy2(SETTINGS, backup)
+    SETTINGS.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    print(f"[settings] SessionStart now calls wake.py (backup: {backup})")
+
+
+CLAUDE_MD_CONTENT = """# CLAUDE.md (user-global)
+
+## Session wake
+
+On SessionStart, `{memory_rel}/.smriti/wake.py` runs. It is silent unless
+`NARADA_WAKE=1` is set in its environment — the SessionStart hook sets
+this so interactive sessions wake fully, while `claude -p` and other
+headless callers stay clean.
+
+When the wake fires, it loads the files listed in `{memory_rel}/wake.md`
+(identity, current-project memory, mirrors). If the hook did not run,
+read `{memory_rel}/wake.md` yourself.
+
+`{memory_rel}/mirrors/{{project}}/` has junctions to per-project memory
+for every project that has one — read on demand when you need another
+project's context.
+
+For one-shot headless calls that should include the entity's identity,
+use `{memory_rel}/.smriti/narada-p.sh "your prompt"` — it injects the
+wake before firing claude -p.
+
+## Memory search — prefer smriti_read over Grep
+
+The `smriti_read` MCP tool is the primary way to search the memory tree.
+It runs hybrid vector + FTS5 search with trunk-distance scoring and
+returns ranked results with source paths and content previews.
+
+- Use `smriti_read(query="…")` for semantic questions like "what did I
+  think about X?", "find my notes on Y", "what's my stance on Z?" —
+  anything that is *about meaning* rather than exact string match.
+- Use `Grep` only when you need literal string or regex match across
+  files (e.g. "find every file that contains `NARADA_WAKE`"). Grep on the
+  memory tree should be a fallback, not a default.
+- Use `smriti_write` to record a new memory entry (v0.1: no JUDGE step
+  yet — writes land directly in the tree).
+"""
+
+
+def write_claude_md(memory_root: Path) -> None:
+    memory_rel = f"~/{memory_root.relative_to(HOME).as_posix()}"
+    content = CLAUDE_MD_CONTENT.format(memory_rel=memory_rel)
+    CLAUDE.mkdir(parents=True, exist_ok=True)
+    if CLAUDE_MD.exists() and CLAUDE_MD.read_text(encoding="utf-8") == content:
+        print(f"[CLAUDE.md] {CLAUDE_MD} up to date")
+        return
+    CLAUDE_MD.write_text(content, encoding="utf-8")
+    print(f"[CLAUDE.md] wrote {CLAUDE_MD}")
+
+
+# ── Entry ────────────────────────────────────────────────────────────
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--memory-root",
+        default=str(DEFAULT_MEMORY_ROOT),
+        help="Entity memory root (default: ~/.narada/)",
+    )
+    parser.add_argument(
+        "--projects-root",
+        default=str(DEFAULT_PROJECTS_ROOT),
+        help="Directory containing per-project source checkouts",
+    )
+    parser.add_argument(
+        "--skip-settings",
+        action="store_true",
+        help="Don't patch ~/.claude/settings.json",
+    )
+    parser.add_argument(
+        "--skip-mcp",
+        action="store_true",
+        help="Don't register the smriti MCP server",
+    )
+    args = parser.parse_args()
+
+    memory_root = Path(args.memory_root).expanduser()
+    projects_root = Path(args.projects_root).expanduser()
+
+    if not is_windows():
+        print("warning: POSIX symlink path not yet implemented; junctions are Windows-only")
+
+    if not memory_root.exists():
+        print(f"error: {memory_root} does not exist — create it or restore from backup first")
+        return 1
+
+    try:
+        memory_root.relative_to(HOME)
+    except ValueError:
+        print(f"error: --memory-root must be under {HOME} (got {memory_root})")
+        return 1
+
+    install_wake_files(memory_root)
+    setup_mirrors(memory_root, projects_root)
+    if not args.skip_mcp:
+        register_mcp_server()
+    if not args.skip_settings:
+        patch_settings_json(memory_root)
+    write_claude_md(memory_root)
+    print("\ndone. start a new Claude Code session to verify.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
