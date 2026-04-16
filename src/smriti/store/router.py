@@ -44,6 +44,7 @@ _DEFAULT_LEAF_PREFIXES = (
     "episodes/",
     "notes/",
     "mirrors/",
+    "inbox/",
 )
 
 
@@ -404,3 +405,162 @@ def _get_dimension(db_path: Path) -> int:
         return int(row[0]) if row else 384
     finally:
         conn.close()
+
+
+# ── Shared action execution ────────────────────────────────────────
+
+
+def execute_routing_actions(
+    routing_result: RoutingResult,
+    *,
+    source_path: Path,
+    root: Path,
+    executor_fn: Callable[..., str] = executor_via_claude,
+    context_content: str = "",
+    dry_run: bool = False,
+) -> dict:
+    """Execute the actions in a routing table.
+
+    Shared by ``ingest()`` (which summarizes first) and ``route_file()``
+    (which routes an existing file directly).
+
+    Returns a dict with ``actions_executed`` (list of per-action records)
+    and ``cascade_targets`` (list of Paths that were REVISED/CREATEd).
+    """
+    from smriti.store.cascade import PROTECTED_FILES, queue_cognitive_cascade
+
+    actions_executed: list[dict] = []
+    cascade_targets: list[Path] = []
+
+    for action in routing_result.actions:
+        record = {
+            "action": action.action,
+            "target": action.target,
+            "direction": action.direction[:100],
+            "executed": False,
+        }
+
+        if dry_run:
+            actions_executed.append(record)
+            continue
+
+        if action.action in ("REVISE", "CREATE") and is_leaf_path(action.target):
+            log.warning(
+                "Routing action %s on leaf path %s rejected (leaves are immutable)",
+                action.action, action.target,
+            )
+            record["rejected_reason"] = "leaf-path"
+            actions_executed.append(record)
+            continue
+
+        target_path = root / action.target
+
+        if action.action == "REVISE":
+            if target_path.name in PROTECTED_FILES:
+                log.info("REVISE on protected file %s downgraded to PROMOTE", action.target)
+                record["action"] = "PROMOTE"
+                actions_executed.append(record)
+                continue
+            if not target_path.exists():
+                log.warning("REVISE target not found: %s", action.target)
+                actions_executed.append(record)
+                continue
+            parent_content = target_path.read_text(encoding="utf-8")
+            revised = executor_fn(parent_content, action.direction, context_content)
+            target_path.write_text(revised, encoding="utf-8")
+            cascade_targets.append(target_path)
+            record["executed"] = True
+            log.info("REVISED: %s", action.target)
+
+        elif action.action == "LINK":
+            changed = execute_link(source_path, target_path, root)
+            record["executed"] = changed
+
+        elif action.action == "TASK":
+            if not target_path.exists():
+                log.warning("TASK target not found: %s", action.target)
+                actions_executed.append(record)
+                continue
+            changed = execute_task(target_path, action.direction, source_path, root)
+            record["executed"] = changed
+
+        elif action.action == "CREATE":
+            if target_path.exists():
+                log.info("CREATE target exists, downgrading to REVISE: %s", action.target)
+                parent_content = target_path.read_text(encoding="utf-8")
+                revised = executor_fn(parent_content, action.direction, context_content)
+                target_path.write_text(revised, encoding="utf-8")
+                cascade_targets.append(target_path)
+                record["action"] = "REVISE"
+                record["executed"] = True
+            else:
+                created = execute_create(
+                    target_path, action.direction, context_content, root, executor_fn,
+                )
+                cascade_targets.append(created)
+                record["executed"] = True
+
+        actions_executed.append(record)
+
+    cascade_queued = 0
+    if cascade_targets and not dry_run:
+        cascade_queued = queue_cognitive_cascade(cascade_targets, root)
+        log.info("Cascade queued: %d tasks", cascade_queued)
+
+    return {
+        "actions_executed": actions_executed,
+        "cascade_targets": cascade_targets,
+        "cascade_queued": cascade_queued,
+    }
+
+
+# ── Route file (no summarization) ──────────────────────────────────
+
+
+def route_file(
+    path: Path,
+    root: Path,
+    *,
+    executor_fn: Callable[..., str] = executor_via_claude,
+    routing_judge_fn: Callable[..., RoutingResult] | None = None,
+    top_k: int = 10,
+    dry_run: bool = False,
+) -> dict:
+    """Route an existing file: read content, search for candidates,
+    JUDGE creates links. No summarization step.
+
+    For files Narada writes directly — the content IS the content, no
+    summary needed. Just discover what it connects to.
+
+    Returns a dict with routing result + execution results.
+    """
+    if not path.exists():
+        log.warning("route_file: path does not exist: %s", path)
+        return {"actions_executed": [], "cascade_queued": 0}
+
+    content = path.read_text(encoding="utf-8")
+
+    routing_result = route(
+        content,
+        root,
+        top_k=top_k,
+        judge_fn=routing_judge_fn,
+    )
+
+    if not routing_result.actions:
+        log.info("route_file: no actions for %s", path.relative_to(root))
+        return {"routing": routing_result, "actions_executed": [], "cascade_queued": 0}
+
+    exec_result = execute_routing_actions(
+        routing_result,
+        source_path=path,
+        root=root,
+        executor_fn=executor_fn,
+        context_content=content,
+        dry_run=dry_run,
+    )
+
+    return {
+        "routing": routing_result,
+        **exec_result,
+    }
