@@ -215,9 +215,10 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
     total_changed = 0
     tasks = dequeue(n)
 
-    # Separate ingest tasks (batch) from others (per-task)
+    # Separate task types
     ingest_tasks = [t for t in tasks if t.type == "ingest"]
-    other_tasks = [t for t in tasks if t.type != "ingest"]
+    journal_rollup_tasks = [t for t in tasks if t.type == "journal_rollup"]
+    other_tasks = [t for t in tasks if t.type not in ("ingest", "journal_rollup")]
 
     # Batch consolidate ingest tasks
     if ingest_tasks:
@@ -239,6 +240,33 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
         for t in ingest_tasks:
             complete(t.id)
             processed += 1
+
+    # Process journal rollup tasks -- create summary files that don't exist
+    if journal_rollup_tasks:
+        from smriti.store.journal_rollup import rollup as journal_rollup_fn
+
+        # Sort by priority (week first, then month, then year) so children
+        # exist before parents try to read them
+        journal_rollup_tasks.sort(key=lambda t: -t.priority)
+        for task in journal_rollup_tasks:
+            print(f"  [journal_rollup] {task.path}")
+            try:
+                result_path = journal_rollup_fn(
+                    task.path, root=root, executor_fn=executor_fn, dry_run=args.dry_run,
+                )
+                if result_path:
+                    print(f"    created: {result_path.relative_to(root)}")
+                    total_changed += 1
+                elif args.dry_run:
+                    print("    dry-run: would create")
+                else:
+                    print("    skipped (no children found)")
+                complete(task.id)
+                processed += 1
+            except Exception as exc:
+                complete(task.id, error=str(exc))
+                failed += 1
+                print(f"    FAILED: {exc}")
 
     # Collect wake_summary tasks — only need to run rebuild once
     wake_summary_tasks = [t for t in other_tasks if t.type == "wake_summary"]

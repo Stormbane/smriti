@@ -119,6 +119,33 @@ def test_write_appends_to_daily_file(mini_tree: Path) -> None:
     assert "Second entry." in content
 
 
+def test_journal_uses_nested_structure(mini_tree: Path) -> None:
+    """Journal entries use the YYYY/MM/weekN/MM-DD.md structure."""
+    from smriti.store.writer import write_entry
+
+    path = write_entry("Test journal.", branch="journal", root=mini_tree, reindex=False)
+
+    # Path should contain month and week directories
+    rel = path.relative_to(mini_tree)
+    parts = rel.parts
+    assert parts[0] == "journal"
+    assert len(parts) == 5, f"Expected journal/YYYY/MM/weekN/MM-DD.md, got {rel}"
+    assert parts[3].startswith("week"), f"Expected weekN dir, got {parts[3]}"
+    assert path.name.count("-") == 1, f"Expected MM-DD.md, got {path.name}"
+
+
+def test_non_journal_uses_flat_structure(mini_tree: Path) -> None:
+    """Non-journal branches use the flat YYYY/MM-DD.md structure."""
+    from smriti.store.writer import write_entry
+
+    path = write_entry("Test note.", branch="notes", root=mini_tree, reindex=False)
+
+    rel = path.relative_to(mini_tree)
+    parts = rel.parts
+    assert parts[0] == "notes"
+    assert len(parts) == 3, f"Expected notes/YYYY/MM-DD.md, got {rel}"
+
+
 def test_write_then_read(mini_tree: Path) -> None:
     """Write an entry, re-index, verify it comes back in search."""
     from smriti.store.indexer import index_tree
