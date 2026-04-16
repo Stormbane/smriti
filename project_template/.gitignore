@@ -1,0 +1,37 @@
+# dependencies
+node_modules/
+
+# build
+dist/
+build/
+
+# env files (NEVER commit secrets)
+.env
+.env.local
+.env.production
+.env*.local
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# typescript
+*.tsbuildinfo
+
+# test results
+test-results/
+
+# Claude Code internal
+.claude/

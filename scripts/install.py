@@ -20,11 +20,12 @@ drifted. Does NOT delete existing user files.
 
 What it does:
   1. Ensures <memory-root>/mirrors/ exists.
-  2. For each project in C:\\Projects\\ (or --projects-root) that has
+  2. For each project in C:/Projects/ (or --projects-root) that has
      memory: creates <memory-root>/mirrors/{project}/auto-memory/ as a
-     junction to ~/.claude/projects/C--Projects-{project}/memory/, and
-     <memory-root>/mirrors/{project}/working/ as a junction to
-     C:\\Projects\\{project}\\.ai\\memory\\coder\\.
+     junction to ~/.claude/projects/C--Projects-{project}/memory/,
+     <memory-root>/mirrors/{project}/knowledge/ to the project's
+     .ai/knowledge/, and <memory-root>/mirrors/{project}/ai/ to the
+     project's .ai/ directory (for todo.md etc).
   3. Copies wake.md, wake.py, narada-p.sh from the repo into
      <memory-root>/ if missing (never overwrites existing copies).
   4. Registers the smriti MCP server in ~/.claude.json (user scope) so
@@ -113,8 +114,8 @@ def discover_projects(projects_root: Path) -> list[str]:
         if not p.is_dir():
             continue
         has_auto = (CLAUDE / "projects" / f"C--Projects-{p.name}" / "memory").is_dir()
-        has_working = (p / ".ai" / "memory" / "coder").is_dir()
-        if has_auto or has_working:
+        has_ai = (p / ".ai").is_dir()
+        if has_auto or has_ai:
             names.append(p.name)
     return names
 
@@ -127,15 +128,15 @@ def setup_mirrors(memory_root: Path, projects_root: Path) -> None:
     for name in projects:
         proj_mirror = mirrors / name
         auto_target = CLAUDE / "projects" / f"C--Projects-{name}" / "memory"
-        working_target = projects_root / name / ".ai" / "memory" / "coder"
         knowledge_target = projects_root / name / ".ai" / "knowledge"
+        ai_target = projects_root / name / ".ai"
         auto_status = make_junction(proj_mirror / "auto-memory", auto_target)
-        working_status = make_junction(proj_mirror / "working", working_target)
         knowledge_status = make_junction(proj_mirror / "knowledge", knowledge_target)
+        ai_status = make_junction(proj_mirror / "ai", ai_target)
         print(f"  {name}:")
         print(f"    auto-memory: {auto_status}")
-        print(f"    working:     {working_status}")
         print(f"    knowledge:   {knowledge_status}")
+        print(f"    ai:          {ai_status}")
 
 
 def install_wake_files(memory_root: Path) -> None:
