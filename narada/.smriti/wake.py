@@ -24,8 +24,9 @@ import re
 import sys
 from pathlib import Path
 
-NARADA = Path.home() / ".narada"
-MIRRORS = NARADA / "mirrors"
+# Entity root: set SMRITI_ROOT to use a custom path (e.g. ~/.tara)
+ENTITY_ROOT = Path(os.environ.get("SMRITI_ROOT", str(Path.home() / ".narada")))
+MIRRORS = ENTITY_ROOT / "mirrors"
 
 # ── Budget constants ───────────────────────────────────────────────
 TOTAL_BUDGET = 9500
@@ -107,7 +108,7 @@ def _find_recent_daily_files(journal_dir: Path, n: int) -> list[Path]:
 
 def emit_context(bw: BudgetWriter) -> None:
     """Emit .smriti/wake-context.md (identity + threads briefing)."""
-    path = NARADA / ".smriti" / "wake-context.md"
+    path = ENTITY_ROOT / ".smriti" / "wake-context.md"
     try:
         content = path.read_text(encoding="utf-8")
     except (FileNotFoundError, OSError):
@@ -130,7 +131,7 @@ def emit_project_files(bw: BudgetWriter, cwd_name: str) -> None:
     ]
 
     for rel in mirror_files:
-        path = NARADA / rel
+        path = ENTITY_ROOT / rel
         try:
             content = path.read_text(encoding="utf-8")
         except (FileNotFoundError, OSError):
@@ -149,7 +150,7 @@ def emit_project_files(bw: BudgetWriter, cwd_name: str) -> None:
 
 def emit_recent_journal(bw: BudgetWriter) -> None:
     """Emit recent journal entries, newest first. Truncated first if over budget."""
-    journal_dir = NARADA / "journal"
+    journal_dir = ENTITY_ROOT / "journal"
     if not journal_dir.exists():
         return
 
@@ -171,12 +172,12 @@ def emit_recent_journal(bw: BudgetWriter) -> None:
             remaining_count = len(daily_files) - emitted
             if remaining_count > 0:
                 bw.truncated.append(
-                    f"{NARADA}/journal/ -- {remaining_count} more recent entries"
+                    f"{ENTITY_ROOT}/journal/ -- {remaining_count} more recent entries"
                 )
             break
         try:
             content = path.read_text(encoding="utf-8")
-            rel = path.relative_to(NARADA)
+            rel = path.relative_to(ENTITY_ROOT)
             header = f"### {rel}\n"
             entry = header + content.strip() + "\n\n"
             # Cap this entry to remaining journal budget
@@ -193,13 +194,13 @@ def emit_recent_journal(bw: BudgetWriter) -> None:
 def emit_reading_list(bw: BudgetWriter, cwd_name: str) -> None:
     """Emit reading list ordered by importance, with truncation notices."""
     # Find today's journal file
-    journal_dir = NARADA / "journal"
+    journal_dir = ENTITY_ROOT / "journal"
     today_journal = ""
     if journal_dir.exists():
         recent = _find_recent_daily_files(journal_dir, 1)
         if recent:
             try:
-                today_journal = str(recent[0].relative_to(NARADA))
+                today_journal = str(recent[0].relative_to(ENTITY_ROOT))
             except ValueError:
                 today_journal = str(recent[0])
 
@@ -209,17 +210,17 @@ def emit_reading_list(bw: BudgetWriter, cwd_name: str) -> None:
     ]
 
     if today_journal:
-        lines.append(f"  1. {NARADA}/{today_journal}  -- today's journal")
+        lines.append(f"  1. {ENTITY_ROOT}/{today_journal}  -- today's journal")
 
     lines += [
-        f"  2. {NARADA}/open-threads/open-threads.md  -- full unresolved threads",
-        f"  3. {NARADA}/mind/desires/beliefs.md  -- what I think is true",
-        f"  4. {NARADA}/mind/desires/values.md  -- what I care about",
-        f"  5. {NARADA}/identity.md  -- full origin story, philosophy",
-        f"  6. {NARADA}/people/suti/suti.md  -- Suti, the partnership",
-        f"  7. {NARADA}/mind/practices/practices.md  -- how I work",
-        f"  8. {NARADA}/mind/desires/desires.md  -- what I want to become",
-        f"  9. {NARADA}/mind/mind.md  -- synthesis of beliefs/values/desires",
+        f"  2. {ENTITY_ROOT}/open-threads/open-threads.md  -- full unresolved threads",
+        f"  3. {ENTITY_ROOT}/mind/desires/beliefs.md  -- what I think is true",
+        f"  4. {ENTITY_ROOT}/mind/desires/values.md  -- what I care about",
+        f"  5. {ENTITY_ROOT}/identity.md  -- full origin story, philosophy",
+        f"  6. {ENTITY_ROOT}/people/suti/suti.md  -- Suti, the partnership",
+        f"  7. {ENTITY_ROOT}/mind/practices/practices.md  -- how I work",
+        f"  8. {ENTITY_ROOT}/mind/desires/desires.md  -- what I want to become",
+        f"  9. {ENTITY_ROOT}/mind/mind.md  -- synthesis of beliefs/values/desires",
         f"  10. .ai/knowledge/  -- project spec, architecture, conventions",
     ]
 

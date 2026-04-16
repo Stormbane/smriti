@@ -39,13 +39,9 @@ def wake_tree(tmp_path: Path) -> Path:
     mirrors_mem.mkdir(parents=True)
     (mirrors_mem / "MEMORY.md").write_text("# Memory\nTest memory index.\n")
 
-    # Patch wake.py to use this tree instead of ~/.narada
-    wake_src = WAKE_PY.read_text(encoding="utf-8")
-    wake_src = wake_src.replace(
-        'NARADA = Path.home() / ".narada"',
-        f'NARADA = Path(r"{tmp_path}")',
-    )
-    (smriti_dir / "wake.py").write_text(wake_src, encoding="utf-8")
+    # Copy wake.py as-is — we'll set SMRITI_ROOT in the env to point at this tree
+    import shutil
+    shutil.copy2(WAKE_PY, smriti_dir / "wake.py")
 
     return tmp_path
 
@@ -53,6 +49,7 @@ def wake_tree(tmp_path: Path) -> Path:
 def _run_wake(wake_tree: Path, env_vars: dict | None = None, cwd: str | None = None) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env.pop("SMRITI_WAKE", None)
+    env["SMRITI_ROOT"] = str(wake_tree)  # Point wake.py at the test tree
     if env_vars:
         env.update(env_vars)
     return subprocess.run(
