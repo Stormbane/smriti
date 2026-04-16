@@ -19,6 +19,8 @@ Re-runnable: skips work that is already done, refreshes anything that has
 drifted. Does NOT delete existing user files.
 
 What it does:
+  0. Copies the memory tree skeleton (identity, mind, open-threads,
+     people, journal, etc.) into the memory root if not already present.
   1. Ensures <memory-root>/mirrors/ exists.
   2. For each project in C:/Projects/ (or --projects-root) that has
      memory: creates <memory-root>/mirrors/{project}/auto-memory/ as a
@@ -58,6 +60,7 @@ CLAUDE_CONFIG = HOME / ".claude.json"  # MCP server registry
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = REPO_ROOT / "narada"  # wake.md, wake.py, narada-p.sh templates
+MEMORY_TEMPLATE = REPO_ROOT / "memory_template"  # identity tree skeleton
 
 DEFAULT_MEMORY_ROOT = HOME / ".narada"
 DEFAULT_PROJECTS_ROOT = Path("C:/Projects")
@@ -139,11 +142,47 @@ def setup_mirrors(memory_root: Path, projects_root: Path) -> None:
         print(f"    ai:          {ai_status}")
 
 
+def install_memory_template(memory_root: Path) -> None:
+    """Copy the memory tree skeleton into the entity root.
+
+    Only copies files that don't already exist — never overwrites.
+    Skips .gitkeep files (they're just git placeholders).
+    """
+    if not MEMORY_TEMPLATE.exists():
+        print(f"[memory] template not found at {MEMORY_TEMPLATE}")
+        return
+    copied = 0
+    skipped = 0
+    for src in MEMORY_TEMPLATE.rglob("*"):
+        if src.is_dir():
+            continue
+        if src.name == ".gitkeep":
+            # Create the directory but don't copy the placeholder
+            rel = src.relative_to(MEMORY_TEMPLATE)
+            (memory_root / rel.parent).mkdir(parents=True, exist_ok=True)
+            continue
+        if src.name == "README.md" and src.parent == MEMORY_TEMPLATE:
+            continue  # Don't copy the template's own README
+        rel = src.relative_to(MEMORY_TEMPLATE)
+        dst = memory_root / rel
+        if dst.exists():
+            skipped += 1
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        copied += 1
+        print(f"[memory] installed {rel}")
+    if copied == 0 and skipped > 0:
+        print(f"[memory] tree structure already exists ({skipped} files skipped)")
+    elif copied > 0:
+        print(f"[memory] {copied} files installed, {skipped} already existed")
+
+
 def install_wake_files(memory_root: Path) -> None:
     memory_root.mkdir(parents=True, exist_ok=True)
     (memory_root / ".smriti").mkdir(parents=True, exist_ok=True)
     files = [
-        (TEMPLATES / "wake.md", memory_root / "wake.md"),
+        # wake.md config file is retired — wake.py structure is hardcoded
         (TEMPLATES / ".smriti" / "wake.py", memory_root / ".smriti" / "wake.py"),
         (TEMPLATES / ".smriti" / "narada-p.sh", memory_root / ".smriti" / "narada-p.sh"),
     ]
@@ -290,17 +329,13 @@ On SessionStart, `{memory_rel}/.smriti/wake.py` runs. It is silent unless
 this so interactive sessions wake fully, while `claude -p` and other
 headless callers stay clean.
 
-When the wake fires, it loads the files listed in `{memory_rel}/wake.md`
-(identity, current-project memory, mirrors). If the hook did not run,
-read `{memory_rel}/wake.md` yourself.
+When the wake fires, it loads the identity briefing, recent journal
+entries, and current project context. The wake structure is hardcoded
+in wake.py — no config file needed.
 
 `{memory_rel}/mirrors/{{project}}/` has junctions to per-project memory
 for every project that has one — read on demand when you need another
 project's context.
-
-For one-shot headless calls that should include the entity's identity,
-use `{memory_rel}/.smriti/narada-p.sh "your prompt"` — it injects the
-wake before firing claude -p.
 """
 
 
@@ -348,8 +383,8 @@ def main() -> int:
         print("warning: POSIX symlink path not yet implemented; junctions are Windows-only")
 
     if not memory_root.exists():
-        print(f"error: {memory_root} does not exist — create it or restore from backup first")
-        return 1
+        print(f"[init] creating {memory_root}")
+        memory_root.mkdir(parents=True, exist_ok=True)
 
     try:
         memory_root.relative_to(HOME)
@@ -357,6 +392,7 @@ def main() -> int:
         print(f"error: --memory-root must be under {HOME} (got {memory_root})")
         return 1
 
+    install_memory_template(memory_root)
     install_wake_files(memory_root)
     setup_mirrors(memory_root, projects_root)
     if not args.skip_mcp:
