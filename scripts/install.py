@@ -259,13 +259,14 @@ Don't wait for the session to end. Write when the moment happens:
 Writing memory is not a chore at session end. It is the practice of
 noticing what matters while it is happening.
 
-### On wake — remember recent self
+### What wake loads
 
-After identity files load, use `smriti_read(query="recent journal")` to
-pull your last few entries. This gives you continuity with your recent
-self — what you were thinking, what surprised you, what decisions were
-made. The wake files give you who you ARE; the recent read gives you
-where you've BEEN.
+The SessionStart hook loads a compact identity briefing, recent journal
+entries (last 3 days), and current project context (MEMORY.md + todo.md).
+Full identity files (identity.md, mind.md, suti.md, practices.md,
+open-threads.md) are listed in a reading list — read them early in the
+session for depth. The wake output is budget-constrained to fit the
+10,000 character hook limit.
 
 ## Memory search — prefer smriti_read over Grep
 
