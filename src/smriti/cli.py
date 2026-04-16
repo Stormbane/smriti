@@ -305,7 +305,7 @@ def _cmd_queue(args: argparse.Namespace) -> int:
 
 
 def _cmd_daemon(args: argparse.Namespace) -> int:
-    """Foreground queue worker. Loops until interrupted."""
+    """Unified daemon: file watcher + queue processor in one process."""
     import time as _time
 
     from smriti.core.tree import tree_root
@@ -313,10 +313,10 @@ def _cmd_daemon(args: argparse.Namespace) -> int:
     from smriti.store.cascade import cognitive_cascade
     from smriti.store.judge import executor_via_claude, judge_via_claude
     from smriti.store.queue import complete, dequeue, pending_count
+    from smriti.store.router import route_file
 
     if args.subcommand == "status":
         count = pending_count()
-        print(f"smriti daemon: not running (foreground only)")
         print(f"Queue: {count} pending tasks")
         return 0
 
@@ -325,8 +325,15 @@ def _cmd_daemon(args: argparse.Namespace) -> int:
     metrics = get_logger()
     poll_interval = args.interval
 
+    # Start file watcher unless --no-watch
+    file_watcher = None
+    if not args.no_watch:
+        from smriti import watcher
+        file_watcher = watcher.start(root)
+        print(f"Watching {root} for changes")
+
     print(f"smriti daemon started (poll every {poll_interval}s, Ctrl+C to stop)")
-    metrics.log("daemon_started", poll_interval=poll_interval)
+    metrics.log("daemon_started", poll_interval=poll_interval, watch=not args.no_watch)
 
     processed_total = 0
     failed_total = 0
@@ -358,6 +365,26 @@ def _cmd_daemon(args: argparse.Namespace) -> int:
                             )
                         else:
                             print("    skipped (file not found)")
+                    elif task.type == "ingest":
+                        path = root / task.path
+                        if path.exists():
+                            from smriti.store.ingest import ingest
+                            ing = ingest(str(path), root=root)
+                            print(
+                                f"    summary={ing.summary_path.relative_to(root) if ing.summary_path else '(none)'}, "
+                                f"actions={len(ing.routing.actions)}, cascade_queued={ing.cascade_queued}"
+                            )
+                        else:
+                            print("    skipped (file not found)")
+                    elif task.type == "route":
+                        path = root / task.path
+                        if path.exists():
+                            result = route_file(path, root)
+                            actions = result.get("actions_executed", [])
+                            executed = sum(1 for a in actions if a.get("executed"))
+                            print(f"    actions={len(actions)}, executed={executed}, cascade_queued={result.get('cascade_queued', 0)}")
+                        else:
+                            print("    skipped (file not found)")
                     complete(task.id)
                     processed_total += 1
                 except Exception as exc:
@@ -366,6 +393,8 @@ def _cmd_daemon(args: argparse.Namespace) -> int:
                     print(f"    FAILED: {exc}")
 
     except KeyboardInterrupt:
+        if file_watcher:
+            file_watcher.stop()
         print(f"\nDaemon stopped. Processed: {processed_total}, failed: {failed_total}")
         metrics.log("daemon_stopped", processed=processed_total, failed=failed_total)
 
@@ -569,15 +598,19 @@ def main(argv: list[str] | None = None) -> int:
     p_queue.add_argument("--cleanup", action="store_true", help="Remove completed tasks")
 
     # ── daemon ───────────────────────────────────────────────────────
-    p_daemon = sub.add_parser("daemon", help="Foreground queue worker")
+    p_daemon = sub.add_parser("daemon", help="Watch for changes + process queue")
     p_daemon_sub = p_daemon.add_subparsers(dest="subcommand")
-    p_daemon_start = p_daemon_sub.add_parser("start", help="Start foreground worker")
+    p_daemon_start = p_daemon_sub.add_parser("start", help="Start watcher + queue processor")
     p_daemon_start.add_argument(
         "--interval", type=float, default=5.0,
-        help="Poll interval in seconds (default: 5.0)"
+        help="Queue poll interval in seconds (default: 5.0)"
+    )
+    p_daemon_start.add_argument(
+        "--no-watch", action="store_true",
+        help="Disable file watcher (queue processing only)"
     )
     p_daemon_sub.add_parser("status", help="Show queue status")
-    p_daemon.set_defaults(subcommand="start", interval=5.0)
+    p_daemon.set_defaults(subcommand="start", interval=5.0, no_watch=False)
 
     # ── eval ─────────────────────────────────────────────────────────
     p_eval = sub.add_parser("eval", help="Run evaluation cases")

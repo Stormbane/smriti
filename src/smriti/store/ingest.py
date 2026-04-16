@@ -18,11 +18,8 @@ from typing import Callable
 
 from smriti.store.judge import CallMetadata, executor_via_claude
 from smriti.store.router import (
-    RoutingAction,
     RoutingResult,
-    execute_create,
-    execute_link,
-    execute_task,
+    execute_routing_actions,
     route,
     routing_judge_via_claude,
 )
@@ -126,7 +123,6 @@ def ingest(
     """
     from smriti.core.tree import tree_root
     from smriti.metrics import get_logger
-    from smriti.store.cascade import PROTECTED_FILES, queue_cognitive_cascade
     from smriti.store.writer import write_entry
 
     t0 = time.monotonic()
@@ -192,96 +188,17 @@ def ingest(
         result.elapsed_ms = int((time.monotonic() - t0) * 1000)
         return result
 
-    # Step 4: Execute routing actions
-    from smriti.store.router import is_leaf_path
-
-    cascade_targets: list[Path] = []
-
-    for action in routing_result.actions:
-        action_record = {
-            "action": action.action,
-            "target": action.target,
-            "direction": action.direction[:100],
-            "executed": False,
-        }
-
-        if dry_run:
-            action_record["executed"] = False
-            result.actions_executed.append(action_record)
-            continue
-
-        # Belt-and-braces: reject REVISE/CREATE on leaf paths. LINK to a leaf
-        # is allowed (cross-reference to a capture is fine); TASK to a leaf
-        # is weird but not damaging.
-        if action.action in ("REVISE", "CREATE") and is_leaf_path(action.target):
-            log.warning(
-                "Routing action %s on leaf path %s rejected (leaves are immutable)",
-                action.action, action.target,
-            )
-            action_record["executed"] = False
-            action_record["rejected_reason"] = "leaf-path"
-            result.actions_executed.append(action_record)
-            continue
-
-        target_path = root / action.target
-
-        if action.action == "REVISE":
-            # Protected files get PROMOTE treatment
-            if target_path.name in PROTECTED_FILES:
-                log.info("REVISE on trunk file %s downgraded to PROMOTE", action.target)
-                action_record["action"] = "PROMOTE"
-                action_record["executed"] = False
-                result.actions_executed.append(action_record)
-                continue
-
-            if not target_path.exists():
-                log.warning("REVISE target not found: %s", action.target)
-                result.actions_executed.append(action_record)
-                continue
-
-            # Call EXECUTOR to revise
-            parent_content = target_path.read_text(encoding="utf-8")
-            revised = executor_fn(parent_content, action.direction, summary_content)
-            target_path.write_text(revised, encoding="utf-8")
-            cascade_targets.append(target_path)
-            action_record["executed"] = True
-            log.info("REVISED: %s", action.target)
-
-        elif action.action == "LINK":
-            changed = execute_link(summary_path, target_path, root)
-            action_record["executed"] = changed
-
-        elif action.action == "TASK":
-            if not target_path.exists():
-                log.warning("TASK target not found: %s", action.target)
-                result.actions_executed.append(action_record)
-                continue
-            changed = execute_task(target_path, action.direction, summary_path, root)
-            action_record["executed"] = changed
-
-        elif action.action == "CREATE":
-            # If target already exists, downgrade to REVISE
-            if target_path.exists():
-                log.info("CREATE target exists, downgrading to REVISE: %s", action.target)
-                parent_content = target_path.read_text(encoding="utf-8")
-                revised = executor_fn(parent_content, action.direction, summary_content)
-                target_path.write_text(revised, encoding="utf-8")
-                cascade_targets.append(target_path)
-                action_record["action"] = "REVISE"
-                action_record["executed"] = True
-            else:
-                created = execute_create(
-                    target_path, action.direction, summary_content, root, executor_fn,
-                )
-                cascade_targets.append(created)
-                action_record["executed"] = True
-
-        result.actions_executed.append(action_record)
-
-    # Step 5: Queue cascade for REVISED/CREATEd pages
-    if cascade_targets and not dry_run:
-        result.cascade_queued = queue_cognitive_cascade(cascade_targets, root)
-        log.info("Cascade queued: %d tasks", result.cascade_queued)
+    # Step 4 + 5: Execute routing actions + queue cascade
+    exec_result = execute_routing_actions(
+        routing_result,
+        source_path=summary_path,
+        root=root,
+        executor_fn=executor_fn,
+        context_content=summary_content,
+        dry_run=dry_run,
+    )
+    result.actions_executed = exec_result["actions_executed"]
+    result.cascade_queued = exec_result["cascade_queued"]
 
     result.elapsed_ms = int((time.monotonic() - t0) * 1000)
 

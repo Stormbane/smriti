@@ -196,6 +196,8 @@ def test_is_leaf_path_defaults():
     assert is_leaf_path("days/2026-04-15.md")
     assert is_leaf_path("episodes/some-episode.md")
     assert is_leaf_path("notes/2026-04-15-thought.md")
+    assert is_leaf_path("inbox/paper.md")
+    assert is_leaf_path("inbox/research/deep-learning.md")
 
 
 def test_is_leaf_path_non_leaves():
