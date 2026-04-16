@@ -29,7 +29,7 @@ entity root's `.smriti/` dir. The load list is a human-readable file at
 `<entity>/mirrors/{project}/`. The memory search tool is registered as
 an MCP server in `~/.claude.json`.
 
-**Wake is silent unless `NARADA_WAKE=1` is set** in its environment — the
+**Wake is silent unless `SMRITI_WAKE=1` is set** in its environment — the
 SessionStart hook sets this so interactive sessions wake fully, while
 `claude -p` and other headless callers (smriti's JUDGE, routing, eval
 runs) stay clean. To inject the entity's identity into a one-shot

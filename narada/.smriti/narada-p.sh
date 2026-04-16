@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-WAKE=$(NARADA_WAKE=1 python "$HOME/.narada/.smriti/wake.py")
+WAKE=$(SMRITI_WAKE=1 python "$HOME/.narada/.smriti/wake.py")
 
 if [[ $# -gt 0 ]]; then
     PROMPT="$*"

@@ -197,7 +197,7 @@ On every Claude Code session start, `wake.py` loads:
 - A list of other reachable project memories
 
 The load list is configured in `~/.narada/wake.md`. Wake is silent for
-headless calls (`claude -p`) unless `NARADA_WAKE=1` is set.
+headless calls (`claude -p`) unless `SMRITI_WAKE=1` is set.
 
 ## Architecture
 

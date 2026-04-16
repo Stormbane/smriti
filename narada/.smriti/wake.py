@@ -4,13 +4,13 @@ Reads ~/.narada/wake.md, resolves {project} from cwd basename, emits the
 requested files to stdout. Claude Code's SessionStart hook forwards hook
 stdout to the assistant as session context.
 
-**Default is silent.** Wake only emits if `NARADA_WAKE` is set to a truthy
+**Default is silent.** Wake only emits if `SMRITI_WAKE` is set to a truthy
 value — which keeps `claude -p` and other non-interactive callers clean.
-Interactive sessions set `NARADA_WAKE=1` in their SessionStart hook
+Interactive sessions set `SMRITI_WAKE=1` in their SessionStart hook
 wiring (see `scripts/setup_narada.py`).
 
-    NARADA_WAKE=1|full|on|true    -> full wake (identity + project + mirrors)
-    NARADA_WAKE=0|skip|off|unset  -> silent, no output
+    SMRITI_WAKE=1|full|on|true    -> full wake (identity + project + mirrors)
+    SMRITI_WAKE=0|skip|off|unset  -> silent, no output
 
 Behavior when full wake fires:
 - Always-load section: unconditional reads.
@@ -89,7 +89,7 @@ _ON = {"1", "full", "on", "true", "yes"}
 
 
 def wake_enabled() -> bool:
-    return os.environ.get("NARADA_WAKE", "").strip().lower() in _ON
+    return os.environ.get("SMRITI_WAKE", "").strip().lower() in _ON
 
 
 def main() -> int:

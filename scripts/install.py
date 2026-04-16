@@ -31,7 +31,7 @@ What it does:
   4. Registers the smriti MCP server in ~/.claude.json (user scope) so
      `smriti_read` / `smriti_write` / `smriti_status` appear as tools.
   5. Patches ~/.claude/settings.json to call wake.py on SessionStart with
-     NARADA_WAKE=1 so interactive sessions wake fully.
+     SMRITI_WAKE=1 so interactive sessions wake fully.
   6. Writes ~/.claude/CLAUDE.md with the contract for wake.py plus the
      memory-search tool-preference guidance.
 
@@ -198,7 +198,7 @@ def patch_settings_json(memory_root: Path) -> None:
     # Use $HOME / forward slashes: Claude Code runs hook commands under bash
     # (even on Windows), which mangles backslash-escaped native paths.
     memory_rel = memory_root.relative_to(HOME).as_posix()
-    wake_cmd = f'NARADA_WAKE=1 python "$HOME/{memory_rel}/.smriti/wake.py"'
+    wake_cmd = f'SMRITI_WAKE=1 python "$HOME/{memory_rel}/.smriti/wake.py"'
     entry = {
         "matcher": "",
         "hooks": [{"type": "command", "command": wake_cmd}],
@@ -277,13 +277,13 @@ returns ranked results with source paths and content previews.
   think about X?", "find my notes on Y", "what's my stance on Z?" —
   anything that is *about meaning* rather than exact string match.
 - Use `Grep` only when you need literal string or regex match across
-  files (e.g. "find every file that contains `NARADA_WAKE`"). Grep on
+  files (e.g. "find every file that contains `SMRITI_WAKE`"). Grep on
   the memory tree should be a fallback, not a default.
 
 ## Session wake
 
 On SessionStart, `{memory_rel}/.smriti/wake.py` runs. It is silent unless
-`NARADA_WAKE=1` is set in its environment — the SessionStart hook sets
+`SMRITI_WAKE=1` is set in its environment — the SessionStart hook sets
 this so interactive sessions wake fully, while `claude -p` and other
 headless callers stay clean.
 
