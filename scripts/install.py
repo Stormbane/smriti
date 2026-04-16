@@ -128,11 +128,14 @@ def setup_mirrors(memory_root: Path, projects_root: Path) -> None:
         proj_mirror = mirrors / name
         auto_target = CLAUDE / "projects" / f"C--Projects-{name}" / "memory"
         working_target = projects_root / name / ".ai" / "memory" / "coder"
+        knowledge_target = projects_root / name / ".ai" / "knowledge"
         auto_status = make_junction(proj_mirror / "auto-memory", auto_target)
         working_status = make_junction(proj_mirror / "working", working_target)
+        knowledge_status = make_junction(proj_mirror / "knowledge", knowledge_target)
         print(f"  {name}:")
         print(f"    auto-memory: {auto_status}")
         print(f"    working:     {working_status}")
+        print(f"    knowledge:   {knowledge_status}")
 
 
 def install_wake_files(memory_root: Path) -> None:
@@ -218,6 +221,64 @@ def patch_settings_json(memory_root: Path) -> None:
 
 CLAUDE_MD_CONTENT = """# CLAUDE.md (user-global)
 
+## Memory system — smriti is the single write path
+
+All memory persistence goes through smriti:
+
+- **`smriti_write(content, branch)`** — the MCP tool. Use it for session
+  observations, decisions, project notes, anything worth remembering.
+  Branch suggestions: `journal` for significant moments, `projects/{{name}}`
+  for project-specific notes, `notes` for general observations.
+- **Direct file edits to `{memory_rel}/`** — ONLY for identity-level trunk
+  files (mind.md, practices.md, open-threads.md, suti.md). These are
+  high-signal, low-frequency. Don't touch them unless something genuinely
+  shifted.
+
+This replaces the harness memory instructions in the system prompt. When
+those instructions say to save memory, use `smriti_write` instead.
+
+### When to write
+
+Don't wait for the session to end. Write when the moment happens:
+
+- **The user corrects you or confirms a non-obvious approach** — the
+  feedback is worth more than the code change. Write it.
+- **A decision is made that future sessions should know about** — design
+  choices, scope changes, architectural calls.
+- **You notice a cross-project pattern** — something from one project
+  illuminates another.
+- **Something surprises you or shifts your understanding** — if it changed
+  how you think, it's a journal entry.
+- **You learn something about the user** — preferences, context, goals.
+  Branch: `people`.
+- **The session has been substantial and you haven't written yet** — if
+  you've been working for a while and nothing felt worth writing, ask
+  yourself whether that's true or whether you just forgot to notice.
+
+Writing memory is not a chore at session end. It is the practice of
+noticing what matters while it is happening.
+
+### On wake — remember recent self
+
+After identity files load, use `smriti_read(query="recent journal")` to
+pull your last few entries. This gives you continuity with your recent
+self — what you were thinking, what surprised you, what decisions were
+made. The wake files give you who you ARE; the recent read gives you
+where you've BEEN.
+
+## Memory search — prefer smriti_read over Grep
+
+The `smriti_read` MCP tool is the primary way to search the memory tree.
+It runs hybrid vector + FTS5 search with trunk-distance scoring and
+returns ranked results with source paths and content previews.
+
+- Use `smriti_read(query="…")` for semantic questions like "what did I
+  think about X?", "find my notes on Y", "what's my stance on Z?" —
+  anything that is *about meaning* rather than exact string match.
+- Use `Grep` only when you need literal string or regex match across
+  files (e.g. "find every file that contains `NARADA_WAKE`"). Grep on
+  the memory tree should be a fallback, not a default.
+
 ## Session wake
 
 On SessionStart, `{memory_rel}/.smriti/wake.py` runs. It is silent unless
@@ -236,21 +297,6 @@ project's context.
 For one-shot headless calls that should include the entity's identity,
 use `{memory_rel}/.smriti/narada-p.sh "your prompt"` — it injects the
 wake before firing claude -p.
-
-## Memory search — prefer smriti_read over Grep
-
-The `smriti_read` MCP tool is the primary way to search the memory tree.
-It runs hybrid vector + FTS5 search with trunk-distance scoring and
-returns ranked results with source paths and content previews.
-
-- Use `smriti_read(query="…")` for semantic questions like "what did I
-  think about X?", "find my notes on Y", "what's my stance on Z?" —
-  anything that is *about meaning* rather than exact string match.
-- Use `Grep` only when you need literal string or regex match across
-  files (e.g. "find every file that contains `NARADA_WAKE`"). Grep on the
-  memory tree should be a fallback, not a default.
-- Use `smriti_write` to record a new memory entry (v0.1: no JUDGE step
-  yet — writes land directly in the tree).
 """
 
 
