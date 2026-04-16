@@ -62,6 +62,7 @@ dmypy.json
 # (smriti memory data is per-entity, per-deployment, and private)
 memory/
 .smriti/
+!narada/.smriti/
 *.sqlite
 *.sqlite3
 *.db

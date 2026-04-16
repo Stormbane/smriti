@@ -43,6 +43,7 @@ _DEFAULT_LEAF_PREFIXES = (
     "days/",
     "episodes/",
     "notes/",
+    "mirrors/",
 )
 
 
