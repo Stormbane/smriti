@@ -115,21 +115,24 @@ def write_entry(
     if root is None:
         root = tree_root()
 
-    now = datetime.now(timezone.utc)
+    # Use local time for file paths and dates (journal entries are human-facing).
+    # Store UTC in frontmatter for precision.
+    now_utc = datetime.now(timezone.utc)
+    now_local = datetime.now().astimezone()
 
     # Journal uses cascading time structure; other branches use flat
     if branch == "journal" or branch.startswith("journal/"):
-        entry_path = _journal_path(root, branch, now)
+        entry_path = _journal_path(root, branch, now_local)
     else:
-        entry_path = _flat_path(root, branch, now)
+        entry_path = _flat_path(root, branch, now_local)
 
-    heading = title or f"Entry {now.strftime('%Y-%m-%d %H:%M UTC')}"
+    heading = title or f"Entry {now_local.strftime('%Y-%m-%d %H:%M')}"
 
     # Build the entry block
     entry_lines = [
         "---",
-        f"date: {now.strftime('%Y-%m-%d')}",
-        f"time: {now.strftime('%H:%M:%S')} UTC",
+        f"date: {now_local.strftime('%Y-%m-%d')}",
+        f"time: {now_utc.strftime('%H:%M:%S')} UTC",
         f"branch: {branch}",
     ]
     if source_hint:
