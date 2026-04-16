@@ -237,7 +237,7 @@ def patch_settings_json(memory_root: Path) -> None:
     # Use $HOME / forward slashes: Claude Code runs hook commands under bash
     # (even on Windows), which mangles backslash-escaped native paths.
     memory_rel = memory_root.relative_to(HOME).as_posix()
-    wake_cmd = f'SMRITI_WAKE=1 python "$HOME/{memory_rel}/.smriti/wake.py"'
+    wake_cmd = f'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/{memory_rel}" python "$HOME/{memory_rel}/.smriti/wake.py"'
     entry = {
         "matcher": "",
         "hooks": [{"type": "command", "command": wake_cmd}],

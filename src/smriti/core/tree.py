@@ -1,11 +1,11 @@
 """Tree scanning, trunk-distance computation, and path helpers.
 
-The tree root defaults to ``~/.narada`` (overridable via the ``NARADA_ROOT``
-environment variable).  Trunk distance is the number of path components
-between a file and the tree root — a rough proxy for how "identity-adjacent"
-a file is.  Root-level files (identity.md, mind.md) have distance 0;
-``goals/index.md`` has distance 1; ``semantic/concepts/viveka.md`` has
-distance 2; and so on.
+The tree root defaults to ``~/.narada`` (overridable via ``SMRITI_ROOT``
+or the legacy ``NARADA_ROOT`` environment variable).  Trunk distance is
+the number of path components between a file and the tree root — a rough
+proxy for how "identity-adjacent" a file is.  Root-level files
+(identity.md) have distance 0; ``mind/mind.md`` has distance 1;
+``mind/desires/beliefs.md`` has distance 2; and so on.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 
 def tree_root() -> Path:
     """Return the resolved tree root, defaulting to ``~/.narada``."""
-    env = os.environ.get("NARADA_ROOT")
+    env = os.environ.get("SMRITI_ROOT") or os.environ.get("NARADA_ROOT")
     if env:
         return Path(env).expanduser().resolve()
     return Path.home() / ".narada"
