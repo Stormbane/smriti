@@ -266,14 +266,18 @@ def routing_judge_via_claude(
         )
     candidates_text = "\n\n---\n\n".join(candidate_lines) if candidate_lines else "(no candidates found)"
 
-    prompt = (
-        f"{template}\n\n"
+    from smriti.store.api_backend import call_api, DEFAULT_MODEL
+    system = f"{template}\n\nRespond with JSON array only."
+    user = (
         f"--- NEW CONTENT ---\n{content[:4000]}\n\n"
-        f"--- CANDIDATE PAGES ({len(candidates)}) ---\n{candidates_text}\n\n"
-        f"Respond with JSON array only."
+        f"--- CANDIDATE PAGES ({len(candidates)}) ---\n{candidates_text}"
     )
-
-    raw, meta = _call_claude(prompt)
+    raw, api_meta = call_api(system=system, user=user, model=DEFAULT_MODEL)
+    meta = CallMetadata(
+        model=api_meta.model, tokens_in=api_meta.tokens_in,
+        tokens_out=api_meta.tokens_out, cost_usd=api_meta.cost_usd,
+        elapsed_ms=api_meta.elapsed_ms,
+    )
 
     # Parse JSON array from response
     actions = _parse_routing_response(raw)

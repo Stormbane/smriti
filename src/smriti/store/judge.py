@@ -156,7 +156,7 @@ def judge_via_claude(
     child_content: str,
     prompt_path: Path | None = None,
 ) -> JudgmentResult:
-    """Call ``claude -p`` with the JUDGE prompt."""
+    """Call the JUDGE via Anthropic API (with prompt caching) or claude -p fallback."""
     if prompt_path and prompt_path.exists():
         template = prompt_path.read_text(encoding="utf-8")
     else:
@@ -166,14 +166,18 @@ def judge_via_claude(
             "(KEEP/REVISE/REJECT/PROMOTE), direction, reason."
         )
 
-    prompt = (
-        f"{template}\n\n"
+    from smriti.store.api_backend import call_api, DEFAULT_MODEL
+    system = f"{template}\n\nRespond as JSON only."
+    user = (
         f"--- PARENT ---\n{parent_content}\n\n"
-        f"--- CHILD (new or changed) ---\n{child_content}\n\n"
-        f"Respond as JSON only."
+        f"--- CHILD (new or changed) ---\n{child_content}"
     )
-
-    raw, meta = _call_claude(prompt)
+    raw, api_meta = call_api(system=system, user=user, model=DEFAULT_MODEL)
+    meta = CallMetadata(
+        model=api_meta.model, tokens_in=api_meta.tokens_in,
+        tokens_out=api_meta.tokens_out, cost_usd=api_meta.cost_usd,
+        elapsed_ms=api_meta.elapsed_ms,
+    )
 
     # Parse JSON from response
     try:
@@ -207,9 +211,9 @@ def executor_via_claude(
     child_content: str,
     prompt_path: Path | None = None,
 ) -> str:
-    """Call ``claude -p`` with the EXECUTOR prompt.
+    """Call the EXECUTOR via Anthropic API (with prompt caching) or claude -p fallback.
 
-    Returns the revised content as a string. Metadata is logged internally.
+    Returns the revised content as a string.
     """
     if prompt_path and prompt_path.exists():
         template = prompt_path.read_text(encoding="utf-8")
@@ -219,17 +223,17 @@ def executor_via_claude(
             "revised page content as markdown."
         )
 
-    prompt = (
-        f"{template}\n\n"
+    from smriti.store.api_backend import call_api, DEFAULT_EXECUTOR_MODEL
+    system = f"{template}\n\nReturn ONLY the revised page content."
+    user = (
         f"--- CURRENT PAGE ---\n{parent_content}\n\n"
         f"--- DIRECTION FROM VIVEKA ---\n{direction}\n\n"
-        f"--- CONTEXT ---\n{child_content}\n\n"
-        f"Return ONLY the revised page content."
+        f"--- CONTEXT ---\n{child_content}"
     )
-
-    text, meta = _call_claude(prompt)
+    text, meta = call_api(system=system, user=user, model=DEFAULT_EXECUTOR_MODEL)
     log.info(
-        "EXECUTOR: model=%s tokens_in=%d tokens_out=%d cost=$%.4f elapsed=%dms",
-        meta.model, meta.tokens_in, meta.tokens_out, meta.cost_usd, meta.elapsed_ms,
+        "EXECUTOR: model=%s tokens_in=%d (cached=%d) tokens_out=%d cost=$%.4f elapsed=%dms",
+        meta.model, meta.tokens_in, meta.cache_read_tokens,
+        meta.tokens_out, meta.cost_usd, meta.elapsed_ms,
     )
     return text
