@@ -1,8 +1,9 @@
 """Minimal MCP server for smriti — no external dependencies.
 
 Implements the MCP JSON-RPC protocol directly over stdio. Exposes two tools:
-- smriti_read  — hybrid search over the narada memory tree
+- smriti_read — hybrid search over the narada memory tree
 - smriti_status — index statistics
+- smriti_write — write to narada memory
 
 Run via stdio::
 

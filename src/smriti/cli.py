@@ -215,7 +215,33 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
     total_changed = 0
     tasks = dequeue(n)
 
-    for task in tasks:
+    # Separate ingest tasks (batch) from others (per-task)
+    ingest_tasks = [t for t in tasks if t.type == "ingest"]
+    other_tasks = [t for t in tasks if t.type != "ingest"]
+
+    # Batch consolidate ingest tasks
+    if ingest_tasks:
+        from smriti.store.consolidate import batch_consolidate
+
+        ingest_paths = [root / t.path for t in ingest_tasks if (root / t.path).exists()]
+        skipped_count = len(ingest_tasks) - len(ingest_paths)
+        if skipped_count:
+            print(f"  Skipped {skipped_count} ingest tasks (files not found)")
+
+        if ingest_paths:
+            print(f"  Batch consolidating {len(ingest_paths)} files...")
+            results = batch_consolidate(ingest_paths, root, executor_fn=executor_fn)
+            for r in results:
+                page_rel = r.concept_page.relative_to(root) if r.concept_page else "(none)"
+                print(f"    {r.action}: {page_rel} ({r.cluster_size} files)")
+            total_changed += sum(1 for r in results if r.action in ("created", "revised"))
+
+        for t in ingest_tasks:
+            complete(t.id)
+            processed += 1
+
+    # Process other tasks individually
+    for task in other_tasks:
         print(f"  [{task.type}] {task.path}")
         try:
             if task.type == "cognitive_cascade":
@@ -240,16 +266,14 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
                             print(f"    REVISED: {f}")
                 else:
                     print("    skipped (file not found)")
-            elif task.type == "ingest":
+            elif task.type == "route":
                 path = root / task.path
                 if path.exists():
-                    from smriti.store.ingest import ingest
-                    ing = ingest(str(path), root=root)
-                    print(
-                        f"    summary={ing.summary_path.relative_to(root) if ing.summary_path else '(none)'}, "
-                        f"actions={len(ing.routing.actions)}, cascade_queued={ing.cascade_queued}"
-                    )
-                    total_verdicts += len(ing.routing.actions)
+                    from smriti.store.router import route_file
+                    result = route_file(path, root)
+                    actions = result.get("actions_executed", [])
+                    executed = sum(1 for a in actions if a.get("executed"))
+                    print(f"    actions={len(actions)}, executed={executed}")
                 else:
                     print("    skipped (file not found)")
             complete(task.id)
@@ -274,7 +298,7 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
     )
 
     print(f"\nSleep complete: {processed} processed, {failed} failed, {elapsed}ms.")
-    print(f"  Verdicts: {total_verdicts}, Files changed: {total_changed}, Max depth: {total_depth}")
+    print(f"  Changed: {total_changed}, Max depth: {total_depth}")
     print(f"  {remaining} tasks remaining in queue.")
     return 0
 
@@ -345,8 +369,28 @@ def _cmd_daemon(args: argparse.Namespace) -> int:
                 _time.sleep(poll_interval)
                 continue
 
-            tasks = dequeue(1)
-            for task in tasks:
+            # Dequeue all available tasks
+            tasks = dequeue(count)
+
+            # Batch ingest tasks together
+            ingest_tasks = [t for t in tasks if t.type == "ingest"]
+            other_tasks = [t for t in tasks if t.type != "ingest"]
+
+            if ingest_tasks:
+                from smriti.store.consolidate import batch_consolidate
+
+                ingest_paths = [root / t.path for t in ingest_tasks if (root / t.path).exists()]
+                if ingest_paths:
+                    print(f"  Batch consolidating {len(ingest_paths)} files...")
+                    results = batch_consolidate(ingest_paths, root)
+                    for r in results:
+                        page_rel = r.concept_page.relative_to(root) if r.concept_page else "(none)"
+                        print(f"    {r.action}: {page_rel} ({r.cluster_size} files)")
+                for t in ingest_tasks:
+                    complete(t.id)
+                processed_total += len(ingest_tasks)
+
+            for task in other_tasks:
                 print(f"  [{task.type}] {task.path}")
                 try:
                     if task.type == "cognitive_cascade":
@@ -365,24 +409,13 @@ def _cmd_daemon(args: argparse.Namespace) -> int:
                             )
                         else:
                             print("    skipped (file not found)")
-                    elif task.type == "ingest":
-                        path = root / task.path
-                        if path.exists():
-                            from smriti.store.ingest import ingest
-                            ing = ingest(str(path), root=root)
-                            print(
-                                f"    summary={ing.summary_path.relative_to(root) if ing.summary_path else '(none)'}, "
-                                f"actions={len(ing.routing.actions)}, cascade_queued={ing.cascade_queued}"
-                            )
-                        else:
-                            print("    skipped (file not found)")
                     elif task.type == "route":
                         path = root / task.path
                         if path.exists():
                             result = route_file(path, root)
                             actions = result.get("actions_executed", [])
                             executed = sum(1 for a in actions if a.get("executed"))
-                            print(f"    actions={len(actions)}, executed={executed}, cascade_queued={result.get('cascade_queued', 0)}")
+                            print(f"    actions={len(actions)}, executed={executed}")
                         else:
                             print("    skipped (file not found)")
                     complete(task.id)
