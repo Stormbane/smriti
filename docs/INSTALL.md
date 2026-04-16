@@ -3,7 +3,8 @@
 This document covers:
 
 1. [smriti package + Narada session-start system](#1-smriti--narada-session-start) — the main install
-2. [PreCompact capture hook](#2-precompact-capture-hook) — the raw-turn backstop
+2. [New project setup](#2-new-project-setup) — template and mirror wiring for new projects
+3. [PreCompact capture hook](#3-precompact-capture-hook) — the raw-turn backstop
 
 ---
 
@@ -17,7 +18,7 @@ any `~/.<entity>/` root) wakes up with:
 
 - Cross-project identity files from `~/.<entity>/` (identity, mind, etc.)
 - The current project's auto-memory tier (`~/.claude/projects/{slug}/memory/`)
-- The current project's working memory (`<project>/.ai/memory/coder/`)
+- The current project's todo / roadmap (`<project>/.ai/todo.md`)
 - A list of other projects whose memory is reachable on demand
 - `smriti_read` / `smriti_write` / `smriti_status` as first-class MCP
   tools in every session
@@ -80,7 +81,7 @@ or after the smriti repo's `narada/` templates change.
 | Copy `wake.py` | `<entity>/.smriti/wake.py` | Loader script (won't overwrite existing) |
 | Copy `narada-p.sh` | `<entity>/.smriti/narada-p.sh` | Wake-injecting wrapper for headless `claude -p` |
 | Ensure `.smriti/` dir | `<entity>/.smriti/` | Smriti runtime state (index, queue, wake) |
-| Create junctions | `<entity>/mirrors/{project}/auto-memory`, `/working` | Per-project memory access |
+| Create junctions | `<entity>/mirrors/{project}/auto-memory`, `/knowledge`, `/ai` | Per-project memory and knowledge access |
 | Register MCP server | `~/.claude.json` | Exposes `smriti_read` / `smriti_write` / `smriti_status` |
 | Patch settings.json | `~/.claude/settings.json` | Wire SessionStart → `python wake.py` |
 | Write CLAUDE.md | `~/.claude/CLAUDE.md` | Wake contract + memory-search tool preference |
@@ -109,7 +110,95 @@ the load list can include query-driven recalls, not just static paths.
 
 ---
 
-## 2. PreCompact capture hook
+## 2. New project setup
+
+When starting a new project that should use smriti for memory, two things
+need to happen: the project needs a `.ai/` skeleton with knowledge docs
+and a CLAUDE.md, and the entity's memory tree needs mirror junctions so
+wake.py can find the project on session start.
+
+### The project template
+
+The template lives at `project_template/` in the smriti repo. It contains:
+
+```
+project_template/
+  CLAUDE.md                       -- project description, commands, rules
+  .gitignore                      -- standard ignores
+  .claude/settings.local.json     -- git permission allows
+  .ai/
+    todo.md                       -- project roadmap
+    knowledge/
+      spec.md                     -- what the project is (fill in first session)
+      architecture.md             -- tech stack, structure (fill in first session)
+      glossary.md                 -- domain terms (fill in as they emerge)
+      conventions.md              -- coding patterns (fill in as they emerge)
+      lessons-learned.md          -- project-specific insights
+```
+
+Memory persistence is handled entirely by smriti (`smriti_write` /
+`smriti_read`). Identity loads from `~/.<entity>/` via wake.py. There
+are no per-project memory files, agent definitions, or session hooks
+in the template -- the global smriti install handles all of that.
+
+### Setup a new project
+
+One command from the project directory:
+
+```bash
+cd C:/Projects/my-new-project
+python C:/Projects/smriti/scripts/setup_project.py
+```
+
+This copies the template files (if they don't already exist), ensures
+`.claude/` is in `.gitignore`, and creates the mirror junctions. For an
+existing project that already has `.ai/` files, it skips what's there
+and only adds what's missing.
+
+Use `--no-template` to skip the template copy and only wire mirrors.
+
+### What setup_project.py does
+
+For a project at `C:/Projects/foo`:
+
+**Step 1 -- Template.** Copies template files (CLAUDE.md, `.ai/knowledge/`,
+`.ai/todo.md`, `.claude/settings.local.json`) into the project. Files that
+already exist are skipped.
+
+**Step 2 -- Gitignore.** Ensures `.claude/` is in `.gitignore`. If no
+`.gitignore` exists, copies the template's. If one exists, appends only
+the missing entries.
+
+**Step 3 -- Mirrors.** Creates junctions in the entity's memory tree:
+
+```
+~/.narada/mirrors/foo/
+  auto-memory/  --> ~/.claude/projects/C--Projects-foo/memory/
+  knowledge/    --> C:/Projects/foo/.ai/knowledge/
+  ai/           --> C:/Projects/foo/.ai/
+```
+
+These junctions let wake.py load the project's auto-memory and todo.md
+on session start. Stale junctions from old setups are cleaned up
+automatically.
+
+### Options
+
+```
+python scripts/setup_project.py [project-path] [--memory-root PATH] [--no-template]
+```
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `project-path` | current directory | The project to wire up |
+| `--memory-root` | `~/.narada` | Entity memory root |
+| `--no-template` | off | Skip template copy, only create mirrors |
+
+The script is idempotent -- re-run any time.
+
+---
+
+## 3. PreCompact capture hook
 
 ### What it does
 
