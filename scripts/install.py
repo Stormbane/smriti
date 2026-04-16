@@ -261,12 +261,13 @@ noticing what matters while it is happening.
 
 ### What wake loads
 
-The SessionStart hook loads a compact identity briefing, recent journal
-entries (last 3 days), and current project context (MEMORY.md + todo.md).
-Full identity files (identity.md, mind.md, suti.md, practices.md,
-open-threads.md) are listed in a reading list — read them early in the
-session for depth. The wake output is budget-constrained to fit the
-10,000 character hook limit.
+The SessionStart hook loads a compact identity+threads briefing
+(.smriti/wake-context.md), the last 3 journal entries, and current
+project context (MEMORY.md + todo.md). A reading list points to the
+full identity files in the tree (open-threads, beliefs, values,
+identity, suti, practices). The wake output is budget-constrained
+to 9,500 characters (harness limit is 10,000). Journal entries
+truncate first if over budget.
 
 ## Memory search — prefer smriti_read over Grep
 

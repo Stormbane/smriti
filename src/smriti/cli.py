@@ -273,10 +273,10 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
     remaining_tasks = [t for t in other_tasks if t.type != "wake_summary"]
 
     if wake_summary_tasks:
-        print(f"  [wake_summary] rebuilding from {len(wake_summary_tasks)} trunk change(s)...")
+        print(f"  [wake_summary] rebuilding from {len(wake_summary_tasks)} identity file change(s)...")
         try:
-            from smriti.store.wake_summary import rebuild as rebuild_wake_summary
-            result_path = rebuild_wake_summary(root=root, executor_fn=executor_fn, dry_run=args.dry_run)
+            from smriti.store.wake_summary import rebuild as rebuild_wake_context
+            result_path = rebuild_wake_context(root=root, executor_fn=executor_fn, dry_run=args.dry_run)
             if result_path:
                 print(f"    rebuilt: {result_path.relative_to(root)}")
                 total_changed += 1
