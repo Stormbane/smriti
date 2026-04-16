@@ -9,22 +9,24 @@ call, run `~/.narada/.smriti/narada-p.sh "your prompt"`.
 **Format**: `## <section>` headers, one relative path per line underneath.
 Paths are relative to `~/.narada/`. Lines starting with `#` or blank are
 skipped. The token `{project}` is substituted with `basename(cwd)` at load
-time (e.g. `C:\Projects\beautiful-tree` → `beautiful-tree`). Missing files
+time (e.g. `C:\Projects\beautiful-tree` -> `beautiful-tree`). Missing files
 are skipped silently.
+
+The `## recent-journal` section is special: wake.py finds the most recent
+daily journal files and emits them (default: last 3 days). No paths needed
+under this header — just include it to enable the feature.
 
 ---
 
 ## always
 
 identity.md
-mind.md
 suti.md
 practices.md
-open-threads.md
+
+## recent-journal
 
 ## current-project
 
 mirrors/{project}/auto-memory/MEMORY.md
-mirrors/{project}/working/working.md
-mirrors/{project}/working/notes.md
-mirrors/{project}/working/identity.md
+mirrors/{project}/ai/todo.md
