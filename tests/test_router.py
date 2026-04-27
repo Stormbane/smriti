@@ -188,7 +188,14 @@ def test_execute_task_appends_to_existing_section(tmp_path: Path):
 
 
 def test_is_leaf_path_defaults():
-    """Default leaf prefixes cover time-stamped capture directories."""
+    """Default leaf prefixes cover time-stamped capture directories.
+
+    journal/ is a leaf prefix: daily entries carry conceptual insight that
+    should feed semantic/concepts/. Two axes, no duplicate work --
+    journal_rollup does time-compression, ingest does theme extraction.
+    Rollup summary files (weekN.md, MM.md, YYYY.md) are excluded from
+    ingest at the watch_router layer, not here.
+    """
     assert is_leaf_path("sources/2026/04-15-001.md")
     assert is_leaf_path("heartbeat/artifacts/foo.md")
     assert is_leaf_path("events/bt-narada/event.md")

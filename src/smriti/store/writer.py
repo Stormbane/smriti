@@ -161,12 +161,25 @@ def write_entry(
     if reindex:
         _reindex_one(entry_path, root)
 
-    # Structural cascade: update parent index.md files
+    # Structural cascade: update parent index.md files (sync; also enqueues
+    # cognitive_cascade for any updated index files).
     _structural_cascade(entry_path, root)
 
-    # Queue journal rollup if summary files are missing
-    if branch == "journal" or branch.startswith("journal/"):
-        _queue_journal_rollup(entry_path, root)
+    # Route through the central classifier for all async pipelines
+    # (summarize, ingest/route, journal_rollup, wake_summary). Reindex
+    # tasks from the classifier are skipped because we ran it synchronously
+    # above.
+    try:
+        from smriti.store.queue import enqueue
+        from smriti.store.watch_router import classify_write
+
+        tasks = classify_write(entry_path, root, event_type="created")
+        for task in tasks:
+            if task.type == "reindex":
+                continue
+            enqueue(task, root=root)
+    except Exception as exc:
+        log.warning("classify_write after write failed: %s", exc)
 
     return entry_path
 
@@ -192,67 +205,6 @@ def _append_entry(path: Path, entry_block: str) -> None:
         os.write(fd, separator + data)
     finally:
         os.close(fd)
-
-
-def _queue_journal_rollup(entry_path: Path, root: Path) -> None:
-    """Check if journal summary files exist, queue rollup tasks if not.
-
-    After writing a daily journal entry, check for the existence of
-    week, month, and year summary files. Queue journal_rollup tasks
-    for any that are missing so smriti sleep can create them.
-    """
-    try:
-        from smriti.store.queue import QueueTask, enqueue
-
-        rel = entry_path.relative_to(root)
-        parts = rel.parts  # e.g. ('journal', '2026', '04', 'week3', '04-17.md')
-
-        if len(parts) < 5:
-            return  # Not in the expected journal structure
-
-        _branch, year, month, week_dir, _daily = parts
-
-        # Check week summary: journal/YYYY/MM/weekN/weekN.md
-        week_summary = root / _branch / year / month / week_dir / f"{week_dir}.md"
-        if not week_summary.exists():
-            enqueue(
-                QueueTask(
-                    type="journal_rollup",
-                    path=str(week_summary.relative_to(root)),
-                    priority=3,
-                ),
-                root=root,
-            )
-            log.info("Queued journal_rollup for %s", week_summary.relative_to(root))
-
-        # Check month summary: journal/YYYY/MM/MM.md
-        month_summary = root / _branch / year / month / f"{month}.md"
-        if not month_summary.exists():
-            enqueue(
-                QueueTask(
-                    type="journal_rollup",
-                    path=str(month_summary.relative_to(root)),
-                    priority=2,
-                ),
-                root=root,
-            )
-            log.info("Queued journal_rollup for %s", month_summary.relative_to(root))
-
-        # Check year summary: journal/YYYY/YYYY.md
-        year_summary = root / _branch / year / f"{year}.md"
-        if not year_summary.exists():
-            enqueue(
-                QueueTask(
-                    type="journal_rollup",
-                    path=str(year_summary.relative_to(root)),
-                    priority=1,
-                ),
-                root=root,
-            )
-            log.info("Queued journal_rollup for %s", year_summary.relative_to(root))
-
-    except Exception as exc:
-        log.warning("Failed to queue journal rollup: %s", exc)
 
 
 def _reindex_one(path: Path, root: Path) -> None:

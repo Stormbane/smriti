@@ -218,6 +218,25 @@ def main() -> int:
     ai_dir = project / ".ai"
     make_junction(mirror / "ai", ai_dir)
 
+    # Native directories for smriti-side memory (not junctioned). These hold
+    # durable, cascade-aware artifacts that live in the memory tree, not in
+    # the project repo:
+    #   findings/   -- lessons learned (cascade upward to cross-project)
+    #   decisions/  -- ADRs with rationale
+    #   research/   -- exploration without commitment
+    for sub in ("findings", "decisions", "research"):
+        d = mirror / sub
+        d.mkdir(parents=True, exist_ok=True)
+        # Only create stub index if missing (don't overwrite existing).
+        idx = d / "index.md"
+        if not idx.exists():
+            idx.write_text(
+                f"# {sub.title()} -- {name}\n\n"
+                f"_Cascade-maintained index. Updated automatically when "
+                f"new entries are added._\n",
+                encoding="utf-8",
+            )
+
     print()
     print("Done. wake.py will now load this project's mirror on session start.")
     return 0

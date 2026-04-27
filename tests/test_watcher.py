@@ -62,8 +62,13 @@ def test_on_change_skips_non_markdown(watch_tree: Path):
         mock_enqueue.assert_not_called()
 
 
+def _queued_types(mock_enqueue) -> list[str]:
+    """Extract QueueTask.type values across all enqueue() calls."""
+    return [c[0][0].type for c in mock_enqueue.call_args_list]
+
+
 def test_on_change_non_leaf_queues_route(watch_tree: Path):
-    """Non-leaf .md files queue a 'route' task."""
+    """Non-leaf .md files queue a 'route' task (plus 'reindex')."""
     concept = watch_tree / "concepts" / "new-idea.md"
     concept.write_text("# New Idea\n", encoding="utf-8")
 
@@ -72,14 +77,16 @@ def test_on_change_non_leaf_queues_route(watch_tree: Path):
          patch("smriti.watcher.enqueue") as mock_enqueue:
 
         _on_change("created", concept)
-        mock_enqueue.assert_called_once()
-        task = mock_enqueue.call_args[0][0]
-        assert task.type == "route"
-        assert "concepts/new-idea.md" in task.path
+        types = _queued_types(mock_enqueue)
+        assert "route" in types
+        assert "reindex" in types
+        # Route task should reference the file
+        route_task = next(c[0][0] for c in mock_enqueue.call_args_list if c[0][0].type == "route")
+        assert "concepts/new-idea.md" in route_task.path
 
 
 def test_on_change_leaf_queues_ingest(watch_tree: Path):
-    """Leaf .md files (inbox/, sources/, etc.) queue an 'ingest' task."""
+    """Leaf .md files (inbox/, sources/, etc.) queue an 'ingest' task (plus 'reindex')."""
     inbox_file = watch_tree / "inbox" / "paper.md"
     inbox_file.write_text("# Paper\n", encoding="utf-8")
 
@@ -88,14 +95,15 @@ def test_on_change_leaf_queues_ingest(watch_tree: Path):
          patch("smriti.watcher.enqueue") as mock_enqueue:
 
         _on_change("created", inbox_file)
-        mock_enqueue.assert_called_once()
-        task = mock_enqueue.call_args[0][0]
-        assert task.type == "ingest"
-        assert "inbox/paper.md" in task.path
+        types = _queued_types(mock_enqueue)
+        assert "ingest" in types
+        assert "reindex" in types
+        ingest_task = next(c[0][0] for c in mock_enqueue.call_args_list if c[0][0].type == "ingest")
+        assert "inbox/paper.md" in ingest_task.path
 
 
 def test_on_change_sources_queues_ingest(watch_tree: Path):
-    """Files under sources/ are leaf — queue ingest."""
+    """Files under sources/ are leaf — queue ingest (plus reindex)."""
     src = watch_tree / "sources" / "2026" / "04-16-001.md"
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_text("# Source\n", encoding="utf-8")
@@ -105,9 +113,9 @@ def test_on_change_sources_queues_ingest(watch_tree: Path):
          patch("smriti.watcher.enqueue") as mock_enqueue:
 
         _on_change("modified", src)
-        mock_enqueue.assert_called_once()
-        task = mock_enqueue.call_args[0][0]
-        assert task.type == "ingest"
+        types = _queued_types(mock_enqueue)
+        assert "ingest" in types
+        assert "reindex" in types
 
 
 def test_on_change_always_runs_structural_cascade(watch_tree: Path):

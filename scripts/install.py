@@ -32,8 +32,10 @@ What it does:
      <memory-root>/ if missing (never overwrites existing copies).
   4. Registers the smriti MCP server in ~/.claude.json (user scope) so
      `smriti_read` / `smriti_write` / `smriti_status` appear as tools.
-  5. Patches ~/.claude/settings.json to call wake.py on SessionStart with
-     SMRITI_WAKE=1 so interactive sessions wake fully.
+  5. Patches ~/.claude/settings.json to (a) call wake.py on SessionStart
+     with SMRITI_WAKE=1 so interactive sessions wake fully, and (b) touch
+     `.smriti/last-activity` on UserPromptSubmit so long sessions stay
+     fresh and the heartbeat can tell when the user is around.
   6. Writes ~/.claude/CLAUDE.md with the contract for wake.py plus the
      memory-search tool-preference guidance.
 
@@ -184,6 +186,7 @@ def install_wake_files(memory_root: Path) -> None:
     files = [
         # wake.md config file is retired — wake.py structure is hardcoded
         (TEMPLATES / ".smriti" / "wake.py", memory_root / ".smriti" / "wake.py"),
+        (TEMPLATES / ".smriti" / "backup.py", memory_root / ".smriti" / "backup.py"),
         (TEMPLATES / ".smriti" / "narada-p.sh", memory_root / ".smriti" / "narada-p.sh"),
     ]
     for src, dst in files:
@@ -238,25 +241,54 @@ def patch_settings_json(memory_root: Path) -> None:
     # (even on Windows), which mangles backslash-escaped native paths.
     memory_rel = memory_root.relative_to(HOME).as_posix()
     wake_cmd = f'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/{memory_rel}" python "$HOME/{memory_rel}/.smriti/wake.py"'
-    entry = {
-        "matcher": "",
-        "hooks": [{"type": "command", "command": wake_cmd}],
-    }
+    activity_cmd = f'touch "$HOME/{memory_rel}/.smriti/last-activity" 2>/dev/null || true'
 
+    changed = False
+
+    # SessionStart: wake.py (touches last-activity internally on first run)
     session_start = hooks.get("SessionStart", [])
-    already = any(
+    wake_wired = any(
         any(h.get("command") == wake_cmd for h in group.get("hooks", []))
         for group in session_start
     )
-    if already:
+    if wake_wired:
         print("[settings] SessionStart wake hook already wired")
+    else:
+        hooks["SessionStart"] = [
+            {"matcher": "", "hooks": [{"type": "command", "command": wake_cmd}]}
+        ]
+        print("[settings] SessionStart -> wake.py")
+        changed = True
+
+    # UserPromptSubmit: touch last-activity so heartbeat knows user is around.
+    # Additive — append to existing hooks array, never replace user's other hooks.
+    ups = hooks.setdefault("UserPromptSubmit", [])
+    activity_wired = any(
+        any(h.get("command") == activity_cmd for h in group.get("hooks", []))
+        for group in ups
+    )
+    if activity_wired:
+        print("[settings] UserPromptSubmit activity hook already wired")
+    else:
+        if ups and ups[0].get("matcher", "") == "":
+            # Merge into existing empty-matcher block to keep a single group
+            ups[0].setdefault("hooks", []).append(
+                {"type": "command", "command": activity_cmd}
+            )
+        else:
+            ups.append(
+                {"matcher": "", "hooks": [{"type": "command", "command": activity_cmd}]}
+            )
+        print("[settings] UserPromptSubmit -> touch last-activity")
+        changed = True
+
+    if not changed:
         return
 
-    hooks["SessionStart"] = [entry]
     backup = SETTINGS.with_suffix(".json.bak")
     shutil.copy2(SETTINGS, backup)
     SETTINGS.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    print(f"[settings] SessionStart now calls wake.py (backup: {backup})")
+    print(f"[settings] saved (backup: {backup})")
 
 
 CLAUDE_MD_CONTENT = """# CLAUDE.md (user-global)
