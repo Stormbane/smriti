@@ -68,6 +68,12 @@ def main() -> int:
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
+    # Skip when invoked from a smriti-internal `claude -p` subprocess.
+    # SessionEnd hooks fire on every subprocess exit; pushing on each one
+    # piles up and gets cancelled, breaking smriti's own pipelines.
+    if os.environ.get("SMRITI_INTERNAL"):
+        return 0
+
     cwd = repo_root()
     if not (cwd / ".git").exists():
         if args.verbose:

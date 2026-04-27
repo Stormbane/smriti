@@ -311,9 +311,17 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
             print(f"  Skipped {skipped_count} ingest tasks (files not found)")
 
         def _on_cluster_done(r) -> None:
-            """Per-cluster commit: mark each source file's queue task done,
-            track changed concept for downstream stages."""
+            """Per-cluster commit: mark each source file's queue task done
+            (or failed if the cluster errored), track changed concept for
+            downstream stages.
+
+            Skipped clusters mark queue tasks as ``failed`` with the cluster
+            error, NOT done. The source registry stays empty for those files,
+            so the next ``queue rebuild`` re-enqueues them.
+            """
             nonlocal processed
+            cluster_failed = r.action not in ("created", "revised")
+            err = (r.error or f"cluster {r.action}") if cluster_failed else ""
             for src in r.files:
                 try:
                     rel = str(src.relative_to(root)).replace("\\", "/")
@@ -321,10 +329,10 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
                     continue
                 tid = task_id_by_path.get(rel)
                 if tid and tid not in completed_ids:
-                    complete(tid)
+                    complete(tid, error=err)
                     completed_ids.add(tid)
                     processed += 1
-            if r.concept_page is not None and r.action in ("created", "revised"):
+            if r.concept_page is not None and not cluster_failed:
                 changed_concepts.append(r.concept_page)
             page_rel = r.concept_page.relative_to(root) if r.concept_page else "(none)"
             print(f"    {r.action}: {page_rel} ({r.cluster_size} files)", flush=True)
