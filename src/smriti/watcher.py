@@ -27,9 +27,8 @@ from pathlib import Path
 from smriti._vendored.memsearch.watcher import FileWatcher
 from smriti.core.tree import tree_root
 from smriti.store.cascade import structural_cascade
-from smriti.store.queue import QueueTask, enqueue
-from smriti.store.router import is_leaf_path
-from smriti.store.wake_summary import is_identity_file
+from smriti.store.queue import enqueue
+from smriti.store.watch_router import classify_write
 
 log = logging.getLogger(__name__)
 
@@ -63,25 +62,20 @@ def _on_change(event_type: str, file_path: Path) -> None:
         if updated:
             log.info("Structural cascade updated %d index files", len(updated))
 
-        # Queue wake-context rebuild if an identity file changed
-        if is_identity_file(rel):
-            enqueue(QueueTask(type="wake_summary", path=rel, priority=3), root=root)
-            log.info("Queued wake_context rebuild (identity file changed: %s)", rel)
-
-        # Queue async work based on file type
-        if is_leaf_path(rel):
-            enqueue(QueueTask(type="ingest", path=rel), root=root)
-            log.info("Queued ingest for leaf: %s", rel)
-        else:
-            enqueue(QueueTask(type="route", path=rel), root=root)
-            log.info("Queued route for: %s", rel)
+        # Single routing function decides what pipelines apply.
+        tasks = classify_write(file_path, root, event_type=event_type)
+        for task in tasks:
+            enqueue(task, root=root)
+        if tasks:
+            task_types = sorted({t.type for t in tasks})
+            log.info("Queued %d task(s) for %s: %s", len(tasks), rel, ",".join(task_types))
 
         from smriti.metrics import get_logger
         get_logger().log(
             "watcher_event",
             event_type=event_type,
             path=rel,
-            leaf=is_leaf_path(rel),
+            tasks_queued=len(tasks),
             indexes_updated=len(updated),
         )
 

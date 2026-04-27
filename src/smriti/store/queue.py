@@ -24,9 +24,31 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class QueueTask:
-    """A single queued task."""
+    """A single queued task.
 
-    type: str  # "reindex" | "structural_cascade" | "cognitive_cascade"
+    Known ``type`` values, in sleep-dispatch order:
+
+        "summarize_pending"        -- file >=50KB needs .summary.md sidecar
+        "ingest"                   -- leaf file needs consolidation into a concept
+                                      page (drained as a batch via batch_consolidate).
+                                      Historical alias: consolidate_pending.
+        "synthesize_threads_pending" -- concepts changed since cutoff (path = ISO
+                                      timestamp); Stage 3 produces threads doc(s)
+        "extract_actionables_pending" -- threads doc needs Stage 4 actionables
+                                      extraction (path = relpath to threads doc)
+        "structural_cascade"       -- rare; normally runs synchronously on write
+        "cognitive_cascade"        -- propagate a leaf/concept change upward
+        "journal_rollup"           -- create week/month/year summary
+        "wake_summary"             -- rebuild MEMORY.md briefing
+        "route"                    -- non-leaf page, routing judge for cross-links
+        "reindex"                  -- refresh FTS5/vector index
+
+    Classification policy for incoming writes lives in
+    ``smriti.store.watch_router.classify_write``. The sleep dispatcher in
+    ``cli._cmd_sleep`` drains types in the order above.
+    """
+
+    type: str
     path: str  # file that triggered this task
     parent: str | None = None  # parent MOC path (for cascade tasks)
     priority: int = 5  # 0 = low, 10 = urgent
@@ -98,19 +120,55 @@ def pending_count(*, root: Path | None = None) -> int:
     return sum(1 for t in tasks if t.get("status") == "pending")
 
 
-def dequeue(n: int = 1, *, root: Path | None = None) -> list[QueueTask]:
-    """Return up to *n* pending tasks, marking them as 'processing'."""
+def dequeue(
+    n: int = 1,
+    *,
+    types: list[str] | None = None,
+    root: Path | None = None,
+) -> list[QueueTask]:
+    """Return up to *n* pending tasks, marking them as 'processing'.
+
+    Parameters
+    ----------
+    n:
+        Maximum number of tasks to dequeue.
+    types:
+        Optional allow-list of QueueTask.type values. When provided, only
+        tasks whose type is in this set are dequeued. Enables scoped drain
+        (e.g. process only ``summarize_pending`` tasks this cycle).
+    root:
+        Tree root.
+    """
     qpath = _queue_path(root)
     tasks = _load_queue(qpath)
 
+    allow = set(types) if types else None
     result = []
     for t in tasks:
-        if t.get("status") == "pending" and len(result) < n:
-            t["status"] = "processing"
-            result.append(QueueTask(**{k: v for k, v in t.items() if k in QueueTask.__dataclass_fields__}))
+        if t.get("status") != "pending":
+            continue
+        if allow is not None and t.get("type") not in allow:
+            continue
+        if len(result) >= n:
+            break
+        t["status"] = "processing"
+        result.append(QueueTask(**{k: v for k, v in t.items() if k in QueueTask.__dataclass_fields__}))
 
     _save_queue(qpath, tasks)
     return result
+
+
+def pending_by_type(*, root: Path | None = None) -> dict[str, int]:
+    """Return {type: count} for pending tasks. Used for sleep-pressure telemetry."""
+    qpath = _queue_path(root)
+    tasks = _load_queue(qpath)
+    counts: dict[str, int] = {}
+    for t in tasks:
+        if t.get("status") != "pending":
+            continue
+        tp = t.get("type", "unknown")
+        counts[tp] = counts.get(tp, 0) + 1
+    return counts
 
 
 def complete(task_id: str, *, error: str = "", root: Path | None = None) -> None:
@@ -146,3 +204,84 @@ def queue_summary(*, root: Path | None = None) -> dict[str, int]:
         s = t.get("status", "unknown")
         counts[s] = counts.get(s, 0) + 1
     return counts
+
+
+def scope(
+    *,
+    keep: str | None = None,
+    drop: str | None = None,
+    types: list[str] | None = None,
+    dry_run: bool = False,
+    root: Path | None = None,
+) -> dict[str, int]:
+    """Scope the queue to a path-regex window for a given set of task types.
+
+    Replaces the per-stage filter scripts under scripts/filter_queue_for_*.py.
+    Loads the queue, drops pending tasks matching the criteria, writes back.
+
+    Parameters
+    ----------
+    keep:
+        Regex. Pending tasks whose ``path`` does NOT match are dropped. None = no keep filter.
+    drop:
+        Regex. Pending tasks whose ``path`` matches are dropped. None = no drop filter.
+    types:
+        Allow-list of task ``type`` values to apply the filter to. Tasks of
+        types NOT in this list are kept untouched (this is the explicit
+        non-regression behaviour the per-stage filter scripts had: they only
+        ever pruned ``ingest`` tasks). None = apply to all types.
+    dry_run:
+        If True, return counts without modifying the queue file.
+    root:
+        Tree root.
+
+    Returns
+    -------
+    dict with keys ``removed``, ``kept_in_scope``, ``kept_other``, ``total``.
+    """
+    import re as _re
+
+    if keep is None and drop is None:
+        raise ValueError("scope() requires at least one of keep= or drop=")
+
+    keep_re = _re.compile(keep) if keep else None
+    drop_re = _re.compile(drop) if drop else None
+    type_set = set(types) if types else None
+
+    qpath = _queue_path(root)
+    tasks = _load_queue(qpath)
+    new_tasks: list[dict[str, Any]] = []
+    removed = 0
+    kept_in_scope = 0
+    kept_other = 0
+
+    for t in tasks:
+        if t.get("status") != "pending":
+            new_tasks.append(t)
+            kept_other += 1
+            continue
+        if type_set is not None and t.get("type") not in type_set:
+            new_tasks.append(t)
+            kept_other += 1
+            continue
+        path = t.get("path", "")
+        in_scope = True
+        if keep_re is not None and not keep_re.search(path):
+            in_scope = False
+        if drop_re is not None and drop_re.search(path):
+            in_scope = False
+        if in_scope:
+            new_tasks.append(t)
+            kept_in_scope += 1
+        else:
+            removed += 1
+
+    if not dry_run:
+        _save_queue(qpath, new_tasks)
+
+    return {
+        "removed": removed,
+        "kept_in_scope": kept_in_scope,
+        "kept_other": kept_other,
+        "total": len(new_tasks),
+    }

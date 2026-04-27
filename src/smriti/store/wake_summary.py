@@ -115,8 +115,8 @@ def rebuild(
         return None
 
     if executor_fn is None:
-        from smriti.store.judge import executor_via_claude
-        executor_fn = executor_via_claude
+        from smriti.store.judge import summarize_via_claude
+        executor_fn = summarize_via_claude
 
     source_text = "\n".join(sources)
     prompt = REBUILD_PROMPT.format(limit=CONTEXT_CHAR_LIMIT, sources=source_text)

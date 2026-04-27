@@ -244,9 +244,43 @@ def wake_enabled() -> bool:
     return os.environ.get("SMRITI_WAKE", "").strip().lower() in _ON
 
 
+def _fire_backup() -> None:
+    """Kick off commit+push in the background; never block wake."""
+    import subprocess
+
+    script = Path(__file__).parent / "backup.py"
+    if not script.exists():
+        return
+    try:
+        kwargs = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "close_fds": True,
+        }
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        subprocess.Popen(
+            [sys.executable, str(script), "--tag", "wake", "--push"],
+            **kwargs,
+        )
+    except Exception:
+        pass
+
+
 def main() -> int:
     if not wake_enabled():
         return 0
+
+    _fire_backup()
+
+    # Mark user activity — heartbeat reads this to know if the user is around.
+    # Also touched by UserPromptSubmit hook so long sessions stay fresh.
+    try:
+        (Path(__file__).parent / "last-activity").touch()
+    except OSError:
+        pass
+
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, OSError):

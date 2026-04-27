@@ -54,3 +54,6 @@ Note: the dreaming cycle (synthetic training data, LoRA updates) lives in
 - [ ] Linux/macOS support (junctions -> symlinks)
 - [ ] License decision (before any public release)
 - [ ] Private/encrypted layer activation
+
+## Active
+

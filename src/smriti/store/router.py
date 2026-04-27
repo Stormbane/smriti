@@ -46,6 +46,12 @@ _DEFAULT_LEAF_PREFIXES = (
     "mirrors/",
     "inbox/",
 )
+# journal/ is a leaf because daily entries carry conceptual insight that
+# should feed semantic/concepts/ (two axes, not duplicate work: journal_rollup
+# compresses narrative over time, ingest extracts themes across time).
+# However, the rollup summaries themselves (weekN.md, MM.md, YYYY.md) are
+# already compressed narrative and should not be consolidated again. The
+# exclusion is enforced in watch_router.classify_write, not here.
 
 
 def _load_leaf_prefixes() -> tuple[str, ...]:

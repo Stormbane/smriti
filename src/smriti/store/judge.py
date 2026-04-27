@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -90,7 +91,10 @@ def _get_claude_path() -> str:
     return _CLAUDE_PATH
 
 
-def _call_claude(prompt: str, *, timeout: int = 120) -> tuple[str, CallMetadata]:
+_DEFAULT_CLAUDE_TIMEOUT = int(os.environ.get("NARADA_CLAUDE_TIMEOUT", "300"))
+
+
+def _call_claude(prompt: str, *, timeout: int | None = None) -> tuple[str, CallMetadata]:
     """Call ``claude -p`` and return ``(text, metadata)``.
 
     Parses the JSON response for token counts, cost, and model info.
@@ -98,15 +102,37 @@ def _call_claude(prompt: str, *, timeout: int = 120) -> tuple[str, CallMetadata]
     Uses the absolute path to ``claude`` resolved once via shutil.which to
     avoid per-spawn PATH lookup flakiness on Windows. Retries once on
     FileNotFoundError as a last-resort safety net.
+
+    Long prompts are piped via stdin because Windows CreateProcess rejects
+    command lines above ~32KB with a misleading "filename too long" error.
+    A summarization prompt assembling a week's journal entries easily
+    exceeds that.
     """
+    if timeout is None:
+        timeout = _DEFAULT_CLAUDE_TIMEOUT
     t0 = time.monotonic()
     meta = CallMetadata()
     claude = _get_claude_path()
-    cmd = [claude, "-p", prompt, "--output-format", "json"]
+
+    # Windows command-line limit is ~32KB. Use stdin for anything near that.
+    # Safe threshold: 8KB leaves plenty of headroom for the rest of the
+    # argv.
+    use_stdin = len(prompt) > 8000
+    if use_stdin:
+        cmd = [claude, "-p", "--output-format", "json"]
+        stdin_text: str | None = prompt
+    else:
+        cmd = [claude, "-p", prompt, "--output-format", "json"]
+        stdin_text = None
 
     def _spawn() -> subprocess.CompletedProcess:
+        # Force UTF-8 for I/O. Windows defaults to cp1252 which fails on
+        # unicode arrows, em-dashes, devanagari, etc. that regularly
+        # appear in journal content.
         return subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout,
+            input=stdin_text,
+            encoding="utf-8", errors="replace",
         )
 
     try:
@@ -237,3 +263,30 @@ def executor_via_claude(
         meta.tokens_out, meta.cost_usd, meta.elapsed_ms,
     )
     return text
+
+
+def summarize_via_claude(prompt: str) -> tuple[str, CallMetadata]:
+    """Run a single-prompt summarization via the API backend.
+
+    Used by journal rollups and wake-context rebuild — operations that
+    are pure summarization rather than parent+direction+child revision.
+    Returns (summary_text, metadata) so callers can log metrics.
+    """
+    from smriti.store.api_backend import call_api, DEFAULT_EXECUTOR_MODEL
+    system = (
+        "You produce clear, faithful summaries of the supplied material. "
+        "Return ONLY the summary content. No preamble, no meta-commentary."
+    )
+    text, api_meta = call_api(system=system, user=prompt, model=DEFAULT_EXECUTOR_MODEL)
+    meta = CallMetadata(
+        model=getattr(api_meta, "model", ""),
+        tokens_in=getattr(api_meta, "tokens_in", 0),
+        tokens_out=getattr(api_meta, "tokens_out", 0),
+        cost_usd=getattr(api_meta, "cost_usd", 0.0),
+        elapsed_ms=getattr(api_meta, "elapsed_ms", 0),
+    )
+    log.info(
+        "SUMMARIZE: model=%s tokens_in=%d tokens_out=%d cost=$%.4f",
+        meta.model, meta.tokens_in, meta.tokens_out, meta.cost_usd,
+    )
+    return text, meta

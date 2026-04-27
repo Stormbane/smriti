@@ -137,8 +137,15 @@ def search(
         try:
             # Simple query: wrap each word in quotes for exact matching,
             # join with OR for broad recall.
+            #
+            # FTS5 chokes on special characters (`, ', ., :, parens, *).
+            # We strip every non-alphanumeric char from each token before
+            # quoting so a query like "claude -p 120s syntax" or content
+            # with `e.g.` / `it's` can't break the parser.
+            import re as _re
             terms = query.strip().split()
-            fts_query = " OR ".join(f'"{t}"' for t in terms if t)
+            sanitized = [_re.sub(r"[^A-Za-z0-9_]", "", t) for t in terms]
+            fts_query = " OR ".join(f'"{t}"' for t in sanitized if t)
             if fts_query:
                 rows = conn.execute(
                     """SELECT rowid, rank

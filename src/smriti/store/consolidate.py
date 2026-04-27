@@ -32,6 +32,24 @@ log = logging.getLogger(__name__)
 
 _MAX_CLUSTER_CONTENT = 40_000  # max chars to send to executor for synthesis
 _DEFAULT_THRESHOLD = float(os.environ.get("NARADA_CLUSTER_THRESHOLD", "0.7"))
+# Adaptive mode: when fragmentation is high, step down threshold.
+_ADAPTIVE_MIN_THRESHOLD = float(os.environ.get("NARADA_CLUSTER_ADAPTIVE_MIN", "0.5"))
+_ADAPTIVE_STEP = 0.05
+_ADAPTIVE_SINGLETON_BUDGET = 0.4   # stop when singletons <= 40% of files
+_ADAPTIVE_MAX_COLLAPSE = 0.8       # reject threshold if largest cluster > 80%
+
+# Concept match thresholds. Kept strict enough that a search miss creates a
+# fresh concept page only when there genuinely isn't a close existing one.
+# Loose matches (previous default 0.5) produced sprawl: every cluster found
+# a "related but not really the same" page and wrote under its own slug.
+_CONCEPT_SEARCH_MATCH_MIN = float(
+    os.environ.get("NARADA_CONCEPT_SEARCH_MIN", "0.7")
+)
+# When deciding whether a new concept slug already exists under semantic/concepts/
+# (title embedding similarity), this is the cutoff that flips CREATE -> REVISE.
+_CONCEPT_TITLE_MATCH_MIN = float(
+    os.environ.get("NARADA_CONCEPT_TITLE_MATCH_MIN", "0.85")
+)
 
 
 @dataclass
@@ -102,21 +120,12 @@ def _greedy_cluster(
     return clusters
 
 
-def cluster_files(
-    paths: list[Path],
-    *,
-    similarity_threshold: float = _DEFAULT_THRESHOLD,
-) -> list[list[Path]]:
-    """Embed files locally and cluster by cosine similarity.
+def _embed_paths(paths: list[Path]) -> tuple[list[list[float]], list[Path]]:
+    """Read + embed a list of paths. Returns (embeddings, valid_paths).
 
-    Returns a list of clusters, each cluster being a list of Paths.
+    Reads the first 2000 chars of each file -- enough to capture topic for
+    the embedding model used (all-MiniLM-L6-v2, 384 dim).
     """
-    if not paths:
-        return []
-    if len(paths) == 1:
-        return [paths]
-
-    # Read file contents (first 2000 chars for embedding — enough for topic)
     texts: list[str] = []
     valid_paths: list[Path] = []
     for p in paths:
@@ -128,26 +137,122 @@ def cluster_files(
             log.warning("Cannot read %s for clustering, skipping", p)
 
     if not texts:
-        return []
+        return [], []
 
-    # Embed
     t0 = time.monotonic()
     embeddings = asyncio.run(_embed_texts(texts))
     embed_ms = int((time.monotonic() - t0) * 1000)
     log.info("Embedded %d files in %dms", len(texts), embed_ms)
+    return embeddings, valid_paths
 
-    # Cluster
+
+def cluster_files(
+    paths: list[Path],
+    *,
+    similarity_threshold: float = _DEFAULT_THRESHOLD,
+    adaptive: bool = False,
+) -> list[list[Path]]:
+    """Embed files locally and cluster by cosine similarity.
+
+    Parameters
+    ----------
+    paths:
+        Files to cluster.
+    similarity_threshold:
+        Cosine similarity cutoff. When ``adaptive=False`` (default), this
+        is used as-is. When ``adaptive=True``, it's the starting (maximum)
+        threshold; the function steps down if fragmentation is high.
+    adaptive:
+        If True, automatically loosen the threshold when >40% of files
+        would end up as singletons, bottoming out at NARADA_CLUSTER_ADAPTIVE_MIN
+        (default 0.5). Refuses to loosen below a point where one cluster
+        exceeds 80% of total files (over-collapse).
+
+    Returns a list of clusters, each cluster being a list of Paths.
+    """
+    if not paths:
+        return []
+    if len(paths) == 1:
+        return [paths]
+
+    embeddings, valid_paths = _embed_paths(paths)
+    if not embeddings:
+        return []
+
     sim_matrix = _cosine_similarity_matrix(embeddings)
-    index_clusters = _greedy_cluster(sim_matrix, similarity_threshold)
 
-    # Map indices back to paths
+    if adaptive and len(valid_paths) >= 5:
+        index_clusters, chosen_threshold = _adaptive_cluster(
+            sim_matrix, similarity_threshold,
+        )
+    else:
+        index_clusters = _greedy_cluster(sim_matrix, similarity_threshold)
+        chosen_threshold = similarity_threshold
+
     path_clusters = [[valid_paths[i] for i in cluster] for cluster in index_clusters]
+    singletons = sum(1 for c in path_clusters if len(c) == 1)
     log.info(
-        "Clustered %d files into %d clusters (threshold=%.2f)",
-        len(valid_paths), len(path_clusters), similarity_threshold,
+        "Clustered %d files into %d clusters (threshold=%.2f, %d singletons, adaptive=%s)",
+        len(valid_paths), len(path_clusters), chosen_threshold, singletons, adaptive,
     )
 
     return path_clusters
+
+
+def _adaptive_cluster(
+    sim_matrix: np.ndarray,
+    start_threshold: float,
+) -> tuple[list[list[int]], float]:
+    """Try thresholds from start_threshold down to _ADAPTIVE_MIN_THRESHOLD.
+
+    Pick the first threshold where:
+      - singleton ratio <= _ADAPTIVE_SINGLETON_BUDGET, AND
+      - largest cluster does not exceed _ADAPTIVE_MAX_COLLAPSE of total.
+
+    If no threshold satisfies both, return the best candidate: lowest
+    singleton ratio that doesn't over-collapse. Falls back to the start
+    threshold if over-collapse hits immediately.
+    """
+    n = sim_matrix.shape[0]
+    best: tuple[list[list[int]], float, float] | None = None  # (clusters, threshold, singleton_ratio)
+
+    thresh = start_threshold
+    while thresh >= _ADAPTIVE_MIN_THRESHOLD - 1e-9:
+        clusters = _greedy_cluster(sim_matrix, thresh)
+        singletons = sum(1 for c in clusters if len(c) == 1)
+        sr = singletons / n
+        max_frac = max(len(c) for c in clusters) / n if clusters else 0.0
+
+        if max_frac > _ADAPTIVE_MAX_COLLAPSE:
+            # Too collapsed. Prior threshold was better.
+            log.debug(
+                "Adaptive: threshold=%.2f over-collapses (%.0f%% in one cluster), stopping",
+                thresh, max_frac * 100,
+            )
+            break
+
+        # Track best seen (lowest singleton ratio)
+        if best is None or sr < best[2]:
+            best = (clusters, thresh, sr)
+
+        if sr <= _ADAPTIVE_SINGLETON_BUDGET:
+            log.info(
+                "Adaptive: chose threshold=%.2f (singletons=%.0f%%, under %.0f%% budget)",
+                thresh, sr * 100, _ADAPTIVE_SINGLETON_BUDGET * 100,
+            )
+            return clusters, thresh
+
+        thresh -= _ADAPTIVE_STEP
+
+    if best is None:
+        # Only reachable if over-collapse hit immediately at start_threshold.
+        return _greedy_cluster(sim_matrix, start_threshold), start_threshold
+
+    log.info(
+        "Adaptive: fell through to threshold=%.2f (best singleton ratio %.0f%%)",
+        best[1], best[2] * 100,
+    )
+    return best[0], best[1]
 
 
 # ── Cluster → concept page ─────────────────────────────────────────
@@ -207,7 +312,7 @@ def _search_for_existing_concept(
     for r in results:
         if is_leaf_path(r.source):
             continue
-        if r.score < 0.5:
+        if r.score < _CONCEPT_SEARCH_MATCH_MIN:
             continue
         full_path = root / r.source
         if full_path.exists():
@@ -218,6 +323,59 @@ def _search_for_existing_concept(
                 continue
 
     return None, ""
+
+
+def _find_duplicate_concept_by_title(
+    slug: str,
+    root: Path,
+) -> Path | None:
+    """Last-line guard against sprawl: check if a semantic/concepts/*.md file
+    already exists whose title embedding is >= _CONCEPT_TITLE_MATCH_MIN
+    similar to the new slug. Returns the matching path or None.
+
+    Prevents the pathology where a search miss routes to CREATE but a
+    near-synonym concept already lives in the wiki (e.g. sovereignty.md
+    + sovereign-trust.md both existing as separate pages).
+    """
+    concepts_dir = root / "semantic" / "concepts"
+    if not concepts_dir.exists():
+        return None
+
+    candidates = [
+        p for p in concepts_dir.glob("*.md")
+        if p.name != "index.md" and not p.name.endswith(".summary.md")
+    ]
+    if not candidates:
+        return None
+
+    # Build texts for embedding: new slug vs existing filenames (stems)
+    texts = [slug.replace("-", " ").replace("_", " ")]
+    for p in candidates:
+        texts.append(p.stem.replace("-", " ").replace("_", " "))
+
+    try:
+        embeddings = asyncio.run(_embed_texts(texts))
+    except Exception as exc:
+        log.warning("Could not embed titles for duplicate check: %s", exc)
+        return None
+
+    arr = np.array(embeddings, dtype=np.float32)
+    norms = np.linalg.norm(arr, axis=1, keepdims=True)
+    norms = np.maximum(norms, 1e-10)
+    normalized = arr / norms
+    new_vec = normalized[0]
+    sims = normalized[1:] @ new_vec
+
+    best_idx = int(np.argmax(sims))
+    best_sim = float(sims[best_idx])
+    if best_sim >= _CONCEPT_TITLE_MATCH_MIN:
+        log.info(
+            "Duplicate-title guard: new slug '%s' ~ existing '%s' (sim=%.2f). "
+            "Routing to REVISE instead of CREATE.",
+            slug, candidates[best_idx].stem, best_sim,
+        )
+        return candidates[best_idx]
+    return None
 
 
 def consolidate_cluster(
@@ -257,12 +415,14 @@ def consolidate_cluster(
                 existing_path.relative_to(root), len(cluster),
             )
             queue_cognitive_cascade([existing_path], root)
+            from smriti.store.source_registry import mark_consolidated
+            mark_consolidated(cluster, root=root)
         except Exception as e:
             result.action = "skipped"
             result.error = str(e)
             log.warning("Failed to revise %s: %s", existing_path, e)
     else:
-        # CREATE new concept page
+        # CREATE new concept page (unless a near-duplicate already exists)
         direction = (
             f"Synthesize a concept page from these {len(cluster)} related source "
             f"files. Create a clear, structured markdown page with a heading that "
@@ -271,11 +431,36 @@ def consolidate_cluster(
         )
         try:
             content = executor_fn(cluster_content, direction, cluster_content)
-            # Derive path from first file's topic
             slug = _topic_slug(cluster[0], content)
+
+            # Duplicate-title guard: if a concept with near-identical slug
+            # already exists, revise it instead of creating sprawl.
+            duplicate = _find_duplicate_concept_by_title(slug, root)
+            if duplicate is not None:
+                try:
+                    existing_text = duplicate.read_text(encoding="utf-8")
+                except OSError:
+                    existing_text = ""
+                revise_direction = (
+                    f"Merge new information from {len(cluster)} source files into "
+                    f"this existing concept page. Preserve existing content, "
+                    f"integrate new findings, add wikilinks to related concepts."
+                )
+                revised = executor_fn(existing_text, revise_direction, cluster_content)
+                duplicate.write_text(revised, encoding="utf-8")
+                result.concept_page = duplicate
+                result.action = "revised"
+                log.info(
+                    "Revised (via duplicate-title guard) %s from %d files",
+                    duplicate.relative_to(root), len(cluster),
+                )
+                queue_cognitive_cascade([duplicate], root)
+                from smriti.store.source_registry import mark_consolidated
+                mark_consolidated(cluster, root=root)
+                return result
+
             concept_path = root / "semantic" / "concepts" / f"{slug}.md"
             concept_path.parent.mkdir(parents=True, exist_ok=True)
-
             # Add frontmatter
             page = f"---\ncreated_by: consolidate\nsources: {len(cluster)}\n---\n\n{content}\n"
             concept_path.write_text(page, encoding="utf-8")
@@ -286,6 +471,8 @@ def consolidate_cluster(
                 concept_path.relative_to(root), len(cluster),
             )
             queue_cognitive_cascade([concept_path], root)
+            from smriti.store.source_registry import mark_consolidated
+            mark_consolidated(cluster, root=root)
         except Exception as e:
             result.action = "skipped"
             result.error = str(e)
@@ -304,10 +491,27 @@ def batch_consolidate(
     similarity_threshold: float = _DEFAULT_THRESHOLD,
     executor_fn: Callable[..., str] = executor_via_claude,
     reindex: bool = True,
+    on_cluster_done: Callable[["ClusterResult"], None] | None = None,
+    should_continue: Callable[[], bool] | None = None,
 ) -> list[ClusterResult]:
-    """Full batch pipeline: cluster files → process each cluster.
+    """Full batch pipeline: cluster files -> process each cluster.
 
-    This is the entry point for the sleep/daemon handler.
+    Parameters
+    ----------
+    paths, root, similarity_threshold, executor_fn, reindex:
+        Standard inputs.
+    on_cluster_done:
+        Optional callback invoked after each cluster is processed (success
+        OR failure). Use this to commit per-cluster work durably -- e.g.
+        the sleep dispatcher marks the cluster's source files as complete
+        in the queue here, so killing the process loses at most one
+        in-flight cluster instead of all of them.
+    should_continue:
+        Optional callable returning True if the cluster loop should keep
+        going. Called BEFORE each cluster (not before the first). Lets
+        callers enforce a soft time budget -- when False, the loop exits
+        cleanly and the caller can still run trailing wrap-up (Stages 3/4,
+        audit, etc.) instead of getting kill-9'd by the shell.
     """
     t0 = time.monotonic()
 
@@ -318,16 +522,29 @@ def batch_consolidate(
 
     log.info("Batch consolidate: %d files", len(valid))
 
-    # Cluster
-    clusters = cluster_files(valid, similarity_threshold=similarity_threshold)
+    # Cluster (adaptive: loosen threshold when fragmentation is high)
+    clusters = cluster_files(
+        valid, similarity_threshold=similarity_threshold, adaptive=True,
+    )
     log.info(
-        "Clustering: %d files → %d clusters",
+        "Clustering: %d files -> %d clusters",
         len(valid), len(clusters),
     )
 
     # Process each cluster
     results: list[ClusterResult] = []
+    stopped_early = False
     for i, cluster in enumerate(clusters):
+        # Soft time-budget check (between clusters, not mid-cluster). The
+        # first cluster always runs even if budget is already tight.
+        if i > 0 and should_continue is not None and not should_continue():
+            log.info(
+                "Budget exhausted; stopping after %d/%d clusters (%d remaining)",
+                i, len(clusters), len(clusters) - i,
+            )
+            stopped_early = True
+            break
+
         log.info(
             "Processing cluster %d/%d (%d files)",
             i + 1, len(clusters), len(cluster),
@@ -337,12 +554,28 @@ def batch_consolidate(
             results.append(r)
         except Exception as e:
             log.warning("Cluster %d failed: %s", i + 1, e)
-            results.append(ClusterResult(
+            r = ClusterResult(
                 files=cluster,
                 cluster_size=len(cluster),
                 action="skipped",
                 error=str(e),
-            ))
+            )
+            results.append(r)
+
+        # Per-cluster commit hook: caller can mark queue tasks done here
+        # so killing the process loses at most one in-flight cluster.
+        if on_cluster_done is not None:
+            try:
+                on_cluster_done(r)
+            except Exception as cb_exc:
+                log.warning("on_cluster_done callback failed: %s", cb_exc)
+
+    if stopped_early:
+        # Tag remaining unprocessed clusters as skipped so the caller can
+        # report them. We don't call on_cluster_done for these -- their
+        # source files should remain "pending" in the queue for the next
+        # sleep to pick up.
+        pass
 
     # Reindex so leaf files are searchable
     if reindex:

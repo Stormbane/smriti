@@ -185,12 +185,27 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
     )
     from smriti.store.queue import complete, dequeue, pending_count
 
+    from smriti.backup import trigger as _backup_trigger
+    from smriti.store.queue import pending_by_type
+
     root = tree_root()
+    _backup_trigger("sleep-start", push=True, root=root)
     metrics = get_logger()
     count = pending_count()
     if count == 0:
         print("Queue empty — nothing to process. No sleep needed.")
         return 0
+
+    # Parse --types scope
+    scoped_types: list[str] | None = None
+    if getattr(args, "types", None):
+        scoped_types = [t.strip() for t in args.types.split(",") if t.strip()]
+
+    # Per-type queue snapshot (for logging and terminal visibility)
+    by_type = pending_by_type(root=root)
+    scoped_count = (
+        sum(v for k, v in by_type.items() if k in scoped_types) if scoped_types else count
+    )
 
     # Real judge/executor by default, stubs with --dry-run
     if args.dry_run:
@@ -202,48 +217,339 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
         executor_fn = executor_via_claude
         mode = "claude -p"
 
-    n = count if args.all else min(args.n, count)
-    print(f"Sleep cycle: processing {n} of {count} pending tasks ({mode})...")
+    n = scoped_count if args.all else min(args.n, scoped_count)
+    scope_label = f" [scope: {','.join(scoped_types)}]" if scoped_types else ""
+    print(f"Sleep cycle: processing {n} of {scoped_count} pending tasks{scope_label} ({mode})")
+    print(f"  Queue breakdown: {', '.join(f'{k}={v}' for k, v in sorted(by_type.items()))}")
 
     t0 = _time.monotonic()
-    metrics.log("sleep_started", pending_count=count, tasks_to_process=n, mode=mode)
+    metrics.log(
+        "sleep_started",
+        pending_count=count,
+        pending_by_type=by_type,
+        tasks_to_process=n,
+        scoped_types=scoped_types or [],
+        mode=mode,
+    )
 
     processed = 0
     failed = 0
     total_depth = 0
     total_verdicts = 0
     total_changed = 0
-    tasks = dequeue(n)
+    tasks = dequeue(n, types=scoped_types)
 
-    # Separate task types
+    # Separate task types. Dispatch order below:
+    #   summarize -> ingest -> cognitive_cascade -> journal_rollup
+    #   -> wake_summary -> route -> reindex
+    summarize_tasks = [t for t in tasks if t.type == "summarize_pending"]
     ingest_tasks = [t for t in tasks if t.type == "ingest"]
     journal_rollup_tasks = [t for t in tasks if t.type == "journal_rollup"]
-    other_tasks = [t for t in tasks if t.type not in ("ingest", "journal_rollup")]
+    synth_threads_tasks = [t for t in tasks if t.type == "synthesize_threads_pending"]
+    extract_actionables_tasks = [t for t in tasks if t.type == "extract_actionables_pending"]
+    other_tasks = [
+        t for t in tasks
+        if t.type not in (
+            "summarize_pending", "ingest", "journal_rollup",
+            "synthesize_threads_pending", "extract_actionables_pending",
+        )
+    ]
+
+    # Summarize first: produces .summary.md sidecars so downstream
+    # pipelines (consolidate, cascade) can read the compact form.
+    if summarize_tasks:
+        from smriti.store.pipeline_audit import mark_run as _mark_run
+        from smriti.store.summarize import batch_summarize
+
+        summarize_paths = [
+            root / t.path for t in summarize_tasks if (root / t.path).exists()
+        ]
+        skipped_count = len(summarize_tasks) - len(summarize_paths)
+        if skipped_count:
+            print(f"  Skipped {skipped_count} summarize tasks (files not found)")
+
+        if summarize_paths:
+            print(f"  Summarizing {len(summarize_paths)} large file(s)...")
+            if args.dry_run:
+                for p in summarize_paths:
+                    print(f"    dry-run: would summarize {p.relative_to(root)}")
+            else:
+                s_results = batch_summarize(summarize_paths, root)
+                for r in s_results:
+                    rel = r.source.relative_to(root) if r.source.is_relative_to(root) else r.source
+                    sidecar = r.sidecar.name if r.sidecar else "(none)"
+                    print(f"    {r.action}: {rel} -> {sidecar}")
+                total_changed += sum(1 for r in s_results if r.action in ("created", "refreshed"))
+
+        for t in summarize_tasks:
+            complete(t.id)
+            processed += 1
+
+        if not args.dry_run:
+            try:
+                _mark_run("summarize", root=root)
+            except Exception as exc:
+                logging.getLogger(__name__).warning("mark_run(summarize) failed: %s", exc)
 
     # Batch consolidate ingest tasks
+    # Per-cluster commit: each cluster marks its source tasks complete
+    # as soon as it finishes, so killing the process loses at most one
+    # in-flight cluster instead of the whole drain.
+    changed_concepts: list = []
     if ingest_tasks:
         from smriti.store.consolidate import batch_consolidate
+
+        # Map source path -> task id so the callback can mark complete().
+        task_id_by_path: dict[str, str] = {
+            t.path.replace("\\", "/"): t.id for t in ingest_tasks
+        }
+        completed_ids: set[str] = set()
 
         ingest_paths = [root / t.path for t in ingest_tasks if (root / t.path).exists()]
         skipped_count = len(ingest_tasks) - len(ingest_paths)
         if skipped_count:
             print(f"  Skipped {skipped_count} ingest tasks (files not found)")
 
+        def _on_cluster_done(r) -> None:
+            """Per-cluster commit: mark each source file's queue task done,
+            track changed concept for downstream stages."""
+            nonlocal processed
+            for src in r.files:
+                try:
+                    rel = str(src.relative_to(root)).replace("\\", "/")
+                except ValueError:
+                    continue
+                tid = task_id_by_path.get(rel)
+                if tid and tid not in completed_ids:
+                    complete(tid)
+                    completed_ids.add(tid)
+                    processed += 1
+            if r.concept_page is not None and r.action in ("created", "revised"):
+                changed_concepts.append(r.concept_page)
+            page_rel = r.concept_page.relative_to(root) if r.concept_page else "(none)"
+            print(f"    {r.action}: {page_rel} ({r.cluster_size} files)", flush=True)
+
         if ingest_paths:
-            print(f"  Batch consolidating {len(ingest_paths)} files...")
-            results = batch_consolidate(ingest_paths, root, executor_fn=executor_fn)
-            for r in results:
-                page_rel = r.concept_page.relative_to(root) if r.concept_page else "(none)"
-                print(f"    {r.action}: {page_rel} ({r.cluster_size} files)")
-            total_changed += sum(1 for r in results if r.action in ("created", "revised"))
+            print(f"  Batch consolidating {len(ingest_paths)} files...", flush=True)
 
+            # Soft budget: if --budget-minutes set, exit cluster loop after
+            # 70% of budget elapses so Stages 3/4 + audit can still run.
+            budget_minutes = getattr(args, "budget_minutes", None)
+            budget_deadline_s = (
+                budget_minutes * 60 * 0.7 if budget_minutes else None
+            )
+
+            def _within_budget() -> bool:
+                if budget_deadline_s is None:
+                    return True
+                elapsed = _time.monotonic() - t0
+                return elapsed < budget_deadline_s
+
+            try:
+                results = batch_consolidate(
+                    ingest_paths, root,
+                    executor_fn=executor_fn,
+                    on_cluster_done=_on_cluster_done,
+                    should_continue=_within_budget,
+                )
+                total_changed += sum(1 for r in results if r.action in ("created", "revised"))
+                if budget_deadline_s and not _within_budget():
+                    elapsed_min = (_time.monotonic() - t0) / 60
+                    print(
+                        f"  Soft budget reached at {elapsed_min:.1f}min "
+                        f"(threshold: {budget_minutes * 0.7:.1f}min). "
+                        f"Wrap-up stages will still run.",
+                        flush=True,
+                    )
+            except Exception as exc:
+                logging.getLogger(__name__).warning("batch_consolidate crashed: %s", exc)
+                print(f"  batch_consolidate aborted: {exc}", flush=True)
+
+        # Sweep up any ingest tasks the callback didn't reach (files that
+        # didn't exist on disk, or clusters that didn't process at all).
         for t in ingest_tasks:
-            complete(t.id)
-            processed += 1
+            if t.id not in completed_ids:
+                complete(t.id)
+                processed += 1
 
-    # Process journal rollup tasks -- create summary files that don't exist
+        if not args.dry_run:
+            try:
+                from smriti.store.pipeline_audit import mark_run as _mark_run
+                _mark_run("ingest", root=root)
+            except Exception as exc:
+                logging.getLogger(__name__).warning("mark_run(ingest) failed: %s", exc)
+
+    # Stage 3 + Stage 4 run AFTER ingest tasks are completed in the queue.
+    # That way if these stages crash or get killed by an outer timeout,
+    # the consolidation work is still durably committed and a re-run won't
+    # re-do clusters that already succeeded.
+    #
+    # Stage 3 chunks above ~15 concepts per run because the synthesis prompt
+    # collapses on bigger inputs (claude -p returns meta-comments instead of
+    # synthesis text). Stage 4 runs per chunk.
+    threads_results: list = []
+    if changed_concepts and not args.dry_run:
+        try:
+            from smriti.store.threads import synthesize_threads_chunked
+
+            print(
+                f"  Synthesizing threads from {len(changed_concepts)} concept(s)...",
+                flush=True,
+            )
+            threads_results = synthesize_threads_chunked(changed_concepts, root)
+            for tr in threads_results:
+                if tr.threads_path:
+                    print(f"    wrote: {tr.threads_path.relative_to(root)}", flush=True)
+                    total_changed += 1
+                elif tr.skipped_reason:
+                    print(f"    skipped: {tr.skipped_reason}", flush=True)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Stage 3 (threads) failed: %s", exc)
+            print(f"  Stage 3 failed: {exc}", flush=True)
+
+    # Drain any standalone synthesize_threads_pending tasks (recovery from
+    # prior sleep cycles where Stage 3 didn't run inline). path = ISO cutoff
+    # timestamp; processes concepts modified since cutoff.
+    if synth_threads_tasks and not args.dry_run:
+        try:
+            from datetime import datetime as _dt
+            from smriti.store.threads import synthesize_threads_chunked
+
+            for task in synth_threads_tasks:
+                try:
+                    cutoff = _dt.fromisoformat(task.path.replace("Z", "+00:00"))
+                    cutoff_ts = cutoff.timestamp()
+                except (ValueError, AttributeError):
+                    cutoff_ts = 0.0
+                concept_dir = root / "semantic" / "concepts"
+                concepts = [
+                    p for p in concept_dir.glob("*.md")
+                    if p.name != "index.md"
+                    and not p.name.endswith(".summary.md")
+                    and p.stat().st_mtime >= cutoff_ts
+                ]
+                print(
+                    f"  [synthesize_threads_pending] cutoff={task.path}, "
+                    f"{len(concepts)} concepts qualify",
+                    flush=True,
+                )
+                tr_results = synthesize_threads_chunked(concepts, root)
+                for tr in tr_results:
+                    if tr.threads_path:
+                        # Enqueue Stage 4 for each produced threads doc.
+                        from smriti.store.queue import enqueue, QueueTask
+                        rel = str(tr.threads_path.relative_to(root)).replace("\\", "/")
+                        enqueue(QueueTask(
+                            type="extract_actionables_pending",
+                            path=rel, priority=4,
+                        ), root=root)
+                        print(f"    wrote: {rel} -> queued actionables", flush=True)
+                        threads_results.append(tr)
+                complete(task.id)
+                processed += 1
+        except Exception as exc:
+            logging.getLogger(__name__).warning("synthesize_threads_pending drain failed: %s", exc)
+            print(f"  synth_threads drain failed: {exc}", flush=True)
+
+    # Drain extract_actionables_pending tasks. Same path as inline Stage 4
+    # but for threads docs that were never followed up.
+    if extract_actionables_tasks and not args.dry_run:
+        try:
+            from smriti.store.actionables import extract_actionables_via_tools
+            for task in extract_actionables_tasks:
+                threads_path = root / task.path
+                if not threads_path.exists():
+                    print(f"  [extract_actionables_pending] {task.path} missing; skipping", flush=True)
+                    complete(task.id)
+                    processed += 1
+                    continue
+                print(f"  [extract_actionables_pending] {task.path}...", flush=True)
+                a_result = extract_actionables_via_tools(threads_path, root)
+                if a_result.error:
+                    print(f"    error: {a_result.error}", flush=True)
+                else:
+                    by_proj = ", ".join(
+                        f"{p}={n}" for p, n in sorted(a_result.todos_added_by_project.items())
+                    ) or "none"
+                    print(
+                        f"    todos={a_result.total_todos} ({by_proj}), "
+                        f"suti-comms={a_result.suti_comms_added}, "
+                        f"goal-proposals={a_result.goal_proposals_added}",
+                        flush=True,
+                    )
+                complete(task.id)
+                processed += 1
+        except Exception as exc:
+            logging.getLogger(__name__).warning("extract_actionables_pending drain failed: %s", exc)
+            print(f"  actionables drain failed: {exc}", flush=True)
+
+    if threads_results and not args.dry_run:
+        # Tool-based actionables: claude -p with smriti_* MCP tools allowed,
+        # decides what to record. NARADA_ACTIONABLES_LEGACY=1 reverts to the
+        # 3-stage prompt pipeline.
+        use_legacy = os.environ.get("NARADA_ACTIONABLES_LEGACY", "").strip() == "1"
+        try:
+            if use_legacy:
+                from smriti.store.actionables import extract_actionables
+
+                for tr in threads_results:
+                    if not tr.threads_path:
+                        continue
+                    print(f"  Extracting actionables (legacy) from {tr.threads_path.name}...", flush=True)
+                    a_result = extract_actionables(tr.threads_path, root)
+                    if a_result.error:
+                        print(f"    error: {a_result.error}", flush=True)
+                        continue
+                    print(
+                        f"    insights={len(a_result.insights)}, "
+                        f"actionables={len(a_result.actionables)}, "
+                        f"to-projects={a_result.tasks_routed}, "
+                        f"to-global={a_result.global_tasks_routed}, "
+                        f"goal-proposals={a_result.proposals_written}",
+                        flush=True,
+                    )
+            else:
+                from smriti.store.actionables import extract_actionables_via_tools
+
+                for tr in threads_results:
+                    if not tr.threads_path:
+                        continue
+                    print(f"  Extracting actionables (tools) from {tr.threads_path.name}...", flush=True)
+                    a_result = extract_actionables_via_tools(tr.threads_path, root)
+                    if a_result.error:
+                        print(f"    error: {a_result.error}", flush=True)
+                        continue
+                    by_proj = ", ".join(
+                        f"{p}={n}" for p, n in sorted(a_result.todos_added_by_project.items())
+                    ) or "none"
+                    print(
+                        f"    todos={a_result.total_todos} ({by_proj}), "
+                        f"suti-comms={a_result.suti_comms_added}, "
+                        f"goal-proposals={a_result.goal_proposals_added}, "
+                        f"{a_result.elapsed_ms}ms",
+                        flush=True,
+                    )
+                    if a_result.summary_text:
+                        # First line of claude's summary, for quick eyeball.
+                        first = a_result.summary_text.splitlines()[0][:200]
+                        print(f"    summary: {first}", flush=True)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Stage 4 (actionables) failed: %s", exc)
+            print(f"  Stage 4 failed: {exc}", flush=True)
+
+    # Process journal rollup tasks -- create summary files that don't exist.
+    # Journal rollup uses summarize_via_claude (single-prompt), not
+    # executor_via_claude (parent/direction/child). Let rollup pick its own
+    # default; pass None (or the dry-run stub) rather than the cascade
+    # executor.
     if journal_rollup_tasks:
         from smriti.store.journal_rollup import rollup as journal_rollup_fn
+
+        rollup_executor_fn = None  # use journal_rollup's default
+        if args.dry_run:
+            # In dry-run mode we never actually call the LLM — rollup
+            # returns early on dry_run=True — so executor_fn is unused.
+            pass
 
         # Sort by priority (week first, then month, then year) so children
         # exist before parents try to read them
@@ -252,7 +558,7 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
             print(f"  [journal_rollup] {task.path}")
             try:
                 result_path = journal_rollup_fn(
-                    task.path, root=root, executor_fn=executor_fn, dry_run=args.dry_run,
+                    task.path, root=root, executor_fn=rollup_executor_fn, dry_run=args.dry_run,
                 )
                 if result_path:
                     print(f"    created: {result_path.relative_to(root)}")
@@ -276,7 +582,9 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
         print(f"  [wake_summary] rebuilding from {len(wake_summary_tasks)} identity file change(s)...")
         try:
             from smriti.store.wake_summary import rebuild as rebuild_wake_context
-            result_path = rebuild_wake_context(root=root, executor_fn=executor_fn, dry_run=args.dry_run)
+            # Wake summary uses summarize_via_claude (single-prompt). Pass
+            # None to let rebuild pick the correct default.
+            result_path = rebuild_wake_context(root=root, executor_fn=None, dry_run=args.dry_run)
             if result_path:
                 print(f"    rebuilt: {result_path.relative_to(root)}")
                 total_changed += 1
@@ -291,6 +599,10 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
             complete(t.id)
             processed += 1
 
+    # Shared visited-set across cognitive_cascade tasks so multiple leaves
+    # cascading into the same parent only revise that parent once.
+    _cascade_visited: set[Path] = set()
+
     # Process other tasks individually
     for task in remaining_tasks:
         print(f"  [{task.type}] {task.path}")
@@ -303,6 +615,7 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
                         root,
                         judge_fn=judge_fn,
                         executor_fn=executor_fn,
+                        visited=_cascade_visited,
                     )
                     total_depth = max(total_depth, stats["max_depth"])
                     total_verdicts += len(stats["verdicts"])
@@ -336,6 +649,12 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
 
     elapsed = int((_time.monotonic() - t0) * 1000)
     remaining = pending_count()
+    remaining_by_type = pending_by_type(root=root)
+
+    # Per-type delta: how many of each type did we drain this cycle?
+    drained_by_type: dict[str, int] = {}
+    for t in tasks:
+        drained_by_type[t.type] = drained_by_type.get(t.type, 0) + 1
 
     metrics.log(
         "sleep_completed",
@@ -346,22 +665,63 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
         total_verdicts=total_verdicts,
         total_changed=total_changed,
         mode=mode,
+        drained_by_type=drained_by_type,
+        remaining_by_type=remaining_by_type,
+        remaining_total=remaining,
     )
 
     print(f"\nSleep complete: {processed} processed, {failed} failed, {elapsed}ms.")
     print(f"  Changed: {total_changed}, Max depth: {total_depth}")
+    if drained_by_type:
+        print(f"  Drained by type: {', '.join(f'{k}={v}' for k, v in sorted(drained_by_type.items()))}")
     print(f"  {remaining} tasks remaining in queue.")
+    if remaining_by_type:
+        print(f"  Remaining by type: {', '.join(f'{k}={v}' for k, v in sorted(remaining_by_type.items()))}")
+
+    # End-of-sleep audit: on a healthy system this finds zero gaps.
+    # Gaps mean a pipeline failed silently. Log loudly; don't auto-backfill
+    # (that would paper over real breakage).
+    try:
+        from smriti.store.pipeline_audit import audit as _audit
+        gaps = _audit(root)
+        gap_total = sum(len(v) for v in gaps.values())
+        if gap_total == 0:
+            print("  Audit: healthy (zero pipeline gaps)")
+        else:
+            gap_lines = [f"{k}={len(v)}" for k, v in gaps.items() if v]
+            print(f"  Audit: {gap_total} gap(s): {', '.join(gap_lines)}")
+            print("    Run 'smriti queue rebuild' to re-enqueue, or investigate upstream.")
+        metrics.log("sleep_audit", gap_total=gap_total, gaps={k: len(v) for k, v in gaps.items()})
+    except Exception as exc:
+        logging.getLogger(__name__).warning("end-of-sleep audit failed: %s", exc)
+
+    _backup_trigger("sleep-end", push=True, root=root)
+
     return 0
 
 
 def _cmd_queue(args: argparse.Namespace) -> int:
     from smriti.store.queue import cleanup, pending_count, queue_summary
 
-    if args.cleanup:
+    action = args.action
+    if action is None:
+        action = "cleanup" if args.cleanup else "status"
+
+    if action == "cleanup":
         removed = cleanup()
         print(f"Cleaned up {removed} completed/failed tasks.")
         return 0
 
+    if action == "audit":
+        return _cmd_queue_audit()
+
+    if action == "rebuild":
+        return _cmd_queue_rebuild()
+
+    if action == "scope":
+        return _cmd_queue_scope(args)
+
+    # status (default)
     summary = queue_summary()
     total = sum(summary.values())
     pending = summary.get("pending", 0)
@@ -376,6 +736,90 @@ def _cmd_queue(args: argparse.Namespace) -> int:
         print(f"\nSleep pressure: low ({pending} pending)")
     else:
         print("\nSleep pressure: none")
+    return 0
+
+
+def _cmd_queue_audit() -> int:
+    """Read-only gap report per pipeline. Zero gaps = healthy."""
+    from smriti.store.pipeline_audit import audit
+
+    result = audit()
+    total = sum(len(tasks) for tasks in result.values())
+
+    print("Pipeline audit:")
+    for pipeline, tasks in result.items():
+        marker = "  " if not tasks else "! "
+        print(f"{marker}{pipeline:22s} {len(tasks):5d} pending")
+        # Show up to 3 examples per pipeline
+        for t in tasks[:3]:
+            print(f"      - {t.path}")
+        if len(tasks) > 3:
+            print(f"      ... +{len(tasks) - 3} more")
+
+    print()
+    if total == 0:
+        print("Healthy: zero gaps. The queue is tracking reality.")
+    else:
+        print(f"Gaps found: {total} items across {sum(1 for v in result.values() if v)} pipelines.")
+        print("Run 'smriti queue rebuild' to enqueue everything above.")
+    return 0
+
+
+def _cmd_queue_rebuild() -> int:
+    """Enqueue everything audit finds. Dedup via existing enqueue logic."""
+    from smriti.store.pipeline_audit import rebuild
+
+    total, per_pipeline = rebuild()
+    print(f"Queue rebuild: enqueued {total} task(s)")
+    for pipeline, count in per_pipeline.items():
+        if count:
+            print(f"  {pipeline:22s} +{count}")
+    if total == 0:
+        print("  Nothing to enqueue. Queue already reflects filesystem state.")
+    return 0
+
+
+def _cmd_queue_scope(args: argparse.Namespace) -> int:
+    """Drop pending tasks not matching --keep / matching --drop, scoped by --types.
+
+    Replaces the per-stage filter scripts (scripts/filter_queue_for_*.py).
+    Use case: after `smriti queue rebuild`, scope to a single stage's path
+    pattern so `smriti sleep` only drains that window.
+
+    Example::
+
+        smriti queue rebuild
+        smriti queue scope --keep '^heartbeat/artifacts/2026-04-1[0-7][-_]' --types ingest
+        smriti sleep --all --types ingest --budget-minutes 30
+    """
+    from smriti.store.queue import scope
+
+    if not args.keep and not args.drop:
+        print("Error: queue scope requires at least one of --keep <regex> or --drop <regex>.")
+        return 2
+
+    types = None
+    if args.types:
+        types = [s.strip() for s in args.types.split(",") if s.strip()]
+
+    try:
+        result = scope(
+            keep=args.keep,
+            drop=args.drop,
+            types=types,
+            dry_run=args.dry_run,
+        )
+    except (ValueError, __import__("re").error) as exc:
+        print(f"Error: {exc}")
+        return 2
+
+    prefix = "Would remove" if args.dry_run else "Removed"
+    print(f"{prefix} {result['removed']} out-of-scope pending task(s).")
+    print(f"Kept {result['kept_in_scope']} in-scope pending task(s).")
+    print(f"Untouched (other status / other types): {result['kept_other']}.")
+    print(f"Total queue size: {result['total']}.")
+    if args.dry_run:
+        print("(dry-run — queue not modified)")
     return 0
 
 
@@ -675,11 +1119,64 @@ def main(argv: list[str] | None = None) -> int:
     p_sleep = sub.add_parser("sleep", help="Process queued cascade tasks (sleep cycle)")
     p_sleep.add_argument("--all", action="store_true", help="Process entire queue")
     p_sleep.add_argument("-n", type=int, default=1, help="Number of tasks to process")
+    p_sleep.add_argument(
+        "--types",
+        type=str,
+        default=None,
+        help="Comma-separated task types to scope to (e.g. 'summarize_pending,ingest'). "
+             "Default: all types.",
+    )
+    p_sleep.add_argument(
+        "--budget-minutes",
+        type=float,
+        default=None,
+        help="Soft time budget in minutes. When 70%% of budget elapses, the "
+             "ingest cluster loop exits cleanly and Stages 3/4 + queue completion "
+             "+ audit still run. Without this, hard kills (e.g. external timeout) "
+             "lose Stages 3/4 and corrupt queue state.",
+    )
     p_sleep.add_argument("--dry-run", action="store_true", help="Use test stubs instead of claude -p")
 
     # ── queue ────────────────────────────────────────────────────────
-    p_queue = sub.add_parser("queue", help="Show queue status")
-    p_queue.add_argument("--cleanup", action="store_true", help="Remove completed tasks")
+    p_queue = sub.add_parser(
+        "queue",
+        help="Queue status, audit (gap report), rebuild (enqueue gaps), scope (filter), or cleanup",
+    )
+    p_queue.add_argument(
+        "action",
+        nargs="?",
+        default=None,
+        choices=["status", "audit", "rebuild", "scope", "cleanup"],
+        help="status (default) | audit (read-only gaps) | rebuild (enqueue gaps) | scope (drop pending tasks not matching --keep / matching --drop) | cleanup",
+    )
+    p_queue.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="(alias for 'queue cleanup')",
+    )
+    p_queue.add_argument(
+        "--keep",
+        type=str,
+        default=None,
+        help="(scope) regex. Pending tasks whose path does NOT match are dropped.",
+    )
+    p_queue.add_argument(
+        "--drop",
+        type=str,
+        default=None,
+        help="(scope) regex. Pending tasks whose path matches are dropped.",
+    )
+    p_queue.add_argument(
+        "--types",
+        type=str,
+        default=None,
+        help="(scope) comma-separated task types to apply --keep/--drop to. Other types untouched. Default: all types.",
+    )
+    p_queue.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="(scope) print counts without modifying the queue.",
+    )
 
     # ── daemon ───────────────────────────────────────────────────────
     p_daemon = sub.add_parser("daemon", help="Watch for changes + process queue")
@@ -720,6 +1217,14 @@ def main(argv: list[str] | None = None) -> int:
     p_metrics.add_argument("--since", type=str, default=None, help="ISO timestamp filter")
     p_metrics.add_argument("--json", action="store_true", help="JSON output")
 
+    # ── merge-concepts ───────────────────────────────────────────────
+    p_merge = sub.add_parser(
+        "merge-concepts",
+        help="Find and destructively merge near-duplicate concept pages",
+    )
+    p_merge.add_argument("--dry-run", action="store_true", help="Report pairs without merging")
+    p_merge.add_argument("--limit", type=int, default=None, help="Cap number of merges per run")
+
     args = parser.parse_args(argv)
 
     if args.verbose:
@@ -750,8 +1255,37 @@ def main(argv: list[str] | None = None) -> int:
         "eval": _cmd_eval,
         "metrics": _cmd_metrics,
         "ingest": _cmd_ingest,
+        "merge-concepts": _cmd_merge_concepts,
     }
     return handlers[args.command](args)
+
+
+def _cmd_merge_concepts(args: argparse.Namespace) -> int:
+    """Find and destructively merge near-duplicate concept pages."""
+    from smriti.store.consolidate_merge import find_merge_pairs, merge_all
+
+    if args.dry_run:
+        pairs = find_merge_pairs()
+        if not pairs:
+            print("No merge candidates (all concept pages below threshold).")
+            return 0
+        print(f"Merge candidates: {len(pairs)} pair(s) at threshold")
+        for p in pairs:
+            print(f"  {p.winner.name} <- {p.loser.name}  (sim={p.similarity:.2f}, "
+                  f"winner_sources={p.winner_sources}, loser_sources={p.loser_sources})")
+        if args.limit:
+            print(f"\nWith --limit {args.limit}, first {min(args.limit, len(pairs))} would execute.")
+        return 0
+
+    result = merge_all(dry_run=False, limit=args.limit)
+    print(f"merge-concepts: examined {result.pairs_examined} pair(s), "
+          f"merged {result.pairs_merged}, {len(result.errors)} errors, "
+          f"{result.elapsed_ms}ms")
+    for winner, loser in result.merged:
+        print(f"  MERGED {winner} <- {loser}")
+    for err in result.errors:
+        print(f"  ERROR {err}")
+    return 0 if not result.errors else 1
 
 
 if __name__ == "__main__":
