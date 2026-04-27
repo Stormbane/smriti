@@ -21,6 +21,15 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 
+class RateLimitExceeded(RuntimeError):
+    """Raised when claude -p reports the subscription tier limit is hit.
+
+    Callers (sleep dispatcher) catch this and stop the cluster/cascade
+    loop cleanly so we don't burn through every queued task with the
+    same failure until the reset window.
+    """
+
+
 @dataclass
 class CallMetadata:
     """Metadata from a claude -p call, for metrics logging."""
@@ -125,13 +134,18 @@ def _call_claude(prompt: str, *, timeout: int | None = None) -> tuple[str, CallM
         cmd = [claude, "-p", prompt, "--output-format", "json"]
         stdin_text = None
 
+    # SMRITI_INTERNAL=1 lets SessionEnd hooks (e.g. backup.py) skip on
+    # smriti-internal subprocesses; otherwise they fire per claude -p call
+    # and pile up, getting cancelled, which fails the LLM call.
+    env = {**os.environ, "SMRITI_INTERNAL": "1"}
+
     def _spawn() -> subprocess.CompletedProcess:
         # Force UTF-8 for I/O. Windows defaults to cp1252 which fails on
         # unicode arrows, em-dashes, devanagari, etc. that regularly
         # appear in journal content.
         return subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout,
-            input=stdin_text,
+            input=stdin_text, env=env,
             encoding="utf-8", errors="replace",
         )
 
@@ -153,7 +167,28 @@ def _call_claude(prompt: str, *, timeout: int | None = None) -> tuple[str, CallM
     meta.elapsed_ms = int((time.monotonic() - t0) * 1000)
 
     if result.returncode != 0:
-        raise RuntimeError(f"claude -p exit {result.returncode}: {result.stderr[:500]}")
+        stderr = (result.stderr or "")[:500]
+        stdout = (result.stdout or "")[:500]
+        # Detect Claude Code subscription rate-limit so callers can stop
+        # the dispatcher cleanly instead of failing every subsequent task.
+        # Smriti runs claude -p exclusively when ANTHROPIC_API_KEY is unset;
+        # once the subscription tier limit is hit, all further calls fail
+        # the same way until the reset window.
+        #
+        # Empirically observed signature: exit code 1 with empty stderr.
+        # The rate-limit message (when present) goes to stdout, but often
+        # claude -p exits before emitting any output. Treat exit=1 with
+        # blank stderr AND blank stdout as suspected rate-limit too.
+        rate_markers = (
+            "rate limit", "rate_limit", "5-hour limit",
+            "usage limit", "quota", "limit reached",
+        )
+        combined = (stderr + " " + stdout).lower()
+        if any(m in combined for m in rate_markers):
+            raise RateLimitExceeded(stderr or stdout or "(no output)")
+        if result.returncode == 1 and not stderr.strip() and not stdout.strip():
+            raise RateLimitExceeded("exit 1 with no output (suspected limit)")
+        raise RuntimeError(f"claude -p exit {result.returncode}: {stderr}")
 
     if not result.stdout.strip():
         raise RuntimeError("claude -p returned empty output")

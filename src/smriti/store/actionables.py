@@ -257,6 +257,11 @@ def extract_actionables_via_tools(
         "--output-format", "text",
     ]
 
+    # SMRITI_INTERNAL=1 lets SessionEnd hooks skip on smriti-internal
+    # subprocesses, preventing per-call backup pileup that cancels hooks
+    # and fails the call (see store/judge.py for the same pattern).
+    subprocess_env = {**os.environ, "SMRITI_INTERNAL": "1"}
+
     try:
         proc = subprocess.run(
             cmd,
@@ -266,6 +271,7 @@ def extract_actionables_via_tools(
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
+            env=subprocess_env,
         )
     except subprocess.TimeoutExpired:
         result.error = f"claude -p timed out after {timeout}s"
