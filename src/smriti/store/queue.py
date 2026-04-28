@@ -95,6 +95,13 @@ def enqueue(task: QueueTask, *, root: Path | None = None) -> None:
     qpath = _queue_path(root)
     tasks = _load_queue(qpath)
 
+    # Normalize Windows backslash paths to forward slashes so dedup
+    # treats `events\core\foo.md` and `events/core/foo.md` as the same
+    # task. Without this, both can sit in the queue simultaneously.
+    task.path = task.path.replace("\\", "/")
+    if task.parent:
+        task.parent = task.parent.replace("\\", "/")
+
     # Deduplicate: don't add if an identical pending task exists
     for t in tasks:
         if (

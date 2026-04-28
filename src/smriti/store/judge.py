@@ -168,27 +168,51 @@ def _call_claude(prompt: str, *, timeout: int | None = None) -> tuple[str, CallM
 
     if result.returncode != 0:
         stderr = (result.stderr or "")[:500]
-        stdout = (result.stdout or "")[:500]
+        stdout_full = result.stdout or ""
+        stdout = stdout_full[:500]
         # Detect Claude Code subscription rate-limit so callers can stop
         # the dispatcher cleanly instead of failing every subsequent task.
         # Smriti runs claude -p exclusively when ANTHROPIC_API_KEY is unset;
         # once the subscription tier limit is hit, all further calls fail
         # the same way until the reset window.
-        #
-        # Empirically observed signature: exit code 1 with empty stderr.
-        # The rate-limit message (when present) goes to stdout, but often
-        # claude -p exits before emitting any output. Treat exit=1 with
-        # blank stderr AND blank stdout as suspected rate-limit too.
         rate_markers = (
             "rate limit", "rate_limit", "5-hour limit",
-            "usage limit", "quota", "limit reached",
+            "usage limit", "quota", "limit reached", "limit reset",
         )
-        combined = (stderr + " " + stdout).lower()
-        if any(m in combined for m in rate_markers):
-            raise RateLimitExceeded(stderr or stdout or "(no output)")
+        # Try parsing stdout as JSON — claude -p emits its error in JSON
+        # form when --output-format=json is set. On rate-limit the JSON
+        # may have ``is_error: true`` and a ``result`` field with the
+        # human-readable message.
+        rl_signal = ""
+        try:
+            data = json.loads(stdout_full) if stdout_full.strip() else {}
+        except json.JSONDecodeError:
+            data = {}
+        if isinstance(data, dict):
+            blob = " ".join(
+                str(v) for v in (
+                    data.get("result"), data.get("error"),
+                    data.get("message"), data.get("subtype"),
+                ) if v
+            ).lower()
+            if data.get("is_error") and blob:
+                if any(m in blob for m in rate_markers):
+                    rl_signal = blob[:300]
+        if not rl_signal:
+            combined = (stderr + " " + stdout).lower()
+            if any(m in combined for m in rate_markers):
+                rl_signal = (stderr or stdout)[:300]
+        if rl_signal:
+            raise RateLimitExceeded(rl_signal)
+        # Fallback: exit 1 with all-blank output is the silent rate-limit
+        # signature we have empirically observed.
         if result.returncode == 1 and not stderr.strip() and not stdout.strip():
             raise RateLimitExceeded("exit 1 with no output (suspected limit)")
-        raise RuntimeError(f"claude -p exit {result.returncode}: {stderr}")
+        # Include stdout snippet in error so future debugging sees what
+        # claude -p actually wrote — silent stderr was the gap that hid
+        # the JSON-on-stdout case from earlier detection.
+        snippet = stderr or stdout[:200] or "(no output)"
+        raise RuntimeError(f"claude -p exit {result.returncode}: {snippet}")
 
     if not result.stdout.strip():
         raise RuntimeError("claude -p returned empty output")
