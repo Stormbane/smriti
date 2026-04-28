@@ -374,10 +374,14 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
                 print(f"  batch_consolidate aborted: {exc}", flush=True)
 
         # Sweep up any ingest tasks the callback didn't reach (files that
-        # didn't exist on disk, or clusters that didn't process at all).
+        # didn't exist on disk, embedding failures, clusters skipped for
+        # capacity, or batch_consolidate aborting mid-flight). Mark these
+        # as failed (NOT done) so the registry stays empty for them and
+        # the next `queue rebuild` re-flags them. Marking done would hide
+        # work that never actually happened.
         for t in ingest_tasks:
             if t.id not in completed_ids:
-                complete(t.id)
+                complete(t.id, error="not processed by batch_consolidate")
                 processed += 1
 
         if not args.dry_run:
