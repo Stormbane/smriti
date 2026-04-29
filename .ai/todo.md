@@ -5,6 +5,46 @@
      the codebase. Session-level task tracking uses Claude Code's TaskCreate.
      Format: ## Milestone Name / - [ ] Task description / - [x] Completed task -->
 
+## Associative recall (qmd integration) -- top of stack
+
+- [x] Pluggable backend package `src/smriti/recall/` (qmd default,
+      smriti embedded fallback via `SMRITI_RECALL_BACKEND`)
+- [x] PostToolUse hook deployed via `scripts/install.py`
+- [x] CLI: `smriti recall {query|status|stats|index}`
+- [x] Workarounds for qmd issues #452 (Windows shim) and #519
+      (CUDA reranker crash) baked in
+- [x] **Sub-second latency via qmd's HTTP daemon.** Wired qmd's plain
+      `POST /query` REST endpoint (bypasses MCP entirely — no session
+      handshake needed). Subprocess CLI path is the fallback when the
+      daemon is down. Measured: 109ms warm-cached, 3.7s on
+      first-after-startup (model lazy-load), 7.9s subprocess fallback.
+      `smriti recall daemon {start|stop|status}` manages it; install.py
+      auto-starts it.
+- [ ] Better query construction — concatenate file content snippet
+      (first ~500 chars) with the stem; bare stems give tangential
+      top hits.
+- [ ] Auto-keep the qmd index fresh — call `qmd update` from the
+      `smriti sleep` cycle so newly-written entries are searchable
+      without manual `smriti recall index`.
+- [ ] Trunk-distance reranker on top of qmd's RRF candidates —
+      restores smriti's retrieval-quality property (canonical files
+      outrank journal noise) on top of qmd's speed.
+- [ ] Document `SMRITI_RECALL_*` env vars in install.py final
+      message and in the user-global CLAUDE.md template.
+- [ ] Tests for the recall package — fake the qmd subprocess and
+      assert system-reminder format, threshold cutoff, and that
+      `SMRITI_RECALL_BACKEND=smriti` activates the fallback.
+- [ ] Auto-install qmd in `scripts/install.py` when `npm` is
+      available (`npm i -g @tobilu/qmd` + `qmd collection add` +
+      `qmd embed` + start daemon). One-shot bootstrap.
+- [ ] Re-attempt qmd reranker with `LLAMA_CPP_GPU=false` or a
+      smaller GPU layer count. If it works without crashing, flip
+      `SMRITI_RECALL_RERANK` default to on per-machine.
+- [ ] Delete `~/.narada/.smriti/recall_stats.py` (superseded by
+      `smriti recall stats` — currently a stale duplicate).
+- [ ] Watch qmd issues #452 and #519 for upstream fixes; once
+      landed, simplify `_resolve_qmd_cmd` and turn rerank back on.
+
 ## v0.1 -- Working pipeline (current)
 
 - [x] Index + hybrid search (sqlite-vec + FTS5)

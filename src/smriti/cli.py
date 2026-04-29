@@ -1254,6 +1254,10 @@ def main(argv: list[str] | None = None) -> int:
         "index", help="(Re)build the recall index (qmd embed)",
     )
     p_recall_index.add_argument("--force", action="store_true", help="Pass -f to qmd embed")
+    p_recall_daemon = p_recall_sub.add_parser(
+        "daemon", help="Start/stop/status of qmd's HTTP daemon",
+    )
+    p_recall_daemon.add_argument("action", choices=["start", "stop", "status"])
 
     args = parser.parse_args(argv)
 
@@ -1338,14 +1342,17 @@ def _cmd_recall(args: argparse.Namespace) -> int:
         from smriti.recall.backends import qmd as qmd_be
         from smriti.recall.backends import smriti_be as smriti_be
         cfg = load_config()
+        daemon_up = qmd_be.daemon_health(timeout_s=0.5)
         print(f"backend (configured): {cfg.backend}")
         print(f"  qmd available:    {qmd_be.is_available()}")
+        print(f"  qmd daemon up:    {daemon_up}  ({cfg.qmd_url})")
         print(f"  smriti available: {smriti_be.is_available()}")
         print(f"threshold:   {cfg.threshold}")
         print(f"top_k:       {cfg.top_k}")
         print(f"max_inject:  {cfg.max_inject}")
         print(f"timeout_s:   {cfg.timeout_s}")
         print(f"rerank:      {cfg.rerank}")
+        print(f"no_http:     {cfg.no_http}")
         print(f"log_path:    {cfg.log_path}  (exists: {cfg.log_path.exists()})")
         return 0
     if sub == "stats":
@@ -1385,7 +1392,21 @@ def _cmd_recall(args: argparse.Namespace) -> int:
             embed_args.append("-f")
         r = subprocess.run(embed_args, text=True)
         return r.returncode
-    print("usage: smriti recall {query|status|stats|index}", file=sys.stderr)
+    if sub == "daemon":
+        from smriti.recall.backends import qmd as qmd_be
+        if args.action == "status":
+            up = qmd_be.daemon_health(timeout_s=1.0)
+            print(f"qmd daemon: {'up' if up else 'down'}")
+            return 0 if up else 1
+        if args.action == "start":
+            ok, msg = qmd_be.daemon_start()
+            print(f"qmd daemon start: {msg}")
+            return 0 if ok else 1
+        if args.action == "stop":
+            ok, msg = qmd_be.daemon_stop()
+            print(f"qmd daemon stop: {msg}")
+            return 0 if ok else 1
+    print("usage: smriti recall {query|status|stats|index|daemon}", file=sys.stderr)
     return 2
 
 
