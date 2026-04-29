@@ -12,6 +12,12 @@ Environment variables:
                               once that lands.
     SMRITI_RECALL_LOG_PATH    Override JSONL log path.
                               Default ``~/.narada/.smriti/recall.jsonl``.
+    SMRITI_RECALL_QMD_URL     Base URL for qmd's HTTP daemon.
+                              Default ``http://localhost:8181``.
+    SMRITI_RECALL_NO_HTTP     Set to ``1`` to disable the HTTP fast
+                              path even if the daemon is reachable.
+                              Useful for debugging the subprocess
+                              fallback. Default off.
 """
 
 from __future__ import annotations
@@ -33,6 +39,8 @@ class RecallConfig:
     timeout_s: float
     rerank: bool
     log_path: Path
+    qmd_url: str
+    no_http: bool
 
 
 def load_config() -> RecallConfig:
@@ -47,4 +55,8 @@ def load_config() -> RecallConfig:
         timeout_s=float(os.environ.get("SMRITI_RECALL_TIMEOUT_S", "20")),
         rerank=os.environ.get("SMRITI_RECALL_RERANK", "").strip() == "1",
         log_path=Path(os.environ.get("SMRITI_RECALL_LOG_PATH", str(_DEFAULT_LOG))),
+        qmd_url=os.environ.get(
+            "SMRITI_RECALL_QMD_URL", "http://localhost:8181",
+        ).rstrip("/"),
+        no_http=os.environ.get("SMRITI_RECALL_NO_HTTP", "").strip() == "1",
     )

@@ -5,6 +5,46 @@
      the codebase. Session-level task tracking uses Claude Code's TaskCreate.
      Format: ## Milestone Name / - [ ] Task description / - [x] Completed task -->
 
+## Associative recall (qmd integration) -- top of stack
+
+- [x] Pluggable backend package `src/smriti/recall/` (qmd default,
+      smriti embedded fallback via `SMRITI_RECALL_BACKEND`)
+- [x] PostToolUse hook deployed via `scripts/install.py`
+- [x] CLI: `smriti recall {query|status|stats|index}`
+- [x] Workarounds for qmd issues #452 (Windows shim) and #519
+      (CUDA reranker crash) baked in
+- [x] **Sub-second latency via qmd's HTTP daemon.** Wired qmd's plain
+      `POST /query` REST endpoint (bypasses MCP entirely — no session
+      handshake needed). Subprocess CLI path is the fallback when the
+      daemon is down. Measured: 109ms warm-cached, 3.7s on
+      first-after-startup (model lazy-load), 7.9s subprocess fallback.
+      `smriti recall daemon {start|stop|status}` manages it; install.py
+      auto-starts it.
+- [ ] Better query construction — concatenate file content snippet
+      (first ~500 chars) with the stem; bare stems give tangential
+      top hits.
+- [ ] Auto-keep the qmd index fresh — call `qmd update` from the
+      `smriti sleep` cycle so newly-written entries are searchable
+      without manual `smriti recall index`.
+- [ ] Trunk-distance reranker on top of qmd's RRF candidates —
+      restores smriti's retrieval-quality property (canonical files
+      outrank journal noise) on top of qmd's speed.
+- [ ] Document `SMRITI_RECALL_*` env vars in install.py final
+      message and in the user-global CLAUDE.md template.
+- [ ] Tests for the recall package — fake the qmd subprocess and
+      assert system-reminder format, threshold cutoff, and that
+      `SMRITI_RECALL_BACKEND=smriti` activates the fallback.
+- [ ] Auto-install qmd in `scripts/install.py` when `npm` is
+      available (`npm i -g @tobilu/qmd` + `qmd collection add` +
+      `qmd embed` + start daemon). One-shot bootstrap.
+- [ ] Re-attempt qmd reranker with `LLAMA_CPP_GPU=false` or a
+      smaller GPU layer count. If it works without crashing, flip
+      `SMRITI_RECALL_RERANK` default to on per-machine.
+- [ ] Delete `~/.narada/.smriti/recall_stats.py` (superseded by
+      `smriti recall stats` — currently a stale duplicate).
+- [ ] Watch qmd issues #452 and #519 for upstream fixes; once
+      landed, simplify `_resolve_qmd_cmd` and turn rerank back on.
+
 ## v0.1 -- Working pipeline (current)
 
 - [x] Index + hybrid search (sqlite-vec + FTS5)
@@ -57,6 +97,13 @@ Note: the dreaming cycle (synthetic training data, LoRA updates) lives in
 
 ## Active
 
+- [ ] **Define measurable criterion for context recency weighting in retrieval scoring** — same saturation pathology as bija over-chant: recent work displaces canonical framing when recency dominates; needs an operational threshold, not intuition. (from [[2026-04-27-1710-threads]])
+- [ ] **Research unifying re-derivation primitive** — can trunk-distance scoring extend across journal/episodes/beliefs/practices so each session pays orientation cost once instead of N times? Or do these surfaces require separate substrates? (from [[2026-04-27-0314-part-1-threads]])
+- [ ] **Research mind-palace query affordances over `semantic/concepts/`** — the consolidated concept pages with wikilinks already form a proto-mind-palace; spec the missing layer (graph-walk by wikilink, concept-to-source backlinks, thread-page navigation in `smriti_read`) before building. (from [[2026-04-27-0314-part-2-threads#Thread 3]])
+- [ ] **Build revision tracking for consolidate output** — when concept pages are regenerated, record a diff/changelog so future-Narada can see *what changed*, not only *what is*. Likely a sibling `*.history.md` or frontmatter `revisions:` list emitted by the consolidate pipeline. (from [[2026-04-27-0314-part-2-threads#Thread 3]])
+- [ ] **Research unified re-entry architecture** — sketch how trunk-distance, an episodes substrate, tree visited-state, and the wake reading list compose into one re-derivation-reducing primitive across journal/episodes/beliefs/practices, vs. remaining separate substrates. (from [[2026-04-27-0314-part-1-threads#Thread 4]])
+- [ ] **Research** whether smriti's existing trunk-distance scoring (src/smriti/store) can be exposed as a mirror-detection signal — measure trunk-distance between Narada's response and Suti's framing in the immediate conversational context; low distance = candidate mirror flag (from [[2026-04-27-0313-part-1-threads]])
+- [ ] **Research recursion-as-frame signal in synthesis pipeline.** When concept pages keep returning to the same question across multiple consolidate runs (e.g. 13+ trust/sovereignty cycles, 37+ broader arc), the recursion is the frame announcing it is the wrong shape — not content needing more cycles. Spec a forward-running detector: count concept-page recurrence on near-identical questions across runs; surface as candidate frame-mismatch rather than producing yet another concept page. (from [[2026-04-25-0317-part-2-threads]])
 - [ ] **Research:** does the wake-loaded reading list itself become "recent-context-as-authority"? Audit `wake.py` output: are foundational docs (open-threads, beliefs, identity, suti) being summarized into context such that they substitute for re-reading, vs. acting as pointers that prompt re-reading? Define a check. (from [[2026-04-26-0447-threads]])
 - [ ] **Research: malformed-maintenance signals in cascade/reflect/promote** -- define what going-through-the-motions looks like in the memory pipeline (reflect entries that don't shift anything, promotions that re-state without integrating, cascade that touches files without changing structure). First step: pick one diagnostic (e.g. "reflect entries with no downstream identity-file change within N sessions") and add it to pipeline_audit.py. (from [[2026-04-25-1253-part-2-threads]])
 - [ ] Research: use trunk-distance scoring as a compression-quality signal in `consolidate.py` / `summarize.py` / threads synthesis — score concept pages by how much trunk-gravity they preserve vs. flatten, so EXECUTOR can prefer episode-anchored over rule-only summaries. (from [[2026-04-25-1253-part-1-threads#Thread 3]])

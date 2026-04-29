@@ -442,6 +442,11 @@ def main() -> int:
         action="store_true",
         help="Don't register the smriti MCP server",
     )
+    parser.add_argument(
+        "--skip-recall-daemon",
+        action="store_true",
+        help="Don't auto-start qmd's HTTP daemon for associative recall",
+    )
     args = parser.parse_args()
 
     memory_root = Path(args.memory_root).expanduser()
@@ -469,9 +474,31 @@ def main() -> int:
     if not args.skip_settings:
         patch_settings_json(memory_root)
     write_claude_md(memory_root)
+    if not args.skip_recall_daemon:
+        start_recall_daemon()
     print("\ndone. start a new Claude Code session to verify.")
+    print("recall config: SMRITI_RECALL_BACKEND={qmd|smriti}, "
+          "SMRITI_RECALL_THRESHOLD, SMRITI_RECALL_QMD_URL, SMRITI_RECALL_NO_HTTP.")
     print("optional: `smriti recall index` to (re)build the qmd index for ~/.narada.")
     return 0
+
+
+def start_recall_daemon() -> None:
+    """Start qmd's HTTP daemon if available so recall hits the warm path."""
+    try:
+        from smriti.recall.backends import qmd as qmd_be
+    except ImportError:
+        print("[recall] smriti.recall not importable; skipping daemon start")
+        return
+    if not qmd_be.is_available():
+        print("[recall] qmd not on PATH; install via `npm install -g @tobilu/qmd` "
+              "then run `smriti recall daemon start`")
+        return
+    if qmd_be.daemon_health(timeout_s=0.5):
+        print("[recall] qmd daemon already up")
+        return
+    ok, msg = qmd_be.daemon_start()
+    print(f"[recall] qmd daemon start: {msg}")
 
 
 if __name__ == "__main__":
