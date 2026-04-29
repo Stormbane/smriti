@@ -1237,6 +1237,24 @@ def main(argv: list[str] | None = None) -> int:
     p_merge.add_argument("--dry-run", action="store_true", help="Report pairs without merging")
     p_merge.add_argument("--limit", type=int, default=None, help="Cap number of merges per run")
 
+    # ── recall ────────────────────────────────────────────────────────
+    p_recall = sub.add_parser(
+        "recall",
+        help="Associative recall: ad-hoc query, status, stats, index",
+    )
+    p_recall_sub = p_recall.add_subparsers(dest="recall_cmd")
+    p_recall_query = p_recall_sub.add_parser("query", help="Run a recall query")
+    p_recall_query.add_argument("text", help="Query text")
+    p_recall_query.add_argument("-n", "--top-k", type=int, default=4)
+    p_recall_sub.add_parser("status", help="Show recall config + backend availability")
+    p_recall_stats = p_recall_sub.add_parser("stats", help="Aggregate stats over recall.jsonl")
+    p_recall_stats.add_argument("--hours", type=float, default=None)
+    p_recall_stats.add_argument("--top", type=int, default=10)
+    p_recall_index = p_recall_sub.add_parser(
+        "index", help="(Re)build the recall index (qmd embed)",
+    )
+    p_recall_index.add_argument("--force", action="store_true", help="Pass -f to qmd embed")
+
     args = parser.parse_args(argv)
 
     if args.verbose:
@@ -1268,6 +1286,7 @@ def main(argv: list[str] | None = None) -> int:
         "metrics": _cmd_metrics,
         "ingest": _cmd_ingest,
         "merge-concepts": _cmd_merge_concepts,
+        "recall": _cmd_recall,
     }
     return handlers[args.command](args)
 
@@ -1298,6 +1317,76 @@ def _cmd_merge_concepts(args: argparse.Namespace) -> int:
     for err in result.errors:
         print(f"  ERROR {err}")
     return 0 if not result.errors else 1
+
+
+def _cmd_recall(args: argparse.Namespace) -> int:
+    """Recall subcommands: query, status, stats, index."""
+    sub = getattr(args, "recall_cmd", None)
+    if sub == "query":
+        from smriti.recall import load_config, run_recall
+        cfg = load_config()
+        cfg = type(cfg)(**{**cfg.__dict__, "top_k": args.top_k, "max_inject": args.top_k})
+        response = run_recall(args.text, cfg=cfg)
+        print(f"backend={response.backend}  elapsed={response.elapsed_ms}ms  "
+              f"matches={len(response.matches)}  error={response.error or '-'}")
+        for m in response.matches:
+            snippet = m.snippet[:160].replace("\n", " ").strip()
+            print(f"  {m.score:.2f}  {m.source}\n      {snippet}")
+        return 0
+    if sub == "status":
+        from smriti.recall import load_config
+        from smriti.recall.backends import qmd as qmd_be
+        from smriti.recall.backends import smriti_be as smriti_be
+        cfg = load_config()
+        print(f"backend (configured): {cfg.backend}")
+        print(f"  qmd available:    {qmd_be.is_available()}")
+        print(f"  smriti available: {smriti_be.is_available()}")
+        print(f"threshold:   {cfg.threshold}")
+        print(f"top_k:       {cfg.top_k}")
+        print(f"max_inject:  {cfg.max_inject}")
+        print(f"timeout_s:   {cfg.timeout_s}")
+        print(f"rerank:      {cfg.rerank}")
+        print(f"log_path:    {cfg.log_path}  (exists: {cfg.log_path.exists()})")
+        return 0
+    if sub == "stats":
+        from smriti.recall.stats import main as stats_main
+        argv = []
+        if args.hours is not None:
+            argv += ["--hours", str(args.hours)]
+        if args.top:
+            argv += ["--top", str(args.top)]
+        return stats_main(argv)
+    if sub == "index":
+        import shutil
+        import subprocess
+        from smriti.recall.backends.qmd import _resolve_qmd_cmd
+        cmd = _resolve_qmd_cmd()
+        if not cmd:
+            print("qmd not found. install via: npm install -g @tobilu/qmd", file=sys.stderr)
+            return 1
+        memory_root = Path.home() / ".narada"
+        if not memory_root.exists():
+            print(f"memory tree not found at {memory_root}", file=sys.stderr)
+            return 1
+        existing = subprocess.run(
+            [*cmd, "collection", "list"], capture_output=True, text=True,
+        )
+        if "narada" not in (existing.stdout or ""):
+            print(f"creating qmd collection 'narada' for {memory_root} ...")
+            r = subprocess.run(
+                [*cmd, "collection", "add", str(memory_root), "--name", "narada"],
+                text=True,
+            )
+            if r.returncode != 0:
+                return r.returncode
+        print("running qmd embed ...")
+        embed_args = [*cmd, "embed"]
+        if args.force:
+            embed_args.append("-f")
+        r = subprocess.run(embed_args, text=True)
+        return r.returncode
+    print("usage: smriti recall {query|status|stats|index}", file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

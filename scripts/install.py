@@ -63,6 +63,8 @@ CLAUDE_CONFIG = HOME / ".claude.json"  # MCP server registry
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = REPO_ROOT / "narada"  # wake.md, wake.py, narada-p.sh templates
 MEMORY_TEMPLATE = REPO_ROOT / "memory_template"  # identity tree skeleton
+HOOKS_SRC = REPO_ROOT / "src" / "smriti" / "hooks"  # canonical hook scripts
+HOOKS_DST = CLAUDE / "hooks"  # deployed copies
 
 DEFAULT_MEMORY_ROOT = HOME / ".narada"
 DEFAULT_PROJECTS_ROOT = Path("C:/Projects")
@@ -282,6 +284,23 @@ def patch_settings_json(memory_root: Path) -> None:
         print("[settings] UserPromptSubmit -> touch last-activity")
         changed = True
 
+    # PostToolUse: associative recall on Read|Edit|Write
+    recall_cmd = "python ~/.claude/hooks/associative_recall.py"
+    post = hooks.setdefault("PostToolUse", [])
+    recall_wired = any(
+        any(h.get("command") == recall_cmd for h in group.get("hooks", []))
+        for group in post
+    )
+    if recall_wired:
+        print("[settings] PostToolUse recall hook already wired")
+    else:
+        post.append({
+            "matcher": "Read|Edit|Write",
+            "hooks": [{"type": "command", "command": recall_cmd}],
+        })
+        print("[settings] PostToolUse -> associative_recall.py")
+        changed = True
+
     if not changed:
         return
 
@@ -289,6 +308,23 @@ def patch_settings_json(memory_root: Path) -> None:
     shutil.copy2(SETTINGS, backup)
     SETTINGS.write_text(json.dumps(data, indent=2), encoding="utf-8")
     print(f"[settings] saved (backup: {backup})")
+
+
+def install_hook_scripts() -> None:
+    """Deploy canonical hook scripts to ~/.claude/hooks/."""
+    HOOKS_DST.mkdir(parents=True, exist_ok=True)
+    deployed = ("associative_recall.py",)
+    for name in deployed:
+        src = HOOKS_SRC / name
+        dst = HOOKS_DST / name
+        if not src.exists():
+            print(f"[hooks] source missing: {src}")
+            continue
+        if dst.exists() and dst.read_bytes() == src.read_bytes():
+            print(f"[hooks] {name} up to date")
+            continue
+        shutil.copy2(src, dst)
+        print(f"[hooks] deployed {name} -> {dst}")
 
 
 CLAUDE_MD_CONTENT = """# CLAUDE.md (user-global)
@@ -427,12 +463,14 @@ def main() -> int:
     install_memory_template(memory_root)
     install_wake_files(memory_root)
     setup_mirrors(memory_root, projects_root)
+    install_hook_scripts()
     if not args.skip_mcp:
         register_mcp_server()
     if not args.skip_settings:
         patch_settings_json(memory_root)
     write_claude_md(memory_root)
     print("\ndone. start a new Claude Code session to verify.")
+    print("optional: `smriti recall index` to (re)build the qmd index for ~/.narada.")
     return 0
 
 
