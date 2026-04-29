@@ -707,9 +707,65 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
     except Exception as exc:
         logging.getLogger(__name__).warning("end-of-sleep audit failed: %s", exc)
 
+    # Refresh the recall index so newly-written entries are searchable.
+    # Best-effort: a qmd failure must never break sleep — the cascade is
+    # the primary product of this cycle.
+    if not args.dry_run and (total_changed > 0 or processed > 0):
+        try:
+            _refresh_recall_index(metrics)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("recall index refresh failed: %s", exc)
+
     _backup_trigger("sleep-end", push=True, root=root)
 
     return 0
+
+
+def _refresh_recall_index(metrics) -> None:
+    """Run `qmd update` + `qmd embed` so new memory writes become recall-able.
+
+    Skips silently if qmd isn't installed. Logs the outcome to metrics.
+    Total runtime on a small delta is typically a few seconds.
+    """
+    import subprocess as _sp
+    import time as _t
+
+    from smriti.recall.backends.qmd import _resolve_qmd_cmd
+
+    cmd = _resolve_qmd_cmd()
+    if not cmd:
+        metrics.log("recall_index_refresh", skipped="qmd_not_found")
+        return
+
+    t0 = _t.monotonic()
+    print("  Refreshing recall index (qmd update + embed) ...")
+    update = _sp.run([*cmd, "update"], capture_output=True, text=True, timeout=300)
+    if update.returncode != 0:
+        print(f"    qmd update failed (rc={update.returncode}): "
+              f"{(update.stderr or update.stdout or '').strip()[-200:]}")
+        metrics.log(
+            "recall_index_refresh",
+            stage="update",
+            returncode=update.returncode,
+            elapsed_ms=int((_t.monotonic() - t0) * 1000),
+        )
+        return
+
+    embed = _sp.run([*cmd, "embed"], capture_output=True, text=True, timeout=600)
+    elapsed_ms = int((_t.monotonic() - t0) * 1000)
+    if embed.returncode != 0:
+        print(f"    qmd embed failed (rc={embed.returncode}): "
+              f"{(embed.stderr or embed.stdout or '').strip()[-200:]}")
+    else:
+        # Tail one line of qmd's own status output for visibility.
+        tail = (embed.stdout or "").strip().splitlines()[-1:] or [""]
+        print(f"    {tail[0][:160]}")
+    metrics.log(
+        "recall_index_refresh",
+        stage="embed",
+        returncode=embed.returncode,
+        elapsed_ms=elapsed_ms,
+    )
 
 
 def _cmd_queue(args: argparse.Namespace) -> int:

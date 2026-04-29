@@ -27,9 +27,10 @@
       Markdown lists don't 500 the daemon. Quality jump verified:
       writer.py now finds `smriti-write-pipeline.md` (0.93) instead
       of the tangential `inference-from-exhausted-imagination.md`.
-- [ ] Auto-keep the qmd index fresh — call `qmd update` from the
-      `smriti sleep` cycle so newly-written entries are searchable
-      without manual `smriti recall index`.
+- [x] Auto-keep the qmd index fresh — `smriti sleep` now runs
+      `qmd update` + `qmd embed` at end-of-cycle when anything
+      changed. Best-effort, never blocks sleep on qmd failure.
+      Logged as `recall_index_refresh` in metrics.
 - [ ] Trunk-distance reranker on top of qmd's RRF candidates —
       restores smriti's retrieval-quality property (canonical files
       outrank journal noise) on top of qmd's speed.
