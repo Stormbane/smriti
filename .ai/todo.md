@@ -20,9 +20,13 @@
       first-after-startup (model lazy-load), 7.9s subprocess fallback.
       `smriti recall daemon {start|stop|status}` manages it; install.py
       auto-starts it.
-- [ ] Better query construction — concatenate file content snippet
-      (first ~500 chars) with the stem; bare stems give tangential
-      top hits.
+- [x] Better query construction — hook now reads the first 2KB of
+      the file, strips YAML frontmatter, and prepends the stem with
+      a content excerpt (capped at 400 chars). Sanitizes BM25/vec
+      operators (`"`, `()`, `+-*^~:`) so Python docstrings and
+      Markdown lists don't 500 the daemon. Quality jump verified:
+      writer.py now finds `smriti-write-pipeline.md` (0.93) instead
+      of the tangential `inference-from-exhausted-imagination.md`.
 - [ ] Auto-keep the qmd index fresh — call `qmd update` from the
       `smriti sleep` cycle so newly-written entries are searchable
       without manual `smriti recall index`.

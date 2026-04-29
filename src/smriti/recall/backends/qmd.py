@@ -86,13 +86,35 @@ def daemon_health(*, timeout_s: float = 1.0) -> bool:
         return False
 
 
+_QUERY_RESERVED = '"()+-*^~:'
+
+
+def _sanitize_query(text: str) -> str:
+    """Strip qmd's structured-search operators.
+
+    Both lex and vec/hyde parsers reject these:
+      - lex:   ``"`` opens an unterminated phrase, ``+``/``-`` are
+               required/excluded, ``*`` is a wildcard.
+      - vec:   ``-term`` is rejected as "negation not supported in
+               vec/hyde queries".
+
+    Replacing them all with spaces is safe — semantic embedding
+    tokenizes whitespace anyway, and BM25 just sees more tokens.
+    """
+    out = text
+    for ch in _QUERY_RESERVED:
+        out = out.replace(ch, " ")
+    return " ".join(out.split())
+
+
 def _query_via_http(text: str, *, top_k: int, timeout_s: float) -> list[dict] | None:
     """Query qmd's HTTP daemon. Returns parsed results, or None on failure
     so the caller can fall through to the subprocess path."""
+    safe = _sanitize_query(text)
     body = json.dumps({
         "searches": [
-            {"type": "lex", "query": text},
-            {"type": "vec", "query": text},
+            {"type": "lex", "query": safe},
+            {"type": "vec", "query": safe},
         ],
         "limit": top_k,
     }).encode()
@@ -121,7 +143,9 @@ def _query_via_subprocess(
     if not cmd:
         return [], None, "qmd_not_found"
 
-    args = [*cmd, "query", text, "-n", str(top_k), "--json"]
+    # The CLI's `qmd query` runs the same parser, so sanitize for the
+    # subprocess fallback too.
+    args = [*cmd, "query", _sanitize_query(text), "-n", str(top_k), "--json"]
     if not rerank:
         args.append("--no-rerank")
 

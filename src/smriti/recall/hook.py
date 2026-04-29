@@ -32,6 +32,48 @@ _EXT_ALLOW = {
     ".java", ".rb", ".sh", ".sql", ".toml", ".yaml", ".yml",
 }
 
+# Bytes of file content to read for query enrichment. Big enough to
+# capture a docstring / opening prose, small enough that the hook
+# stays fast even on large files.
+_CONTENT_PROBE_BYTES = 2048
+
+# Cap content slice contributed to the query so qmd's embedding model
+# isn't fed a long chunk that drowns the stem signal.
+_CONTENT_QUERY_CHARS = 400
+
+
+def _read_head(path: Path) -> str:
+    try:
+        with path.open("rb") as f:
+            raw = f.read(_CONTENT_PROBE_BYTES)
+    except OSError:
+        return ""
+    try:
+        return raw.decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _strip_frontmatter(text: str) -> str:
+    """Drop YAML frontmatter so it doesn't dominate the query."""
+    if text.startswith("---\n") or text.startswith("---\r\n"):
+        end = text.find("\n---", 4)
+        if end != -1:
+            tail = text[end + 4:]
+            return tail.lstrip("\r\n")
+    return text
+
+
+def _content_excerpt(path: Path) -> str:
+    """Excerpt the file's opening text for query enrichment."""
+    head = _read_head(path)
+    if not head:
+        return ""
+    head = _strip_frontmatter(head).strip()
+    # Collapse whitespace so the query stays compact.
+    head = " ".join(head.split())
+    return head[:_CONTENT_QUERY_CHARS]
+
 
 def _build_query(file_path: str) -> str | None:
     p = Path(file_path)
@@ -49,6 +91,12 @@ def _build_query(file_path: str) -> str | None:
     stem = p.stem.replace("-", " ").replace("_", " ").strip()
     if len(stem) < 3:
         return None
+
+    excerpt = _content_excerpt(p) if p.exists() else ""
+    if excerpt:
+        # Stem first so it carries weight in BM25 token overlap, then
+        # excerpt for semantic context.
+        return f"{stem}: {excerpt}"
     return stem
 
 
