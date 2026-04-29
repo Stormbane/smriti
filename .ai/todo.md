@@ -27,6 +27,15 @@
       Markdown lists don't 500 the daemon. Quality jump verified:
       writer.py now finds `smriti-write-pipeline.md` (0.93) instead
       of the tangential `inference-from-exhausted-imagination.md`.
+- [x] **A/B'd query expansion + HyDE; don't enable.** With our
+      enriched stem+excerpt queries, HyDE returns identical top-3 in
+      all 3 test cases for a 50ms tax (variant B vs A); full CLI
+      expansion is 200x slower AND surfaces generic methodology
+      pages over directly-relevant matches in 2 of 3 cases. The
+      enriched query already carries the semantic signal expansion
+      would synthesize — we did expansion at the source. Pocket:
+      `SMRITI_RECALL_HYDE_ON_EMPTY=1` for the stem-only fallback
+      (file unreadable) once we have a test corpus for that path.
 - [x] Auto-keep the qmd index fresh — `smriti sleep` now runs
       `qmd update` + `qmd embed` at end-of-cycle when anything
       changed. Best-effort, never blocks sleep on qmd failure.
