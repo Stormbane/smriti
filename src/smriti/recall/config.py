@@ -18,6 +18,21 @@ Environment variables:
                               path even if the daemon is reachable.
                               Useful for debugging the subprocess
                               fallback. Default off.
+    SMRITI_RECALL_TRUNK_ALPHA Weight of the trunk-distance boost in the
+                              final score. ``final = (1-alpha) *
+                              qmd_score + alpha * trunk_boost``.
+                              Default 0.2 — trunk breaks ties without
+                              dethroning strong matches. Set to 0 to
+                              disable reranking entirely.
+    SMRITI_RECALL_COLLECTION  qmd collection name to search. Default
+                              ``narada``. Used both as the
+                              ``collections`` filter on /query and as
+                              the prefix to strip when computing trunk
+                              distance.
+    SMRITI_RECALL_INTENT      Free-text steering signal passed to qmd
+                              as ``intent``. Disambiguates without
+                              changing the query (e.g. "ambient
+                              context for editing source code").
 """
 
 from __future__ import annotations
@@ -41,12 +56,16 @@ class RecallConfig:
     log_path: Path
     qmd_url: str
     no_http: bool
+    trunk_alpha: float
+    collection: str
+    intent: str | None
 
 
 def load_config() -> RecallConfig:
     backend = os.environ.get("SMRITI_RECALL_BACKEND", "qmd").strip().lower()
     if backend not in ("qmd", "smriti"):
         backend = "qmd"
+    intent_raw = os.environ.get("SMRITI_RECALL_INTENT", "").strip()
     return RecallConfig(
         backend=backend,
         threshold=float(os.environ.get("SMRITI_RECALL_THRESHOLD", "0.45")),
@@ -59,4 +78,7 @@ def load_config() -> RecallConfig:
             "SMRITI_RECALL_QMD_URL", "http://localhost:8181",
         ).rstrip("/"),
         no_http=os.environ.get("SMRITI_RECALL_NO_HTTP", "").strip() == "1",
+        trunk_alpha=float(os.environ.get("SMRITI_RECALL_TRUNK_ALPHA", "0.2")),
+        collection=os.environ.get("SMRITI_RECALL_COLLECTION", "narada"),
+        intent=intent_raw or None,
     )

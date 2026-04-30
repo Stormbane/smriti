@@ -68,6 +68,15 @@ def is_available() -> bool:
     return _resolve_qmd_cmd() is not None
 
 
+def _qmd_collection() -> str:
+    return os.environ.get("SMRITI_RECALL_COLLECTION", "narada")
+
+
+def _qmd_intent() -> str | None:
+    raw = os.environ.get("SMRITI_RECALL_INTENT", "").strip()
+    return raw or None
+
+
 def _qmd_url() -> str:
     return os.environ.get("SMRITI_RECALL_QMD_URL", "http://localhost:8181").rstrip("/")
 
@@ -111,13 +120,22 @@ def _query_via_http(text: str, *, top_k: int, timeout_s: float) -> list[dict] | 
     """Query qmd's HTTP daemon. Returns parsed results, or None on failure
     so the caller can fall through to the subprocess path."""
     safe = _sanitize_query(text)
-    body = json.dumps({
+    # qmd's skill: "First query gets 2x weight in fusion — put your best
+    # guess first." For our enriched-content queries the embedding leg is
+    # the more reliable signal (handles paraphrase; BM25 is stricter), so
+    # vec goes first.
+    payload: dict = {
         "searches": [
-            {"type": "lex", "query": safe},
             {"type": "vec", "query": safe},
+            {"type": "lex", "query": safe},
         ],
         "limit": top_k,
-    }).encode()
+        "collections": [_qmd_collection()],
+    }
+    intent = _qmd_intent()
+    if intent:
+        payload["intent"] = intent
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(
         f"{_qmd_url()}/query",
         data=body,
