@@ -41,7 +41,21 @@ def run_recall(
         query, top_k=cfg.top_k, timeout_s=cfg.timeout_s, rerank=cfg.rerank,
     )
 
+    # Threshold answers "is this relevant?" (backend's job). Rerank
+    # answers "in what order?" (trunk's job). They are independent: filter
+    # first on the raw backend score so trunk re-blending can never
+    # demote a relevant match below the cutoff.
     relevant = [m for m in response.matches if m.score >= cfg.threshold]
+
+    # Trunk-distance rerank: blend backend relevance with how
+    # identity-adjacent each surviving result is. No-op at alpha=0.
+    if cfg.trunk_alpha > 0 and relevant:
+        from smriti.recall.rerank import rerank as _trunk_rerank
+        relevant = _trunk_rerank(
+            relevant,
+            alpha=cfg.trunk_alpha,
+            collection=cfg.collection,
+        )
 
     injected_chars = 0
     for m in relevant[:cfg.max_inject]:

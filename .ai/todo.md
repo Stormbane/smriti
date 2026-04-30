@@ -40,9 +40,15 @@
       `qmd update` + `qmd embed` at end-of-cycle when anything
       changed. Best-effort, never blocks sleep on qmd failure.
       Logged as `recall_index_refresh` in metrics.
-- [ ] Trunk-distance reranker on top of qmd's RRF candidates —
-      restores smriti's retrieval-quality property (canonical files
-      outrank journal noise) on top of qmd's speed.
+- [x] Trunk-distance reranker on top of qmd's RRF candidates —
+      `src/smriti/recall/rerank.py`. Blends `(1-alpha)*qmd_score +
+      alpha*trunk_boost` where `trunk_boost = 1/(1+depth)` plus a
+      manifest bump for `<dir>/<dir>.md` (mind/mind.md → 1.0 even at
+      depth 1). alpha defaults to 0.2; threshold filter runs *before*
+      rerank so trunk reordering can never demote a relevant match
+      below cutoff. Folded in qmd-skill recommendations: vec sent
+      first (2x RRF weight), `collections=["narada"]` filter,
+      optional `intent` field.
 - [ ] Document `SMRITI_RECALL_*` env vars in install.py final
       message and in the user-global CLAUDE.md template.
 - [ ] Tests for the recall package — fake the qmd subprocess and

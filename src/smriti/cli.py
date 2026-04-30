@@ -1403,13 +1403,16 @@ def _cmd_recall(args: argparse.Namespace) -> int:
         print(f"  qmd available:    {qmd_be.is_available()}")
         print(f"  qmd daemon up:    {daemon_up}  ({cfg.qmd_url})")
         print(f"  smriti available: {smriti_be.is_available()}")
-        print(f"threshold:   {cfg.threshold}")
-        print(f"top_k:       {cfg.top_k}")
-        print(f"max_inject:  {cfg.max_inject}")
-        print(f"timeout_s:   {cfg.timeout_s}")
-        print(f"rerank:      {cfg.rerank}")
-        print(f"no_http:     {cfg.no_http}")
-        print(f"log_path:    {cfg.log_path}  (exists: {cfg.log_path.exists()})")
+        print(f"threshold:    {cfg.threshold}")
+        print(f"top_k:        {cfg.top_k}")
+        print(f"max_inject:   {cfg.max_inject}")
+        print(f"timeout_s:    {cfg.timeout_s}")
+        print(f"qmd rerank:   {cfg.rerank}  (qmd's LLM reranker; off by default per #519)")
+        print(f"trunk_alpha:  {cfg.trunk_alpha}  (0 disables trunk-distance rerank)")
+        print(f"collection:   {cfg.collection}")
+        print(f"intent:       {cfg.intent or '(none)'}")
+        print(f"no_http:      {cfg.no_http}")
+        print(f"log_path:     {cfg.log_path}  (exists: {cfg.log_path.exists()})")
         return 0
     if sub == "stats":
         from smriti.recall.stats import main as stats_main
