@@ -38,6 +38,26 @@
       the only remaining gap. Serves as a regression check —
       anything in Phases 3-5 that breaks library agnosticism
       breaks this example.
+- [ ] **Phase 7: close the gaps Phase 6 surfaced.**
+  - [ ] Multi-turn conversation in `examples/python_agent.py` — thread
+        messages so each turn carries history, not single-shot. Five
+        lines but reveals whether `LLMRequest` needs a `messages`
+        field (today it has separate `system` + `user`).
+  - [ ] Tool-wiring demo in the example — give the agent a couple of
+        tools (`read_file`, `list_dir`), wrap each with ambient recall
+        the way the Claude Code PostToolUse hook does. Surfaces
+        whether smriti needs a `recall.wrap_tool(fn)` helper or
+        whether call-driven recall is fine as-is.
+  - [ ] Auto-journal on session end — agent writes a turn-by-turn
+        summary via `write_entry(branch="journal")` on `exit`. Makes
+        the example demonstrate smriti's bidirectional nature
+        (read + write), not just retrieval.
+  - [ ] `/provider list` slash command — show all known providers
+        and their availability/default models, so users can confirm
+        the wiring before sending real prompts.
+  - [ ] Document the example in `docs/INSTALL.md` (or new
+        `docs/USAGE.md`) — at minimum the four `SMRITI_LLM_PROVIDER`
+        invocations and what the user needs configured for each.
 
 ## Associative recall (qmd integration) -- top of stack
 
