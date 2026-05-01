@@ -57,6 +57,12 @@ Homepage = "https://github.com/Stormbane/narada"
 [tool.hatch.build.targets.wheel]
 packages = ["src/smriti"]
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: perf regression guards — run with `pytest -m slow`. Excluded from default runs to keep `pytest` fast.",
+]
+addopts = "-m 'not slow'"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
