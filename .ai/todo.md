@@ -16,10 +16,17 @@
       `SMRITI_LLM_PROVIDER`. `api_backend.call_api` and
       `judge._call_claude` kept as thin shims so the 7 existing
       call sites don't need touching.
-- [ ] Phase 3: repackage Claude-Code-specific code into
-      `src/smriti/integrations/claude_code/` (hooks, settings.json
-      patcher, CLAUDE.md template). Empty `_template/` package
-      documents the pattern for other harnesses.
+- [x] **Phase 3: repackage harness-specific hooks** — moved
+      `src/smriti/hooks/{associative_recall,precompact_capture}.py`
+      into `src/smriti/integrations/claude_code/hooks/` via
+      `git mv` (history preserved). Added
+      `src/smriti/integrations/_template/` with a docstring spec for
+      adding new harnesses. `scripts/install.py` HOOKS_SRC updated.
+      `docs/INSTALL.md` reference updated. `grep` for
+      `~/.claude` / `claude_code` returns zero hits in
+      `recall/`, `llm/`, `store/`. Settings/CLAUDE.md
+      patching stays in `scripts/install.py` for now — Phase 4
+      moves it into `integrations/claude_code/install.py`.
 - [ ] Phase 4: split install scripts. `scripts/install_core.py` =
       memory tree, mirrors, MCP server, qmd index, daemon.
       `scripts/install_claude_code.py` = hooks, settings, CLAUDE.md.
