@@ -27,10 +27,17 @@
 - [ ] Phase 5: `agent_template/AGENT.md` (generic content), CLAUDE.md
       becomes a thin wrapper. New "When to call `smriti_read`"
       section addresses the agent-initiated-recall gap.
-- [ ] Phase 6: `examples/python_agent.py` — runnable ~80-line
-      script using smriti as a library against any of {Claude API,
-      OpenAI API, Ollama}. Validates that 1-5 actually achieved
-      agnosticism.
+      **Prerequisite surfaced by Phase 6 sketch:** add
+      `smriti.wake.briefing(budget_chars=10000) -> str` so harnesses
+      other than Claude Code can compose the same system prompt.
+      Existing `narada/.smriti/wake.py` becomes a thin wrapper that
+      calls this and prints the result.
+- [x] **Phase 6 (sketch):** `examples/python_agent.py` —
+      smoke-tested end-to-end. Validates that Phase 1+2 library
+      APIs work without any harness; surfaced wake-as-library as
+      the only remaining gap. Serves as a regression check —
+      anything in Phases 3-5 that breaks library agnosticism
+      breaks this example.
 
 ## Associative recall (qmd integration) -- top of stack
 
