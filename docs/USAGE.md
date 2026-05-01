@@ -64,14 +64,19 @@ References: [Codex hooks docs](https://developers.openai.com/codex/hooks),
 Useful if you maintain your `config.toml` by hand and only want
 smriti's AGENTS.md drop-in.
 
-### Pending parity items
+### Ambient recall on file touches
 
-- **Ambient recall on file touches.** Claude Code wires
-  `PostToolUse` on `Read|Edit|Write`; the equivalent Codex hook
-  (`[[hooks.PostToolUse]]` matching `apply_patch` and friends) is not
-  yet wired by the installer. For now, Codex sessions rely on
-  agent-initiated recall — the "When to call `smriti_read`" section
-  in `AGENTS.md` is load-bearing here.
+`[[hooks.PostToolUse]]` matching `Edit|Write|apply_patch` is wired by
+the installer. After every patch, Codex calls
+`~/.codex/hooks/recall_hook.py` which parses the patch body for
+`*** Add/Update/Delete File:` directives, fires recall against each
+file, and emits matches as `hookSpecificOutput.additionalContext`
+JSON. Bash and `mcp__*` tools are skipped (too noisy for Bash;
+recursion guard for MCP).
+
+The hook is testable without Codex installed — see
+`tests/test_recall_hook.py` for synthetic-stdin examples that drive
+the same pipeline Codex uses in production.
 
 ---
 
