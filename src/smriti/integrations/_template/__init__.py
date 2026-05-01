@@ -21,7 +21,8 @@ Required pieces:
      - Register smriti's MCP server in the harness's MCP config path
        if it has one.
      - Write a harness-equivalent of ``CLAUDE.md`` from the generic
-       ``agent_template/AGENT.md`` (Phase 5).
+       ``smriti/templates/AGENT.md`` plus any harness-specific
+       addendum (see ``claude_code/install.py:_compose_claude_md``).
 
 3. ``payload.py`` (optional) — if the harness's hook stdin shape
    differs from Claude Code's ``{"tool_name": ..., "tool_input": ...}``,

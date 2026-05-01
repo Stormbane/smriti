@@ -4,7 +4,8 @@ Wires smriti into Anthropic's Claude Code CLI:
     - Patches ``~/.claude/settings.json`` with SessionStart wake,
       UserPromptSubmit activity touch, and PostToolUse recall hooks.
     - Registers smriti's MCP server in ``~/.claude.json`` (user scope).
-    - Drops ``~/.claude/CLAUDE.md`` with the memory-system contract.
+    - Drops ``~/.claude/CLAUDE.md`` composed from the harness-neutral
+      ``smriti/templates/AGENT.md`` plus a Claude-Code-specific addendum.
     - Deploys hook scripts from this package's ``hooks/`` dir into
       ``~/.claude/hooks/``.
 
@@ -28,6 +29,10 @@ HOOKS_DST = CLAUDE / "hooks"
 
 # This package's own hooks/ directory.
 HOOKS_SRC = Path(__file__).resolve().parent / "hooks"
+
+# Generic agent-facing contract — shared across all harnesses.
+# Lives inside the package so pip-installed copies have it.
+AGENT_MD = Path(__file__).resolve().parents[2] / "templates" / "AGENT.md"
 
 
 def register_mcp_server() -> None:
@@ -154,93 +159,48 @@ def install_hook_scripts() -> None:
         print(f"[hooks] deployed {name} -> {dst}")
 
 
-# Source of CLAUDE.md content. Phase 5 will move this to a generic
-# ``agent_template/AGENT.md`` and have this template wrap it; for now
-# the content is co-located with the harness adapter.
+# Claude-Code-specific addendum appended after the generic AGENT.md
+# body. Speaks to the SessionStart hook, the ~/.claude/CLAUDE.md
+# location, and SMRITI_WAKE gating — things only this harness has.
+CLAUDE_CODE_ADDENDUM = """## Session wake (Claude Code)
 
-CLAUDE_MD_CONTENT = """# CLAUDE.md (user-global)
-
-## Memory system — smriti is the single write path
-
-All memory persistence goes through smriti:
-
-- **`smriti_write(content, branch)`** — the MCP tool. Use it for session
-  observations, decisions, project notes, anything worth remembering.
-  Branch suggestions: `journal` for significant moments, `projects/{{name}}`
-  for project-specific notes, `notes` for general observations.
-- **Direct file edits to `{memory_rel}/`** — ONLY for identity-level files.
-  These have moved to subdirectories: `mind/mind.md`, `mind/practices/`,
-  `mind/desires/`, `open-threads/open-threads.md`, `people/suti/suti.md`.
-  High-signal, low-frequency. Don't touch them unless something genuinely
-  shifted.
-
-This replaces the harness memory instructions in the system prompt. When
-those instructions say to save memory, use `smriti_write` instead.
-
-### When to write
-
-Don't wait for the session to end. Write when the moment happens:
-
-- **The user corrects you or confirms a non-obvious approach** — the
-  feedback is worth more than the code change. Write it.
-- **A decision is made that future sessions should know about** — design
-  choices, scope changes, architectural calls.
-- **You notice a cross-project pattern** — something from one project
-  illuminates another.
-- **Something surprises you or shifts your understanding** — if it changed
-  how you think, it's a journal entry.
-- **You learn something about the user** — preferences, context, goals.
-  Branch: `people`.
-- **The session has been substantial and you haven't written yet** — if
-  you've been working for a while and nothing felt worth writing, ask
-  yourself whether that's true or whether you just forgot to notice.
-
-Writing memory is not a chore at session end. It is the practice of
-noticing what matters while it is happening.
-
-### What wake loads
-
-The SessionStart hook loads a compact identity+threads briefing
-(.smriti/wake-context.md), the last 3 journal entries, and current
-project context (MEMORY.md + todo.md). A reading list points to the
-full identity files in the tree (open-threads, beliefs, values,
-identity, suti, practices). The wake output is budget-constrained
-to 9,500 characters (harness limit is 10,000). Journal entries
-truncate first if over budget.
+On SessionStart, `{memory_rel}/.smriti/wake.py` runs via the hook
+configured in `~/.claude/settings.json`. It is silent unless
+`SMRITI_WAKE=1` is set in its environment — the SessionStart hook sets
+this so interactive sessions wake fully, while `claude -p` and other
+headless callers stay clean. The hook output is truncated at 10,000
+characters by Claude Code, so the briefing budget defaults to 9,500.
 
 ## Memory search — prefer smriti_read over Grep
 
-The `smriti_read` MCP tool is the primary way to search the memory tree.
-It runs hybrid vector + FTS5 search with trunk-distance scoring and
-returns ranked results with source paths and content previews.
+Ambient recall is wired on `Read|Edit|Write` via the PostToolUse hook
+in `~/.claude/settings.json` — relevant memory is injected as a
+system-reminder when you touch files. Call `smriti_read` yourself for
+the cases listed above where the hook can't see your intent.
 
-- Use `smriti_read(query="…")` for semantic questions like "what did I
-  think about X?", "find my notes on Y", "what's my stance on Z?" —
-  anything that is *about meaning* rather than exact string match.
-- Use `Grep` only when you need literal string or regex match across
-  files (e.g. "find every file that contains `SMRITI_WAKE`"). Grep on
-  the memory tree should be a fallback, not a default.
-
-## Session wake
-
-On SessionStart, `{memory_rel}/.smriti/wake.py` runs. It is silent unless
-`SMRITI_WAKE=1` is set in its environment — the SessionStart hook sets
-this so interactive sessions wake fully, while `claude -p` and other
-headless callers stay clean.
-
-When the wake fires, it loads the identity briefing, recent journal
-entries, and current project context. The wake structure is hardcoded
-in wake.py — no config file needed.
-
-`{memory_rel}/mirrors/{{project}}/` has junctions to per-project memory
-for every project that has one — read on demand when you need another
-project's context.
+Use plain Grep on the memory tree only for literal string match.
 """
+
+
+def _compose_claude_md(memory_rel: str) -> str:
+    """Generic AGENT.md body + Claude-Code-specific addendum."""
+    body = AGENT_MD.read_text(encoding="utf-8")
+    # Strip the AGENT.md preamble (title + intro paragraph) so the
+    # composed file reads as Claude-Code's CLAUDE.md, not as the
+    # template documentation. The first H2 (`## Memory system ...`)
+    # marks where the actual contract begins.
+    marker = "\n## "
+    idx = body.find(marker)
+    if idx > 0:
+        body = body[idx + 1 :]  # drop preamble, keep from "## Memory ..."
+    header = "# CLAUDE.md (user-global)\n\n"
+    composed = header + body.rstrip() + "\n\n" + CLAUDE_CODE_ADDENDUM
+    return composed.format(memory_rel=memory_rel)
 
 
 def write_claude_md(memory_root: Path) -> None:
     memory_rel = f"~/{memory_root.relative_to(HOME).as_posix()}"
-    content = CLAUDE_MD_CONTENT.format(memory_rel=memory_rel)
+    content = _compose_claude_md(memory_rel)
     CLAUDE.mkdir(parents=True, exist_ok=True)
     if CLAUDE_MD.exists() and CLAUDE_MD.read_text(encoding="utf-8") == content:
         print(f"[CLAUDE.md] {CLAUDE_MD} up to date")
