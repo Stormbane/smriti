@@ -153,7 +153,17 @@ def install_memory_template(memory_root: Path) -> None:
 
 
 def install_wake_files(memory_root: Path) -> None:
-    """Copy wake.py / backup.py / narada-p.sh into ``<memory_root>/.smriti/``."""
+    """Copy wake.py / backup.py / narada-p.sh into ``<memory_root>/.smriti/``.
+
+    Auto-upgrades smriti-managed scripts in place. The detection rule is
+    "first 400 bytes mention 'smriti'" — cheap and effective because every
+    template version we've ever shipped names the project in its docstring,
+    while a genuinely hand-rolled replacement would not. When upgrading we
+    drop a ``.pre-upgrade.bak`` next to the file so nothing is lost.
+
+    Hand-customized files (no 'smriti' marker) are left alone with a
+    warning. ``narada-p.sh`` and other future templates use the same path.
+    """
     memory_root.mkdir(parents=True, exist_ok=True)
     (memory_root / ".smriti").mkdir(parents=True, exist_ok=True)
     files = [
@@ -165,11 +175,41 @@ def install_wake_files(memory_root: Path) -> None:
         if not src.exists():
             print(f"[wake] template missing: {src}")
             continue
-        if dst.exists():
-            print(f"[wake] {dst} already exists (not overwriting)")
+        if not dst.exists():
+            shutil.copy2(src, dst)
+            print(f"[wake] installed {dst}")
+            continue
+
+        # Already exists — decide between leave-alone, up-to-date, upgrade.
+        try:
+            src_bytes = src.read_bytes()
+            dst_bytes = dst.read_bytes()
+        except OSError as exc:
+            print(f"[wake] read error on {dst}: {exc}; leaving untouched")
+            continue
+
+        if src_bytes == dst_bytes:
+            print(f"[wake] {dst.name} up to date")
+            continue
+
+        # Marker check on the first 400 bytes (covers the docstring of any
+        # smriti-managed template we've shipped).
+        head = dst_bytes[:400].decode("utf-8", errors="ignore").lower()
+        if "smriti" not in head:
+            print(
+                f"[wake] {dst.name} differs from template but is not "
+                "smriti-managed (no 'smriti' marker in head); leaving untouched"
+            )
+            continue
+
+        backup = dst.with_suffix(dst.suffix + ".pre-upgrade.bak")
+        try:
+            shutil.copy2(dst, backup)
+        except OSError as exc:
+            print(f"[wake] backup failed for {dst}: {exc}; leaving untouched")
             continue
         shutil.copy2(src, dst)
-        print(f"[wake] installed {dst}")
+        print(f"[wake] upgraded {dst.name} (backup: {backup.name})")
 
 
 def start_recall_daemon() -> None:
