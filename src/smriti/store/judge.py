@@ -13,21 +13,15 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# RateLimitExceeded now lives in smriti.llm.types and is re-exported
+# here so existing ``from smriti.store.judge import RateLimitExceeded``
+# imports keep working.
+from smriti.llm.types import RateLimitExceeded  # noqa: F401
+
 log = logging.getLogger(__name__)
-
-
-class RateLimitExceeded(RuntimeError):
-    """Raised when claude -p reports the subscription tier limit is hit.
-
-    Callers (sleep dispatcher) catch this and stop the cluster/cascade
-    loop cleanly so we don't burn through every queued task with the
-    same failure until the reset window.
-    """
 
 
 @dataclass
@@ -79,161 +73,46 @@ def executor_echo(
     return parent_content
 
 
-# ── Claude -p implementations ───────────────────────────────────────
-
-
-# Resolve the claude CLI absolute path once, so we bypass per-spawn PATH
-# lookup. Observed 2026-04-15 on Windows: the 3rd consecutive subprocess
-# call (summary + route + revise) would fail with FileNotFoundError
-# despite `claude` being on PATH. Using the absolute path avoids that.
-_CLAUDE_PATH: str | None = None
+# ── Legacy claude -p shim ───────────────────────────────────────────
+#
+# Kept for callers that import ``_call_claude`` / ``_get_claude_path``
+# directly (consolidate, router, api_backend's old fallback). The real
+# implementation now lives in ``smriti.llm.providers.claude_cli`` and is
+# selected through the provider factory.
 
 
 def _get_claude_path() -> str:
-    global _CLAUDE_PATH
-    if _CLAUDE_PATH is None:
-        import shutil
-        resolved = shutil.which("claude")
-        _CLAUDE_PATH = resolved if resolved else "claude"
-        if resolved:
-            log.debug("Resolved claude CLI to %s", resolved)
-    return _CLAUDE_PATH
+    from smriti.llm.providers.claude_cli import ClaudeCliProvider
+    return ClaudeCliProvider()._path()
 
 
 _DEFAULT_CLAUDE_TIMEOUT = int(os.environ.get("NARADA_CLAUDE_TIMEOUT", "300"))
 
 
 def _call_claude(prompt: str, *, timeout: int | None = None) -> tuple[str, CallMetadata]:
-    """Call ``claude -p`` and return ``(text, metadata)``.
+    """Legacy entry point — delegates to the LLM provider factory.
 
-    Parses the JSON response for token counts, cost, and model info.
-
-    Uses the absolute path to ``claude`` resolved once via shutil.which to
-    avoid per-spawn PATH lookup flakiness on Windows. Retries once on
-    FileNotFoundError as a last-resort safety net.
-
-    Long prompts are piped via stdin because Windows CreateProcess rejects
-    command lines above ~32KB with a misleading "filename too long" error.
-    A summarization prompt assembling a week's journal entries easily
-    exceeds that.
+    Kept so direct importers (consolidate, router) keep working. New
+    code should use ``smriti.llm.call_llm`` directly.
     """
-    if timeout is None:
-        timeout = _DEFAULT_CLAUDE_TIMEOUT
-    t0 = time.monotonic()
-    meta = CallMetadata()
-    claude = _get_claude_path()
+    from smriti.llm.providers.claude_cli import ClaudeCliProvider
+    from smriti.llm.types import LLMRequest
 
-    # Windows command-line limit is ~32KB. Use stdin for anything near that.
-    # Safe threshold: 8KB leaves plenty of headroom for the rest of the
-    # argv.
-    use_stdin = len(prompt) > 8000
-    if use_stdin:
-        cmd = [claude, "-p", "--output-format", "json"]
-        stdin_text: str | None = prompt
-    else:
-        cmd = [claude, "-p", prompt, "--output-format", "json"]
-        stdin_text = None
-
-    # SMRITI_INTERNAL=1 lets SessionEnd hooks (e.g. backup.py) skip on
-    # smriti-internal subprocesses; otherwise they fire per claude -p call
-    # and pile up, getting cancelled, which fails the LLM call.
-    env = {**os.environ, "SMRITI_INTERNAL": "1"}
-
-    def _spawn() -> subprocess.CompletedProcess:
-        # Force UTF-8 for I/O. Windows defaults to cp1252 which fails on
-        # unicode arrows, em-dashes, devanagari, etc. that regularly
-        # appear in journal content.
-        return subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
-            input=stdin_text, env=env,
-            encoding="utf-8", errors="replace",
-        )
-
-    try:
-        try:
-            result = _spawn()
-        except FileNotFoundError:
-            log.warning("claude CLI not found on first try; retrying once")
-            time.sleep(0.5)
-            try:
-                result = _spawn()
-            except FileNotFoundError:
-                raise RuntimeError(
-                    f"claude CLI not found at '{claude}'. Is Claude Code installed?"
-                )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"claude -p timed out after {timeout}s")
-
-    meta.elapsed_ms = int((time.monotonic() - t0) * 1000)
-
-    if result.returncode != 0:
-        stderr = (result.stderr or "")[:500]
-        stdout_full = result.stdout or ""
-        stdout = stdout_full[:500]
-        # Detect Claude Code subscription rate-limit so callers can stop
-        # the dispatcher cleanly instead of failing every subsequent task.
-        # Smriti runs claude -p exclusively when ANTHROPIC_API_KEY is unset;
-        # once the subscription tier limit is hit, all further calls fail
-        # the same way until the reset window.
-        rate_markers = (
-            "rate limit", "rate_limit", "5-hour limit",
-            "usage limit", "quota", "limit reached", "limit reset",
-        )
-        # Try parsing stdout as JSON — claude -p emits its error in JSON
-        # form when --output-format=json is set. On rate-limit the JSON
-        # may have ``is_error: true`` and a ``result`` field with the
-        # human-readable message.
-        rl_signal = ""
-        try:
-            data = json.loads(stdout_full) if stdout_full.strip() else {}
-        except json.JSONDecodeError:
-            data = {}
-        if isinstance(data, dict):
-            blob = " ".join(
-                str(v) for v in (
-                    data.get("result"), data.get("error"),
-                    data.get("message"), data.get("subtype"),
-                ) if v
-            ).lower()
-            if data.get("is_error") and blob:
-                if any(m in blob for m in rate_markers):
-                    rl_signal = blob[:300]
-        if not rl_signal:
-            combined = (stderr + " " + stdout).lower()
-            if any(m in combined for m in rate_markers):
-                rl_signal = (stderr or stdout)[:300]
-        if rl_signal:
-            raise RateLimitExceeded(rl_signal)
-        # Fallback: exit 1 with all-blank output is the silent rate-limit
-        # signature we have empirically observed.
-        if result.returncode == 1 and not stderr.strip() and not stdout.strip():
-            raise RateLimitExceeded("exit 1 with no output (suspected limit)")
-        # Include stdout snippet in error so future debugging sees what
-        # claude -p actually wrote — silent stderr was the gap that hid
-        # the JSON-on-stdout case from earlier detection.
-        snippet = stderr or stdout[:200] or "(no output)"
-        raise RuntimeError(f"claude -p exit {result.returncode}: {snippet}")
-
-    if not result.stdout.strip():
-        raise RuntimeError("claude -p returned empty output")
-
-    # Parse JSON response
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return result.stdout.strip(), meta
-
-    # Extract metadata from claude -p JSON response
-    meta.model = data.get("model", "")
-    meta.tokens_in = data.get("input_tokens", 0)
-    meta.tokens_out = data.get("output_tokens", 0)
-    meta.cost_usd = data.get("total_cost_usd", 0.0)
-
-    # Extract the text content
-    text = data.get("result", "")
-    if not text:
-        text = data.get("content", data.get("text", result.stdout.strip()))
-    return text, meta
+    provider = ClaudeCliProvider()
+    request = LLMRequest(
+        system="", user=prompt,
+        max_tokens=4096,
+        timeout_s=timeout if timeout is not None else _DEFAULT_CLAUDE_TIMEOUT,
+    )
+    response = provider.call(request)
+    meta = CallMetadata(
+        model=response.model,
+        tokens_in=response.tokens_in,
+        tokens_out=response.tokens_out,
+        cost_usd=response.cost_usd,
+        elapsed_ms=response.elapsed_ms,
+    )
+    return response.text, meta
 
 
 def judge_via_claude(
