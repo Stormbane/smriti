@@ -1,9 +1,81 @@
 # smriti — Library Usage
 
-This document covers using smriti **as a Python library**, independent
-of any agent harness. For the Claude Code install path (SessionStart
-hook, `~/.claude/CLAUDE.md`, MCP server registration), see
+This document covers:
+
+- **Library use** — wiring smriti into a custom Python agent (later
+  sections). Independent of any agent harness.
+- **Codex CLI integration** — the second supported harness alongside
+  Claude Code (see below).
+
+For the Claude Code install path (SessionStart hook,
+`~/.claude/CLAUDE.md`, MCP server registration), see
 [INSTALL.md](INSTALL.md).
+
+---
+
+## Codex CLI integration
+
+`smriti` ships a Codex adapter that wires identity into every Codex
+session at the protocol level — same shape as Claude Code, different
+config-file format and hook-output framing.
+
+### What gets installed
+
+Run::
+
+    pip install -e '.[codex]'    # adds tomli-w for TOML writing
+    python scripts/install.py --harness codex
+
+This sets up:
+
+- `[features] codex_hooks = true` in `~/.codex/config.toml`.
+- `[[hooks.SessionStart]]` pointing at `~/.narada/.smriti/wake.py`
+  with `SMRITI_WAKE_FRAMING=codex-json`. Codex runs this **before the
+  first user turn** and appends the briefing JSON
+  (`hookSpecificOutput.additionalContext`) to the developer context.
+  The agent has no opportunity to skip it — identity loads at the
+  protocol level, not by request.
+- `[mcp_servers.smriti]` registering the same MCP server Claude Code
+  uses, so `smriti_read` / `smriti_write` are first-class tools.
+- `~/.codex/AGENTS.md` composed from the shared
+  `smriti/templates/AGENT.md` plus a Codex-specific addendum (about
+  AGENTS.md precedence rules, the 32 KiB project-doc cap, the
+  SessionStart force-injection mechanism).
+
+Re-running the install is idempotent. Existing config keys are
+preserved; a `.toml.bak` is dropped before any write.
+
+### Force-injection guarantee
+
+The wake briefing isn't request-shaped — it's hook-shaped. Codex's
+SessionStart hook fires under Codex's own process before the model
+sees turn 1, and the JSON output is merged into the developer
+context. Same mechanism Claude Code uses, just over Codex's hooks
+spec.
+
+References: [Codex hooks docs](https://developers.openai.com/codex/hooks),
+[Codex config reference](https://developers.openai.com/codex/config-reference).
+
+### Skip flags
+
+    python scripts/install.py --harness codex --skip-config
+    # writes AGENTS.md only, leaves config.toml untouched
+
+Useful if you maintain your `config.toml` by hand and only want
+smriti's AGENTS.md drop-in.
+
+### Pending parity items
+
+- **Ambient recall on file touches.** Claude Code wires
+  `PostToolUse` on `Read|Edit|Write`; the equivalent Codex hook
+  (`[[hooks.PostToolUse]]` matching `apply_patch` and friends) is not
+  yet wired by the installer. For now, Codex sessions rely on
+  agent-initiated recall — the "When to call `smriti_read`" section
+  in `AGENTS.md` is load-bearing here.
+
+---
+
+## Library use
 
 The harness-agnostic surface is in three packages:
 
