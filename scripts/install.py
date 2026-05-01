@@ -63,7 +63,9 @@ CLAUDE_CONFIG = HOME / ".claude.json"  # MCP server registry
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = REPO_ROOT / "narada"  # wake.md, wake.py, narada-p.sh templates
 MEMORY_TEMPLATE = REPO_ROOT / "memory_template"  # identity tree skeleton
-HOOKS_SRC = REPO_ROOT / "src" / "smriti" / "hooks"  # canonical hook scripts
+HOOKS_SRC = (
+    REPO_ROOT / "src" / "smriti" / "integrations" / "claude_code" / "hooks"
+)  # canonical Claude Code hook scripts (post-Phase-3 location)
 HOOKS_DST = CLAUDE / "hooks"  # deployed copies
 
 DEFAULT_MEMORY_ROOT = HOME / ".narada"

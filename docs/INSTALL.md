@@ -234,7 +234,7 @@ becomes `{basename}-narada`.
 **1. Copy the hook script** to the user hooks directory:
 
 ```bash
-cp src/smriti/hooks/precompact_capture.py ~/.claude/hooks/precompact_capture.py
+cp src/smriti/integrations/claude_code/hooks/precompact_capture.py ~/.claude/hooks/precompact_capture.py
 ```
 
 **2. Wire it** in `~/.claude/settings.json` under `hooks.PreCompact`:
