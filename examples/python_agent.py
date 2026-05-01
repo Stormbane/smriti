@@ -10,6 +10,10 @@ Demonstrates smriti as a library, not as a Claude Code harness:
       of event-driven.
     - Writes go through ``smriti.store.writer.write_entry`` so anything
       the agent journals is immediately searchable on the next turn.
+    - System prompt is composed from the harness-neutral AGENT.md
+      contract (in the package) plus the live wake briefing assembled
+      by ``smriti.wake.briefing`` — the same identity + threads +
+      project context that Claude Code's SessionStart hook injects.
 
 Run::
 
@@ -34,22 +38,38 @@ REPL:
 
 from __future__ import annotations
 
+import os
 import sys
 import time
+from pathlib import Path
 
 from smriti.llm import call_llm, get_provider
 from smriti.recall import run_recall
 from smriti.store.writer import write_entry
+from smriti.wake import briefing
+
+# AGENT.md ships inside the package — same file the Claude Code adapter
+# wraps into ~/.claude/CLAUDE.md.
+import smriti as _smriti
+AGENT_MD = Path(_smriti.__file__).parent / "templates" / "AGENT.md"
 
 
-SYSTEM_PROMPT = (
-    "You are an agent with persistent local memory via smriti. Each user "
-    "turn is preceded by ambient recall — markdown chunks from the user's "
-    "memory tree that an embedding model judged relevant. Use them to "
-    "ground your reply. Be honest when recall produced nothing relevant; "
-    "do not invent context. When the user shares something worth "
-    "remembering, suggest they /write it."
-)
+def _build_system_prompt(memory_root: Path) -> str:
+    """Compose AGENT.md contract + live wake briefing.
+
+    Mirrors what Claude Code does: drop the memory contract via
+    ~/.claude/CLAUDE.md, then load the wake briefing on SessionStart.
+    Here we concatenate both into a single system prompt because
+    plain LLM APIs have no SessionStart equivalent.
+    """
+    memory_rel = (
+        f"~/{memory_root.relative_to(Path.home()).as_posix()}"
+        if memory_root.is_relative_to(Path.home())
+        else str(memory_root)
+    )
+    contract = AGENT_MD.read_text(encoding="utf-8").format(memory_rel=memory_rel)
+    wake = briefing(memory_root=memory_root)
+    return f"{contract}\n\n---\n\n{wake}"
 
 
 def _format_recall(matches) -> str:
@@ -74,8 +94,11 @@ def _handle_write(rest: str) -> None:
 
 def main() -> int:
     p = get_provider()
+    memory_root = Path(os.environ.get("SMRITI_ROOT", str(Path.home() / ".narada")))
+    system_prompt = _build_system_prompt(memory_root)
     print(f"smriti python agent — provider: {p.name}, "
           f"model: {p.default_model('executor') or '(provider-default)'}")
+    print(f"  memory_root: {memory_root}  ({len(system_prompt)} char system prompt)")
     print("type 'exit' to quit, '/write <branch> <text>' to journal, "
           "'/provider' to show config.\n")
 
@@ -100,7 +123,7 @@ def main() -> int:
         recall = run_recall(user)
         recall_ms = int((time.monotonic() - t0) * 1000)
 
-        system = SYSTEM_PROMPT
+        system = system_prompt
         block = _format_recall(recall.matches)
         if block:
             system = f"{system}\n\n{block}"

@@ -37,14 +37,21 @@
       back-compat). `--harness=none` runs core only — verified end-
       to-end. New harnesses register via
       `smriti.integrations.<name>.install`.
-- [ ] Phase 5: `agent_template/AGENT.md` (generic content), CLAUDE.md
-      becomes a thin wrapper. New "When to call `smriti_read`"
-      section addresses the agent-initiated-recall gap.
-      **Prerequisite surfaced by Phase 6 sketch:** add
-      `smriti.wake.briefing(budget_chars=10000) -> str` so harnesses
-      other than Claude Code can compose the same system prompt.
-      Existing `narada/.smriti/wake.py` becomes a thin wrapper that
-      calls this and prints the result.
+- [x] **Phase 5: AGENT.md generic + wake-as-library** —
+      `src/smriti/templates/AGENT.md` ships with the package and
+      carries the harness-neutral memory contract; new "When to call
+      `smriti_read`" section closes the agent-initiated-recall gap.
+      `~/.claude/CLAUDE.md` is now composed at install time from
+      AGENT.md + a small Claude-Code-specific addendum (SessionStart
+      hook details, SMRITI_WAKE gating). `smriti.wake.briefing()`
+      extracted as a pure-assembly library function so non-Claude
+      harnesses can build the same identity payload;
+      `narada/.smriti/wake.py` slimmed from 322→90 lines as a thin
+      wrapper around it. `examples/python_agent.py` updated to
+      compose its system prompt from AGENT.md + `briefing()` —
+      validates the library contract end-to-end (14k char prompt
+      assembled from package data + memory tree, no Claude-Code
+      coupling). Tests: 100 passed, 1 pre-existing unrelated.
 - [x] **Phase 6 (sketch):** `examples/python_agent.py` —
       smoke-tested end-to-end. Validates that Phase 1+2 library
       APIs work without any harness; surfaced wake-as-library as
