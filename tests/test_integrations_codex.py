@@ -1,0 +1,194 @@
+"""Tests for src/smriti/integrations/codex/install.py.
+
+Idempotent TOML patching of ~/.codex/config.toml is the Codex-side
+analog of the Claude Code JSON patching. Same risks: missed entries,
+duplicates piling up on re-run, user keys clobbered.
+"""
+
+from __future__ import annotations
+
+import tomllib
+from pathlib import Path
+
+import pytest
+
+from smriti.integrations.codex import install as codex_install
+
+
+@pytest.fixture
+def fake_codex_home(tmp_path, monkeypatch):
+    """Redirect every ~/.codex/* path the install module uses."""
+    home = tmp_path
+    codex_dir = home / ".codex"
+    codex_dir.mkdir()
+
+    monkeypatch.setattr(codex_install, "HOME", home)
+    monkeypatch.setattr(codex_install, "CODEX", codex_dir)
+    monkeypatch.setattr(codex_install, "CONFIG_TOML", codex_dir / "config.toml")
+    monkeypatch.setattr(codex_install, "AGENTS_MD", codex_dir / "AGENTS.md")
+    monkeypatch.setattr(codex_install, "HOOKS_DST", codex_dir / "hooks")
+    return home
+
+
+def _read_toml(path: Path) -> dict:
+    return tomllib.loads(path.read_text(encoding="utf-8"))
+
+
+# --- patch_config_toml --------------------------------------------------
+
+class TestPatchConfigTomlFromScratch:
+    def test_writes_features_hooks_and_mcp(self, fake_codex_home):
+        memory_root = fake_codex_home / ".narada"
+        codex_install.patch_config_toml(memory_root)
+
+        data = _read_toml(fake_codex_home / ".codex" / "config.toml")
+        assert data["features"]["codex_hooks"] is True
+        assert "SessionStart" in data["hooks"]
+        assert "PostToolUse" in data["hooks"]
+        assert data["mcp_servers"]["smriti"] == {
+            "command": "python",
+            "args": ["-m", "smriti.mcp_server"],
+        }
+
+    def test_session_start_uses_codex_json_framing(self, fake_codex_home):
+        codex_install.patch_config_toml(fake_codex_home / ".narada")
+        data = _read_toml(fake_codex_home / ".codex" / "config.toml")
+        ss_cmd = data["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        assert 'SMRITI_WAKE_FRAMING="codex-json"' in ss_cmd
+        assert "wake.py" in ss_cmd
+
+    def test_post_tool_use_matcher_includes_apply_patch(self, fake_codex_home):
+        codex_install.patch_config_toml(fake_codex_home / ".narada")
+        data = _read_toml(fake_codex_home / ".codex" / "config.toml")
+        post = data["hooks"]["PostToolUse"][0]
+        # Codex's matcher accepts apply_patch's aliases (Edit, Write).
+        assert "apply_patch" in post["matcher"]
+        cmd = post["hooks"][0]["command"]
+        assert 'SMRITI_RECALL_FRAMING="codex-json"' in cmd
+        assert "recall_hook.py" in cmd
+
+    def test_session_start_matcher_is_startup_or_resume(self, fake_codex_home):
+        codex_install.patch_config_toml(fake_codex_home / ".narada")
+        data = _read_toml(fake_codex_home / ".codex" / "config.toml")
+        assert data["hooks"]["SessionStart"][0]["matcher"] == "startup|resume"
+
+
+class TestPatchConfigTomlMergeBehavior:
+    def test_preserves_existing_user_keys(self, fake_codex_home):
+        # Top-level bare keys must come BEFORE any [section] header — TOML
+        # scoping drops them into the most recent section otherwise.
+        config = fake_codex_home / ".codex" / "config.toml"
+        config.write_text(
+            'unrelated_top_level = 42\n\n'
+            '[some_user_setting]\nkey = "value"\n',
+            encoding="utf-8",
+        )
+
+        codex_install.patch_config_toml(fake_codex_home / ".narada")
+
+        data = _read_toml(config)
+        assert data["some_user_setting"]["key"] == "value"
+        assert data["unrelated_top_level"] == 42
+        # And our keys are still present.
+        assert data["features"]["codex_hooks"] is True
+
+    def test_idempotent_re_run_no_duplicate_hooks(self, fake_codex_home, capsys):
+        memory_root = fake_codex_home / ".narada"
+        codex_install.patch_config_toml(memory_root)
+        capsys.readouterr()
+
+        codex_install.patch_config_toml(memory_root)
+        out = capsys.readouterr().out
+        assert "already wired" in out  # SessionStart
+        # And no duplicates in the array.
+        data = _read_toml(fake_codex_home / ".codex" / "config.toml")
+        assert len(data["hooks"]["SessionStart"]) == 1
+        assert len(data["hooks"]["PostToolUse"]) == 1
+
+    def test_idempotent_when_mcp_already_registered(self, fake_codex_home, capsys):
+        codex_install.patch_config_toml(fake_codex_home / ".narada")
+        capsys.readouterr()
+        codex_install.patch_config_toml(fake_codex_home / ".narada")
+        out = capsys.readouterr().out
+        assert "already registered" in out
+
+    def test_creates_backup_before_overwriting(self, fake_codex_home):
+        config = fake_codex_home / ".codex" / "config.toml"
+        config.write_text("[orig]\nval = 1\n", encoding="utf-8")
+
+        codex_install.patch_config_toml(fake_codex_home / ".narada")
+
+        backup = config.with_suffix(".toml.bak")
+        assert backup.exists()
+        assert "[orig]" in backup.read_text(encoding="utf-8")
+
+    def test_does_not_back_up_when_no_change(self, fake_codex_home):
+        memory_root = fake_codex_home / ".narada"
+        codex_install.patch_config_toml(memory_root)
+        # Drop any backup from the first run.
+        backup = (fake_codex_home / ".codex" / "config.toml.bak")
+        if backup.exists():
+            backup.unlink()
+
+        # Re-run is a no-op: should not create another backup.
+        codex_install.patch_config_toml(memory_root)
+        assert not backup.exists()
+
+
+# --- write_agents_md ----------------------------------------------------
+
+class TestWriteAgentsMd:
+    def test_writes_composed_doc_with_codex_addendum(self, fake_codex_home):
+        codex_install.write_agents_md(fake_codex_home / ".narada")
+        out = (fake_codex_home / ".codex" / "AGENTS.md").read_text(encoding="utf-8")
+
+        assert out.startswith("# AGENTS.md (user-global)")
+        # AGENT.md body present.
+        assert "## Memory system" in out
+        # Codex-specific addendum present.
+        assert "Session wake (Codex CLI)" in out
+        # PostToolUse parity language present (added in Phase 8b).
+        assert "ambient recall is wired" in out
+
+    def test_size_under_codex_cap(self, fake_codex_home):
+        """Codex truncates project-doc loading at 32 KiB."""
+        codex_install.write_agents_md(fake_codex_home / ".narada")
+        size = (fake_codex_home / ".codex" / "AGENTS.md").stat().st_size
+        assert size < 32_000
+
+    def test_idempotent_when_unchanged(self, fake_codex_home, capsys):
+        codex_install.write_agents_md(fake_codex_home / ".narada")
+        capsys.readouterr()
+        codex_install.write_agents_md(fake_codex_home / ".narada")
+        out = capsys.readouterr().out
+        assert "up to date" in out
+
+
+# --- run_codex orchestrator ---------------------------------------------
+
+class TestRunCodex:
+    def test_full_run_creates_all_artifacts(self, fake_codex_home):
+        codex_install.run_codex(fake_codex_home / ".narada")
+        codex = fake_codex_home / ".codex"
+        assert (codex / "config.toml").exists()
+        assert (codex / "AGENTS.md").exists()
+        assert (codex / "hooks" / "recall_hook.py").exists()
+
+    def test_skip_config_only_writes_agents_md_and_hooks(self, fake_codex_home):
+        codex_install.run_codex(fake_codex_home / ".narada", skip_config=True)
+        codex = fake_codex_home / ".codex"
+        assert not (codex / "config.toml").exists()
+        assert (codex / "AGENTS.md").exists()
+        # Hooks still deployed.
+        assert (codex / "hooks" / "recall_hook.py").exists()
+
+    def test_idempotent_full_run(self, fake_codex_home):
+        codex_install.run_codex(fake_codex_home / ".narada")
+        # Snapshot config + AGENTS.md content.
+        config_before = (fake_codex_home / ".codex" / "config.toml").read_bytes()
+        agents_before = (fake_codex_home / ".codex" / "AGENTS.md").read_bytes()
+
+        codex_install.run_codex(fake_codex_home / ".narada")
+
+        assert (fake_codex_home / ".codex" / "config.toml").read_bytes() == config_before
+        assert (fake_codex_home / ".codex" / "AGENTS.md").read_bytes() == agents_before
