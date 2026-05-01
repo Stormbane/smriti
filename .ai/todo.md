@@ -7,6 +7,26 @@
 
 ## Model & harness agnosticism
 
+- [x] **Phase 9: install-script harness parity.** Three fixes that
+      surfaced after the live Codex install:
+      (1) `install_wake_files` now upgrades smriti-managed wake.py
+      shims in place. Detection rule: first 400 bytes contain
+      "smriti". Stale templates get a `.pre-upgrade.bak` and the
+      new shim. Hand-customized files (no marker) are left alone
+      with a warning. Smoke-tested across fresh / identical /
+      stale-managed / hand-customized cases.
+      (2) `scripts/setup_project.py` reworked: new
+      `--harness {claude_code|codex|both}` flag (default both),
+      Claude-Code auto-memory junction guarded behind that flag
+      AND `~/.claude/` existing, latent `Path.is_junction()` bug
+      fixed via a real reparse-point check, POSIX symlink fallback
+      added. Smoke-tested across all three harness modes.
+      (3) New `project_template/AGENTS.md` sibling to CLAUDE.md
+      so Codex projects get a project-level override that
+      delegates the smriti memory contract to the user-global
+      `~/.codex/AGENTS.md` (Codex concatenates them root-first).
+      `setup_project.py` copies CLAUDE.md, AGENTS.md, or both per
+      `--harness`. Tests: 117 passed.
 - [x] **Phase 8: Codex CLI adapter + shared integration module.**
       New `src/smriti/integrations/common/`: `mcp_spec.py` (single
       source of truth for the MCP server invocation +
