@@ -16,5 +16,9 @@ from __future__ import annotations
 from smriti.recall.config import RecallConfig, load_config
 from smriti.recall.types import RecallMatch
 from smriti.recall.runner import run_recall
+from smriti.recall.wrap import ToolResult, wrap_tool
 
-__all__ = ["RecallConfig", "RecallMatch", "load_config", "run_recall"]
+__all__ = [
+    "RecallConfig", "RecallMatch", "load_config", "run_recall",
+    "ToolResult", "wrap_tool",
+]

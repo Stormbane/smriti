@@ -48,7 +48,8 @@ class OllamaProvider:
         }
         if request.system:
             body["messages"].append({"role": "system", "content": request.system})
-        body["messages"].append({"role": "user", "content": request.user})
+        for m in request.turns():
+            body["messages"].append({"role": m.role, "content": m.content})
         if request.response_format == "json":
             body["format"] = "json"
 
