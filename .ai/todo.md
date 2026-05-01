@@ -5,6 +5,33 @@
      the codebase. Session-level task tracking uses Claude Code's TaskCreate.
      Format: ## Milestone Name / - [ ] Task description / - [x] Completed task -->
 
+## Model & harness agnosticism
+
+- [x] **Phase 1: trunk-distance reranker + qmd-skill quality fold-in.**
+- [x] **Phase 2: LLM provider abstraction** — new `src/smriti/llm/`
+      package with `LLMProvider` protocol, factory, four shipped
+      providers (anthropic_api with prompt caching, claude_cli,
+      openai_api, ollama). Auto-detect prefers anthropic_api when
+      `ANTHROPIC_API_KEY` is set, else claude_cli. Override with
+      `SMRITI_LLM_PROVIDER`. `api_backend.call_api` and
+      `judge._call_claude` kept as thin shims so the 7 existing
+      call sites don't need touching.
+- [ ] Phase 3: repackage Claude-Code-specific code into
+      `src/smriti/integrations/claude_code/` (hooks, settings.json
+      patcher, CLAUDE.md template). Empty `_template/` package
+      documents the pattern for other harnesses.
+- [ ] Phase 4: split install scripts. `scripts/install_core.py` =
+      memory tree, mirrors, MCP server, qmd index, daemon.
+      `scripts/install_claude_code.py` = hooks, settings, CLAUDE.md.
+      `install.py` becomes a `--harness` dispatcher.
+- [ ] Phase 5: `agent_template/AGENT.md` (generic content), CLAUDE.md
+      becomes a thin wrapper. New "When to call `smriti_read`"
+      section addresses the agent-initiated-recall gap.
+- [ ] Phase 6: `examples/python_agent.py` — runnable ~80-line
+      script using smriti as a library against any of {Claude API,
+      OpenAI API, Ollama}. Validates that 1-5 actually achieved
+      agnosticism.
+
 ## Associative recall (qmd integration) -- top of stack
 
 - [x] Pluggable backend package `src/smriti/recall/` (qmd default,
