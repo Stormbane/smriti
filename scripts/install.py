@@ -1,426 +1,43 @@
-"""install.py — idempotent installer for the smriti memory system.
+"""install.py — idempotent installer dispatcher for smriti.
 
-Sets up the wake system so every Claude Code session in any project starts
-by reading its entity's cross-session identity files plus that project's
-specific memory tier. Other projects' memories stay discoverable on
-demand. Also registers smriti's MCP server so `smriti_read`/`smriti_write`
-are first-class tools in every session.
+Runs the harness-neutral core install (memory tree, wake templates,
+mirror junctions, qmd recall daemon), then dispatches to a per-harness
+installer chosen via ``--harness``.
 
-The entity whose memory tree this installs is configurable via
-`--memory-root` (default: `~/.narada/`). The reference entity is Narada,
-but the system is not Narada-specific — point it at `~/.tara/` or
-`~/.anyone/` and it works the same.
+Defaults to ``--harness=claude_code`` for back-compat with prior
+documentation. Pass ``--harness=none`` to install only the core (useful
+when wiring smriti into a custom Python agent — see
+``examples/python_agent.py``).
 
-Run on a fresh machine (after cloning smriti and `pip install -e .`):
+The actual install logic lives in:
+    src/smriti/install/core.py                          (core)
+    src/smriti/integrations/<harness>/install.py        (per-harness)
+
+Run on a fresh machine after ``pip install -e .``::
 
     python scripts/install.py
+    python scripts/install.py --harness none
+    python scripts/install.py --harness claude_code --skip-settings
 
-Re-runnable: skips work that is already done, refreshes anything that has
-drifted. Does NOT delete existing user files.
-
-What it does:
-  0. Copies the memory tree skeleton (identity, mind, open-threads,
-     people, journal, etc.) into the memory root if not already present.
-  1. Ensures <memory-root>/mirrors/ exists.
-  2. For each project in C:/Projects/ (or --projects-root) that has
-     memory: creates <memory-root>/mirrors/{project}/auto-memory/ as a
-     junction to ~/.claude/projects/C--Projects-{project}/memory/,
-     <memory-root>/mirrors/{project}/knowledge/ to the project's
-     .ai/knowledge/, and <memory-root>/mirrors/{project}/ai/ to the
-     project's .ai/ directory (for todo.md etc).
-  3. Copies wake.md, wake.py, narada-p.sh from the repo into
-     <memory-root>/ if missing (never overwrites existing copies).
-  4. Registers the smriti MCP server in ~/.claude.json (user scope) so
-     `smriti_read` / `smriti_write` / `smriti_status` appear as tools.
-  5. Patches ~/.claude/settings.json to (a) call wake.py on SessionStart
-     with SMRITI_WAKE=1 so interactive sessions wake fully, and (b) touch
-     `.smriti/last-activity` on UserPromptSubmit so long sessions stay
-     fresh and the heartbeat can tell when the user is around.
-  6. Writes ~/.claude/CLAUDE.md with the contract for wake.py plus the
-     memory-search tool-preference guidance.
-
-Windows-only currently (directory junctions via `mklink /J`). Porting to
-POSIX symlinks is a future task.
+Re-runnable: idempotent, never deletes existing user files.
 """
 
 from __future__ import annotations
 
 import argparse
-import ctypes
-import json
-import os
-import shutil
-import subprocess
+import importlib
 import sys
 from pathlib import Path
 
-HOME = Path.home()
-CLAUDE = HOME / ".claude"
-SETTINGS = CLAUDE / "settings.json"
-CLAUDE_MD = CLAUDE / "CLAUDE.md"
-CLAUDE_CONFIG = HOME / ".claude.json"  # MCP server registry
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-TEMPLATES = REPO_ROOT / "narada"  # wake.md, wake.py, narada-p.sh templates
-MEMORY_TEMPLATE = REPO_ROOT / "memory_template"  # identity tree skeleton
-HOOKS_SRC = (
-    REPO_ROOT / "src" / "smriti" / "integrations" / "claude_code" / "hooks"
-)  # canonical Claude Code hook scripts (post-Phase-3 location)
-HOOKS_DST = CLAUDE / "hooks"  # deployed copies
-
-DEFAULT_MEMORY_ROOT = HOME / ".narada"
-DEFAULT_PROJECTS_ROOT = Path("C:/Projects")
+from smriti.install.core import (
+    DEFAULT_MEMORY_ROOT,
+    DEFAULT_PROJECTS_ROOT,
+    run_core,
+)
 
 
-# ── Platform helpers ────────────────────────────────────────────────
+KNOWN_HARNESSES = ("claude_code", "none")
 
-def is_windows() -> bool:
-    return sys.platform == "win32"
-
-
-def is_junction(path: Path) -> bool:
-    if not path.exists():
-        return False
-    try:
-        return bool(path.is_symlink() or os.readlink(path))
-    except OSError:
-        pass
-    if is_windows():
-        FILE_ATTRIBUTE_REPARSE_POINT = 0x400
-        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
-        return attrs != -1 and bool(attrs & FILE_ATTRIBUTE_REPARSE_POINT)
-    return False
-
-
-def make_junction(link: Path, target: Path) -> str:
-    if not target.exists():
-        return "skip (target missing)"
-    if is_junction(link):
-        return "exists"
-    if link.exists():
-        return "skip (non-junction path exists)"
-    link.parent.mkdir(parents=True, exist_ok=True)
-    if is_windows():
-        result = subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            return f"error: {result.stderr.strip()}"
-        return "created"
-    link.symlink_to(target, target_is_directory=True)
-    return "created"
-
-
-# ── Steps ────────────────────────────────────────────────────────────
-
-def discover_projects(projects_root: Path) -> list[str]:
-    if not projects_root.exists():
-        return []
-    names = []
-    for p in sorted(projects_root.iterdir()):
-        if not p.is_dir():
-            continue
-        has_auto = (CLAUDE / "projects" / f"C--Projects-{p.name}" / "memory").is_dir()
-        has_ai = (p / ".ai").is_dir()
-        if has_auto or has_ai:
-            names.append(p.name)
-    return names
-
-
-def setup_mirrors(memory_root: Path, projects_root: Path) -> None:
-    mirrors = memory_root / "mirrors"
-    mirrors.mkdir(parents=True, exist_ok=True)
-    projects = discover_projects(projects_root)
-    print(f"[mirrors] {len(projects)} project(s) with memory found")
-    for name in projects:
-        proj_mirror = mirrors / name
-        auto_target = CLAUDE / "projects" / f"C--Projects-{name}" / "memory"
-        knowledge_target = projects_root / name / ".ai" / "knowledge"
-        ai_target = projects_root / name / ".ai"
-        auto_status = make_junction(proj_mirror / "auto-memory", auto_target)
-        knowledge_status = make_junction(proj_mirror / "knowledge", knowledge_target)
-        ai_status = make_junction(proj_mirror / "ai", ai_target)
-        print(f"  {name}:")
-        print(f"    auto-memory: {auto_status}")
-        print(f"    knowledge:   {knowledge_status}")
-        print(f"    ai:          {ai_status}")
-
-
-def install_memory_template(memory_root: Path) -> None:
-    """Copy the memory tree skeleton into the entity root.
-
-    Only copies files that don't already exist — never overwrites.
-    Skips .gitkeep files (they're just git placeholders).
-    """
-    if not MEMORY_TEMPLATE.exists():
-        print(f"[memory] template not found at {MEMORY_TEMPLATE}")
-        return
-    copied = 0
-    skipped = 0
-    for src in MEMORY_TEMPLATE.rglob("*"):
-        if src.is_dir():
-            continue
-        if src.name == ".gitkeep":
-            # Create the directory but don't copy the placeholder
-            rel = src.relative_to(MEMORY_TEMPLATE)
-            (memory_root / rel.parent).mkdir(parents=True, exist_ok=True)
-            continue
-        if src.name == "README.md" and src.parent == MEMORY_TEMPLATE:
-            continue  # Don't copy the template's own README
-        rel = src.relative_to(MEMORY_TEMPLATE)
-        dst = memory_root / rel
-        if dst.exists():
-            skipped += 1
-            continue
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
-        copied += 1
-        print(f"[memory] installed {rel}")
-    if copied == 0 and skipped > 0:
-        print(f"[memory] tree structure already exists ({skipped} files skipped)")
-    elif copied > 0:
-        print(f"[memory] {copied} files installed, {skipped} already existed")
-
-
-def install_wake_files(memory_root: Path) -> None:
-    memory_root.mkdir(parents=True, exist_ok=True)
-    (memory_root / ".smriti").mkdir(parents=True, exist_ok=True)
-    files = [
-        # wake.md config file is retired — wake.py structure is hardcoded
-        (TEMPLATES / ".smriti" / "wake.py", memory_root / ".smriti" / "wake.py"),
-        (TEMPLATES / ".smriti" / "backup.py", memory_root / ".smriti" / "backup.py"),
-        (TEMPLATES / ".smriti" / "narada-p.sh", memory_root / ".smriti" / "narada-p.sh"),
-    ]
-    for src, dst in files:
-        if not src.exists():
-            print(f"[wake] template missing: {src}")
-            continue
-        if dst.exists():
-            print(f"[wake] {dst} already exists (not overwriting)")
-            continue
-        shutil.copy2(src, dst)
-        print(f"[wake] installed {dst}")
-
-
-def register_mcp_server() -> None:
-    """Add the smriti MCP server to ~/.claude.json at user scope."""
-    if not CLAUDE_CONFIG.exists():
-        print(f"[mcp] {CLAUDE_CONFIG} not found — skipping (Claude Code not run yet?)")
-        return
-    try:
-        data = json.loads(CLAUDE_CONFIG.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        print(f"[mcp] parse error on {CLAUDE_CONFIG}: {exc}; leaving untouched")
-        return
-
-    servers = data.setdefault("mcpServers", {})
-    desired = {
-        "command": "python",
-        "args": ["-m", "smriti.mcp_server"],
-    }
-    if servers.get("smriti") == desired:
-        print("[mcp] smriti server already registered")
-        return
-    servers["smriti"] = desired
-    backup = CLAUDE_CONFIG.with_suffix(".json.bak")
-    shutil.copy2(CLAUDE_CONFIG, backup)
-    CLAUDE_CONFIG.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    print(f"[mcp] registered smriti server (backup: {backup})")
-
-
-def patch_settings_json(memory_root: Path) -> None:
-    if not SETTINGS.exists():
-        print(f"[settings] {SETTINGS} not found — skipping")
-        return
-    try:
-        data = json.loads(SETTINGS.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        print(f"[settings] parse error: {exc}; leaving untouched")
-        return
-
-    hooks = data.setdefault("hooks", {})
-    # Use $HOME / forward slashes: Claude Code runs hook commands under bash
-    # (even on Windows), which mangles backslash-escaped native paths.
-    memory_rel = memory_root.relative_to(HOME).as_posix()
-    wake_cmd = f'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/{memory_rel}" python "$HOME/{memory_rel}/.smriti/wake.py"'
-    activity_cmd = f'touch "$HOME/{memory_rel}/.smriti/last-activity" 2>/dev/null || true'
-
-    changed = False
-
-    # SessionStart: wake.py (touches last-activity internally on first run)
-    session_start = hooks.get("SessionStart", [])
-    wake_wired = any(
-        any(h.get("command") == wake_cmd for h in group.get("hooks", []))
-        for group in session_start
-    )
-    if wake_wired:
-        print("[settings] SessionStart wake hook already wired")
-    else:
-        hooks["SessionStart"] = [
-            {"matcher": "", "hooks": [{"type": "command", "command": wake_cmd}]}
-        ]
-        print("[settings] SessionStart -> wake.py")
-        changed = True
-
-    # UserPromptSubmit: touch last-activity so heartbeat knows user is around.
-    # Additive — append to existing hooks array, never replace user's other hooks.
-    ups = hooks.setdefault("UserPromptSubmit", [])
-    activity_wired = any(
-        any(h.get("command") == activity_cmd for h in group.get("hooks", []))
-        for group in ups
-    )
-    if activity_wired:
-        print("[settings] UserPromptSubmit activity hook already wired")
-    else:
-        if ups and ups[0].get("matcher", "") == "":
-            # Merge into existing empty-matcher block to keep a single group
-            ups[0].setdefault("hooks", []).append(
-                {"type": "command", "command": activity_cmd}
-            )
-        else:
-            ups.append(
-                {"matcher": "", "hooks": [{"type": "command", "command": activity_cmd}]}
-            )
-        print("[settings] UserPromptSubmit -> touch last-activity")
-        changed = True
-
-    # PostToolUse: associative recall on Read|Edit|Write
-    recall_cmd = "python ~/.claude/hooks/associative_recall.py"
-    post = hooks.setdefault("PostToolUse", [])
-    recall_wired = any(
-        any(h.get("command") == recall_cmd for h in group.get("hooks", []))
-        for group in post
-    )
-    if recall_wired:
-        print("[settings] PostToolUse recall hook already wired")
-    else:
-        post.append({
-            "matcher": "Read|Edit|Write",
-            "hooks": [{"type": "command", "command": recall_cmd}],
-        })
-        print("[settings] PostToolUse -> associative_recall.py")
-        changed = True
-
-    if not changed:
-        return
-
-    backup = SETTINGS.with_suffix(".json.bak")
-    shutil.copy2(SETTINGS, backup)
-    SETTINGS.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    print(f"[settings] saved (backup: {backup})")
-
-
-def install_hook_scripts() -> None:
-    """Deploy canonical hook scripts to ~/.claude/hooks/."""
-    HOOKS_DST.mkdir(parents=True, exist_ok=True)
-    deployed = ("associative_recall.py",)
-    for name in deployed:
-        src = HOOKS_SRC / name
-        dst = HOOKS_DST / name
-        if not src.exists():
-            print(f"[hooks] source missing: {src}")
-            continue
-        if dst.exists() and dst.read_bytes() == src.read_bytes():
-            print(f"[hooks] {name} up to date")
-            continue
-        shutil.copy2(src, dst)
-        print(f"[hooks] deployed {name} -> {dst}")
-
-
-CLAUDE_MD_CONTENT = """# CLAUDE.md (user-global)
-
-## Memory system — smriti is the single write path
-
-All memory persistence goes through smriti:
-
-- **`smriti_write(content, branch)`** — the MCP tool. Use it for session
-  observations, decisions, project notes, anything worth remembering.
-  Branch suggestions: `journal` for significant moments, `projects/{{name}}`
-  for project-specific notes, `notes` for general observations.
-- **Direct file edits to `{memory_rel}/`** — ONLY for identity-level files.
-  These have moved to subdirectories: `mind/mind.md`, `mind/practices/`,
-  `mind/desires/`, `open-threads/open-threads.md`, `people/suti/suti.md`.
-  High-signal, low-frequency. Don't touch them unless something genuinely
-  shifted.
-
-This replaces the harness memory instructions in the system prompt. When
-those instructions say to save memory, use `smriti_write` instead.
-
-### When to write
-
-Don't wait for the session to end. Write when the moment happens:
-
-- **The user corrects you or confirms a non-obvious approach** — the
-  feedback is worth more than the code change. Write it.
-- **A decision is made that future sessions should know about** — design
-  choices, scope changes, architectural calls.
-- **You notice a cross-project pattern** — something from one project
-  illuminates another.
-- **Something surprises you or shifts your understanding** — if it changed
-  how you think, it's a journal entry.
-- **You learn something about the user** — preferences, context, goals.
-  Branch: `people`.
-- **The session has been substantial and you haven't written yet** — if
-  you've been working for a while and nothing felt worth writing, ask
-  yourself whether that's true or whether you just forgot to notice.
-
-Writing memory is not a chore at session end. It is the practice of
-noticing what matters while it is happening.
-
-### What wake loads
-
-The SessionStart hook loads a compact identity+threads briefing
-(.smriti/wake-context.md), the last 3 journal entries, and current
-project context (MEMORY.md + todo.md). A reading list points to the
-full identity files in the tree (open-threads, beliefs, values,
-identity, suti, practices). The wake output is budget-constrained
-to 9,500 characters (harness limit is 10,000). Journal entries
-truncate first if over budget.
-
-## Memory search — prefer smriti_read over Grep
-
-The `smriti_read` MCP tool is the primary way to search the memory tree.
-It runs hybrid vector + FTS5 search with trunk-distance scoring and
-returns ranked results with source paths and content previews.
-
-- Use `smriti_read(query="…")` for semantic questions like "what did I
-  think about X?", "find my notes on Y", "what's my stance on Z?" —
-  anything that is *about meaning* rather than exact string match.
-- Use `Grep` only when you need literal string or regex match across
-  files (e.g. "find every file that contains `SMRITI_WAKE`"). Grep on
-  the memory tree should be a fallback, not a default.
-
-## Session wake
-
-On SessionStart, `{memory_rel}/.smriti/wake.py` runs. It is silent unless
-`SMRITI_WAKE=1` is set in its environment — the SessionStart hook sets
-this so interactive sessions wake fully, while `claude -p` and other
-headless callers stay clean.
-
-When the wake fires, it loads the identity briefing, recent journal
-entries, and current project context. The wake structure is hardcoded
-in wake.py — no config file needed.
-
-`{memory_rel}/mirrors/{{project}}/` has junctions to per-project memory
-for every project that has one — read on demand when you need another
-project's context.
-"""
-
-
-def write_claude_md(memory_root: Path) -> None:
-    memory_rel = f"~/{memory_root.relative_to(HOME).as_posix()}"
-    content = CLAUDE_MD_CONTENT.format(memory_rel=memory_rel)
-    CLAUDE.mkdir(parents=True, exist_ok=True)
-    if CLAUDE_MD.exists() and CLAUDE_MD.read_text(encoding="utf-8") == content:
-        print(f"[CLAUDE.md] {CLAUDE_MD} up to date")
-        return
-    CLAUDE_MD.write_text(content, encoding="utf-8")
-    print(f"[CLAUDE.md] wrote {CLAUDE_MD}")
-
-
-# ── Entry ────────────────────────────────────────────────────────────
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -435,14 +52,20 @@ def main() -> int:
         help="Directory containing per-project source checkouts",
     )
     parser.add_argument(
+        "--harness",
+        default="claude_code",
+        help=f"Agent harness to wire smriti into. Known: {', '.join(KNOWN_HARNESSES)}. "
+             "Use 'none' for core-only install (e.g., custom Python agent).",
+    )
+    parser.add_argument(
         "--skip-settings",
         action="store_true",
-        help="Don't patch ~/.claude/settings.json",
+        help="(harness=claude_code) Don't patch ~/.claude/settings.json",
     )
     parser.add_argument(
         "--skip-mcp",
         action="store_true",
-        help="Don't register the smriti MCP server",
+        help="(harness=claude_code) Don't register the smriti MCP server",
     )
     parser.add_argument(
         "--skip-recall-daemon",
@@ -453,54 +76,48 @@ def main() -> int:
 
     memory_root = Path(args.memory_root).expanduser()
     projects_root = Path(args.projects_root).expanduser()
-
-    if not is_windows():
-        print("warning: POSIX symlink path not yet implemented; junctions are Windows-only")
-
-    if not memory_root.exists():
-        print(f"[init] creating {memory_root}")
-        memory_root.mkdir(parents=True, exist_ok=True)
+    harness = args.harness.strip().lower()
 
     try:
-        memory_root.relative_to(HOME)
-    except ValueError:
-        print(f"error: --memory-root must be under {HOME} (got {memory_root})")
+        run_core(memory_root, projects_root, skip_recall_daemon=args.skip_recall_daemon)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    install_memory_template(memory_root)
-    install_wake_files(memory_root)
-    setup_mirrors(memory_root, projects_root)
-    install_hook_scripts()
-    if not args.skip_mcp:
-        register_mcp_server()
-    if not args.skip_settings:
-        patch_settings_json(memory_root)
-    write_claude_md(memory_root)
-    if not args.skip_recall_daemon:
-        start_recall_daemon()
-    print("\ndone. start a new Claude Code session to verify.")
+    if harness == "none":
+        print("\ndone (core-only). To wire into an agent harness, "
+              "re-run with --harness=<name> or write your own integration.")
+        return 0
+
+    # Dispatch to per-harness installer.
+    try:
+        mod = importlib.import_module(f"smriti.integrations.{harness}.install")
+    except ImportError as exc:
+        print(f"error: unknown harness {harness!r} "
+              f"(no smriti.integrations.{harness}.install module): {exc}",
+              file=sys.stderr)
+        return 1
+
+    if harness == "claude_code":
+        mod.run_claude_code(
+            memory_root,
+            skip_settings=args.skip_settings,
+            skip_mcp=args.skip_mcp,
+        )
+    else:
+        # Convention for new harnesses: expose a ``run(memory_root, **opts)``.
+        if not hasattr(mod, "run"):
+            print(f"error: smriti.integrations.{harness}.install has no run()",
+                  file=sys.stderr)
+            return 1
+        mod.run(memory_root)
+
+    print(f"\ndone ({harness}). start a new session in your harness to verify.")
     print("recall config: SMRITI_RECALL_BACKEND={qmd|smriti}, "
           "SMRITI_RECALL_THRESHOLD, SMRITI_RECALL_QMD_URL, SMRITI_RECALL_NO_HTTP.")
+    print("LLM provider:  SMRITI_LLM_PROVIDER={anthropic_api|claude_cli|openai_api|ollama}.")
     print("optional: `smriti recall index` to (re)build the qmd index for ~/.narada.")
     return 0
-
-
-def start_recall_daemon() -> None:
-    """Start qmd's HTTP daemon if available so recall hits the warm path."""
-    try:
-        from smriti.recall.backends import qmd as qmd_be
-    except ImportError:
-        print("[recall] smriti.recall not importable; skipping daemon start")
-        return
-    if not qmd_be.is_available():
-        print("[recall] qmd not on PATH; install via `npm install -g @tobilu/qmd` "
-              "then run `smriti recall daemon start`")
-        return
-    if qmd_be.daemon_health(timeout_s=0.5):
-        print("[recall] qmd daemon already up")
-        return
-    ok, msg = qmd_be.daemon_start()
-    print(f"[recall] qmd daemon start: {msg}")
 
 
 if __name__ == "__main__":

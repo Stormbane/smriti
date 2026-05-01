@@ -27,10 +27,16 @@
       `recall/`, `llm/`, `store/`. Settings/CLAUDE.md
       patching stays in `scripts/install.py` for now — Phase 4
       moves it into `integrations/claude_code/install.py`.
-- [ ] Phase 4: split install scripts. `scripts/install_core.py` =
-      memory tree, mirrors, MCP server, qmd index, daemon.
-      `scripts/install_claude_code.py` = hooks, settings, CLAUDE.md.
-      `install.py` becomes a `--harness` dispatcher.
+- [x] **Phase 4: split install scripts** — extracted core install
+      into `src/smriti/install/core.py` (memory template, wake
+      files, mirrors, qmd daemon) and Claude-Code install into
+      `src/smriti/integrations/claude_code/install.py` (hook
+      deployment, settings.json patch, MCP registration, CLAUDE.md).
+      `scripts/install.py` is now a thin dispatcher with
+      `--harness {claude_code|none}` (defaults to claude_code for
+      back-compat). `--harness=none` runs core only — verified end-
+      to-end. New harnesses register via
+      `smriti.integrations.<name>.install`.
 - [ ] Phase 5: `agent_template/AGENT.md` (generic content), CLAUDE.md
       becomes a thin wrapper. New "When to call `smriti_read`"
       section addresses the agent-initiated-recall gap.
