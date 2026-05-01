@@ -36,7 +36,7 @@ from smriti.install.core import (
 )
 
 
-KNOWN_HARNESSES = ("claude_code", "none")
+KNOWN_HARNESSES = ("claude_code", "codex", "none")
 
 
 def main() -> int:
@@ -66,6 +66,11 @@ def main() -> int:
         "--skip-mcp",
         action="store_true",
         help="(harness=claude_code) Don't register the smriti MCP server",
+    )
+    parser.add_argument(
+        "--skip-config",
+        action="store_true",
+        help="(harness=codex) Don't patch ~/.codex/config.toml",
     )
     parser.add_argument(
         "--skip-recall-daemon",
@@ -104,6 +109,8 @@ def main() -> int:
             skip_settings=args.skip_settings,
             skip_mcp=args.skip_mcp,
         )
+    elif harness == "codex":
+        mod.run_codex(memory_root, skip_config=args.skip_config)
     else:
         # Convention for new harnesses: expose a ``run(memory_root, **opts)``.
         if not hasattr(mod, "run"):

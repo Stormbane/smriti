@@ -7,6 +7,29 @@
 
 ## Model & harness agnosticism
 
+- [x] **Phase 8: Codex CLI adapter + shared integration module.**
+      New `src/smriti/integrations/common/`: `mcp_spec.py` (single
+      source of truth for the MCP server invocation +
+      `make_wake_hook_command(framing)`), `agent_md.py`
+      (`compose_agent_doc(addendum, memory_rel, header)` for both
+      CLAUDE.md and AGENTS.md), `hook_scripts.py` (idempotent
+      deployment), `wake_runner.py` (extracts the env-gating + backup-
+      fire + briefing-emit logic; supports `raw` and `codex-json`
+      framings via `SMRITI_WAKE_FRAMING`). `narada/.smriti/wake.py`
+      slimmed to a 13-line shim that delegates to `wake_runner.run`.
+      Claude Code adapter refactored to use the shared helpers; tests
+      pass. New `src/smriti/integrations/codex/install.py` patches
+      `~/.codex/config.toml` (TOML via `tomllib` + `tomli-w`):
+      `[features] codex_hooks = true`, `[[hooks.SessionStart]]` ->
+      wake.py with codex-json framing, `[mcp_servers.smriti]`. Drops
+      `~/.codex/AGENTS.md` (under the 32 KiB cap). Force-injection
+      via the SessionStart hook means identity loads at protocol
+      level — agent has no choice to skip. `--harness codex` wired
+      into `scripts/install.py`; `tomli-w` added to a new `[codex]`
+      extras group. USAGE.md gets a Codex section. Idempotence
+      verified end-to-end against a tempdir. Open: PostToolUse
+      ambient-recall parity for Codex (apply_patch / read_file
+      matchers + tool_input shape mapping).
 - [x] **Phase 1: trunk-distance reranker + qmd-skill quality fold-in.**
 - [x] **Phase 2: LLM provider abstraction** — new `src/smriti/llm/`
       package with `LLMProvider` protocol, factory, four shipped

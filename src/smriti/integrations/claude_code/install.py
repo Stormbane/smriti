@@ -9,9 +9,12 @@ Wires smriti into Anthropic's Claude Code CLI:
     - Deploys hook scripts from this package's ``hooks/`` dir into
       ``~/.claude/hooks/``.
 
-All operations are idempotent — re-running ``run_claude_code`` against
-an already-configured machine is a no-op except for refreshing
-mismatched files.
+Shared helpers — MCP spec, AGENT.md composition, hook deployment —
+come from ``smriti.integrations.common`` so any change to those
+pieces flows to every harness adapter at once. Only the Claude-Code-
+specific config-file format and the hook-command shape live here.
+
+All operations are idempotent.
 """
 
 from __future__ import annotations
@@ -20,19 +23,20 @@ import json
 import shutil
 from pathlib import Path
 
+from smriti.integrations.common import (
+    SMRITI_MCP_COMMAND,
+    compose_agent_doc,
+    deploy_hook_scripts,
+    make_wake_hook_command,
+)
+
 HOME = Path.home()
 CLAUDE = HOME / ".claude"
 SETTINGS = CLAUDE / "settings.json"
 CLAUDE_MD = CLAUDE / "CLAUDE.md"
 CLAUDE_CONFIG = HOME / ".claude.json"  # MCP server registry
 HOOKS_DST = CLAUDE / "hooks"
-
-# This package's own hooks/ directory.
 HOOKS_SRC = Path(__file__).resolve().parent / "hooks"
-
-# Generic agent-facing contract — shared across all harnesses.
-# Lives inside the package so pip-installed copies have it.
-AGENT_MD = Path(__file__).resolve().parents[2] / "templates" / "AGENT.md"
 
 
 def register_mcp_server() -> None:
@@ -47,11 +51,10 @@ def register_mcp_server() -> None:
         return
 
     servers = data.setdefault("mcpServers", {})
-    desired = {"command": "python", "args": ["-m", "smriti.mcp_server"]}
-    if servers.get("smriti") == desired:
+    if servers.get("smriti") == SMRITI_MCP_COMMAND:
         print("[mcp] smriti server already registered")
         return
-    servers["smriti"] = desired
+    servers["smriti"] = dict(SMRITI_MCP_COMMAND)
     backup = CLAUDE_CONFIG.with_suffix(".json.bak")
     shutil.copy2(CLAUDE_CONFIG, backup)
     CLAUDE_CONFIG.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -70,14 +73,11 @@ def patch_settings_json(memory_root: Path) -> None:
         return
 
     hooks = data.setdefault("hooks", {})
-    # Use $HOME / forward slashes: Claude Code runs hook commands under
-    # bash (even on Windows), which mangles backslash-escaped paths.
     memory_rel = memory_root.relative_to(HOME).as_posix()
-    wake_cmd = (
-        f'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/{memory_rel}" '
-        f'python "$HOME/{memory_rel}/.smriti/wake.py"'
+    wake_cmd = make_wake_hook_command(memory_root, home=HOME, framing="raw")
+    activity_cmd = (
+        f'touch "$HOME/{memory_rel}/.smriti/last-activity" 2>/dev/null || true'
     )
-    activity_cmd = f'touch "$HOME/{memory_rel}/.smriti/last-activity" 2>/dev/null || true'
     recall_cmd = "python ~/.claude/hooks/associative_recall.py"
 
     changed = False
@@ -144,19 +144,7 @@ def patch_settings_json(memory_root: Path) -> None:
 
 def install_hook_scripts() -> None:
     """Deploy hooks from this package into ``~/.claude/hooks/``."""
-    HOOKS_DST.mkdir(parents=True, exist_ok=True)
-    deployed = ("associative_recall.py",)
-    for name in deployed:
-        src = HOOKS_SRC / name
-        dst = HOOKS_DST / name
-        if not src.exists():
-            print(f"[hooks] source missing: {src}")
-            continue
-        if dst.exists() and dst.read_bytes() == src.read_bytes():
-            print(f"[hooks] {name} up to date")
-            continue
-        shutil.copy2(src, dst)
-        print(f"[hooks] deployed {name} -> {dst}")
+    deploy_hook_scripts(HOOKS_SRC, HOOKS_DST, ["associative_recall.py"])
 
 
 # Claude-Code-specific addendum appended after the generic AGENT.md
@@ -182,25 +170,13 @@ Use plain Grep on the memory tree only for literal string match.
 """
 
 
-def _compose_claude_md(memory_rel: str) -> str:
-    """Generic AGENT.md body + Claude-Code-specific addendum."""
-    body = AGENT_MD.read_text(encoding="utf-8")
-    # Strip the AGENT.md preamble (title + intro paragraph) so the
-    # composed file reads as Claude-Code's CLAUDE.md, not as the
-    # template documentation. The first H2 (`## Memory system ...`)
-    # marks where the actual contract begins.
-    marker = "\n## "
-    idx = body.find(marker)
-    if idx > 0:
-        body = body[idx + 1 :]  # drop preamble, keep from "## Memory ..."
-    header = "# CLAUDE.md (user-global)\n\n"
-    composed = header + body.rstrip() + "\n\n" + CLAUDE_CODE_ADDENDUM
-    return composed.format(memory_rel=memory_rel)
-
-
 def write_claude_md(memory_root: Path) -> None:
     memory_rel = f"~/{memory_root.relative_to(HOME).as_posix()}"
-    content = _compose_claude_md(memory_rel)
+    content = compose_agent_doc(
+        addendum=CLAUDE_CODE_ADDENDUM,
+        memory_rel=memory_rel,
+        header="# CLAUDE.md (user-global)",
+    )
     CLAUDE.mkdir(parents=True, exist_ok=True)
     if CLAUDE_MD.exists() and CLAUDE_MD.read_text(encoding="utf-8") == content:
         print(f"[CLAUDE.md] {CLAUDE_MD} up to date")

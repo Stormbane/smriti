@@ -34,6 +34,9 @@ read = [
 api = [
     "anthropic>=0.40",
 ]
+codex = [
+    "tomli-w>=1.0",
+]
 private = [
     "cryptography>=42.0",
 ]
@@ -45,6 +48,7 @@ dev = [
     "sqlite-vec>=0.1.1",
     "onnxruntime>=1.17",
     "anthropic>=0.40",
+    "tomli-w>=1.0",
 ]
 
 [project.urls]
