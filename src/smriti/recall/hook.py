@@ -1,18 +1,26 @@
-"""PostToolUse hook entry point. Wired by ``scripts/install.py``.
+"""PostToolUse hook entry point. Wired by the per-harness installers.
 
-Stdin payload (from Claude Code):
-    {"tool_name": "Read"|"Edit"|"Write",
-     "tool_input": {"file_path": "..."}}
+Stdin payload (Claude Code or Codex):
+    {"tool_name": "Read"|"Edit"|"Write"|"apply_patch"|...,
+     "tool_input": { ... harness-specific shape ... }}
 
-Behaviour:
-    - Skip if the path is inside the memory tree (``~/.narada``) — we
-      don't want recall to recurse on memory.
-    - Skip non-text-ish extensions (binaries / lockfiles).
-    - Build a low-noise query from the file's stem (filename without
-      extension, with separators replaced by spaces).
-    - Dispatch to the configured backend via ``run_recall``.
-    - Emit a ``<system-reminder>`` block on stdout if any match scored
-      above the threshold; otherwise stay silent.
+Tool-name handling:
+    Read | Edit | Write    Claude Code edits/reads. ``tool_input.file_path``.
+    apply_patch            Codex's edit tool. ``tool_input.command`` contains
+                           a patch body; we parse out *** Add File: /
+                           *** Update File: / *** Delete File: directives.
+    Bash                   Skipped — too noisy for ambient recall (firing on
+                           every ``git status`` would drown the signal).
+    mcp__*                 Skipped — recursion guard. The agent calling
+                           smriti_read shouldn't fire recall on itself.
+    other                  Skipped silently.
+
+Output framing controlled by ``SMRITI_RECALL_FRAMING`` env var:
+    raw          (default) Plain ``<system-reminder>`` block on stdout.
+                 Claude Code injects this verbatim into the assistant's
+                 context.
+    codex-json   {"hookSpecificOutput": {"hookEventName": "PostToolUse",
+                 "additionalContext": "..."}} JSON. Codex shape.
 
 All errors are swallowed — a recall hook must never break the parent
 tool call.
@@ -21,11 +29,14 @@ tool call.
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
 from pathlib import Path
 
 from smriti.recall.config import load_config
 from smriti.recall.runner import run_recall
+from smriti.recall.types import RecallMatch
 
 _EXT_ALLOW = {
     ".md", ".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go",
@@ -40,6 +51,15 @@ _CONTENT_PROBE_BYTES = 2048
 # Cap content slice contributed to the query so qmd's embedding model
 # isn't fed a long chunk that drowns the stem signal.
 _CONTENT_QUERY_CHARS = 400
+
+# Codex apply_patch directive lines look like:
+#   *** Add File: src/foo.py
+#   *** Update File: docs/USAGE.md
+#   *** Delete File: tests/old.py
+_PATCH_FILE_RE = re.compile(
+    r"^\*\*\*\s+(?:Add|Update|Delete)\s+File:\s+(.+?)\s*$",
+    re.MULTILINE,
+)
 
 
 def _read_head(path: Path) -> str:
@@ -70,12 +90,16 @@ def _content_excerpt(path: Path) -> str:
     if not head:
         return ""
     head = _strip_frontmatter(head).strip()
-    # Collapse whitespace so the query stays compact.
     head = " ".join(head.split())
     return head[:_CONTENT_QUERY_CHARS]
 
 
 def _build_query(file_path: str) -> str | None:
+    """Return a recall query for ``file_path``, or None to skip.
+
+    Skips: non-text-ish extensions, paths inside the memory tree,
+    too-short stems.
+    """
     p = Path(file_path)
     if p.suffix.lower() not in _EXT_ALLOW:
         return None
@@ -94,10 +118,95 @@ def _build_query(file_path: str) -> str | None:
 
     excerpt = _content_excerpt(p) if p.exists() else ""
     if excerpt:
-        # Stem first so it carries weight in BM25 token overlap, then
-        # excerpt for semantic context.
         return f"{stem}: {excerpt}"
     return stem
+
+
+def _extract_paths(tool_name: str, tool_input: dict) -> list[str]:
+    """Return file paths to fire recall on, based on the tool call.
+
+    Centralising this so each harness's tool_input shape is handled in
+    one place. Returns ``[]`` for tools we don't fire recall on
+    (Bash, MCP, unknown).
+    """
+    # Claude-Code-shaped tools.
+    if tool_name in ("Read", "Edit", "Write"):
+        path = tool_input.get("file_path") or ""
+        return [path] if path else []
+
+    # Codex's edit tool. Patch body lives in tool_input.command.
+    if tool_name == "apply_patch":
+        body = tool_input.get("command") or ""
+        if not isinstance(body, str):
+            return []
+        return list(_PATCH_FILE_RE.findall(body))
+
+    # Bash — skip. Too noisy: every shell command would fire recall.
+    # Future: opt-in extractor for cat/head/tail/less if the user wants
+    # ambient recall for shell-driven file reads.
+    if tool_name == "Bash":
+        return []
+
+    # MCP tools — skip to avoid the agent's smriti_read call recursing.
+    if tool_name.startswith("mcp__"):
+        return []
+
+    return []
+
+
+def _run_recall_for_paths(paths: list[str]) -> list[RecallMatch]:
+    """Aggregate recall results across a list of paths, dedup by source."""
+    cfg = load_config()
+    seen: dict[str, RecallMatch] = {}
+    for path in paths:
+        query = _build_query(path)
+        if not query:
+            continue
+        try:
+            response = run_recall(query, cfg=cfg, log_extra={"file_path": path})
+        except Exception:
+            continue
+        for m in response.matches:
+            existing = seen.get(m.source)
+            if existing is None or m.score > existing.score:
+                seen[m.source] = m
+    # Sort by score desc, return all matches.
+    return sorted(seen.values(), key=lambda m: m.score, reverse=True)
+
+
+def _format_block(matches: list[RecallMatch], header: str) -> str:
+    if not matches:
+        return ""
+    lines = [
+        "<system-reminder>",
+        f"Smriti recall ({header}, {len(matches)} relevant):",
+    ]
+    for m in matches:
+        snippet = m.snippet[:240].replace("\n", " ").strip()
+        lines.append(f"- {m.source} (score {m.score:.2f}): {snippet}")
+    lines.append("</system-reminder>")
+    return "\n".join(lines) + "\n"
+
+
+def _frame_output(text: str, framing: str) -> str:
+    if not text:
+        return ""
+    if framing == "raw":
+        return text
+    if framing == "codex-json":
+        # Codex strips the <system-reminder> tags since it has its own
+        # additionalContext mechanism that frames the text as developer
+        # context. We pass the body without those tags.
+        body = text
+        body = body.replace("<system-reminder>\n", "")
+        body = body.replace("\n</system-reminder>", "")
+        return json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": body.rstrip(),
+            }
+        })
+    raise ValueError(f"unknown framing {framing!r}")
 
 
 def main() -> int:
@@ -109,42 +218,24 @@ def main() -> int:
     tool_name = payload.get("tool_name") or payload.get("toolName") or ""
     tool_input = payload.get("tool_input") or payload.get("toolInput") or {}
 
-    if tool_name not in ("Read", "Edit", "Write"):
+    paths = _extract_paths(tool_name, tool_input)
+    if not paths:
         return 0
 
-    file_path = tool_input.get("file_path") or ""
-    if not file_path:
+    matches = _run_recall_for_paths(paths)
+    if not matches:
         return 0
 
-    query = _build_query(file_path)
-    if not query:
-        return 0
+    # Header summarises the trigger so the model can tell which tool
+    # call surfaced the memory.
+    if len(paths) == 1:
+        header = f"tool: {tool_name}, file: {Path(paths[0]).name}"
+    else:
+        header = f"tool: {tool_name}, {len(paths)} files"
 
-    cfg = load_config()
-    try:
-        response = run_recall(
-            query,
-            cfg=cfg,
-            log_extra={"tool": tool_name, "file_path": file_path},
-        )
-    except Exception:
-        # Hook errors must never break the parent tool call.
-        return 0
-
-    if not response.matches:
-        return 0
-
-    p = Path(file_path)
-    lines = [
-        "<system-reminder>",
-        f"Smriti recall (file: {p.name}, {response.elapsed_ms}ms, "
-        f"backend: {response.backend}, {len(response.matches)} relevant):",
-    ]
-    for m in response.matches:
-        snippet = m.snippet[:240].replace("\n", " ").strip()
-        lines.append(f"- {m.source} (score {m.score:.2f}): {snippet}")
-    lines.append("</system-reminder>")
-    sys.stdout.write("\n".join(lines) + "\n")
+    block = _format_block(matches, header)
+    framing = os.environ.get("SMRITI_RECALL_FRAMING", "raw").strip()
+    sys.stdout.write(_frame_output(block, framing))
     return 0
 
 

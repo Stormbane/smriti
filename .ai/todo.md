@@ -27,9 +27,23 @@
       level — agent has no choice to skip. `--harness codex` wired
       into `scripts/install.py`; `tomli-w` added to a new `[codex]`
       extras group. USAGE.md gets a Codex section. Idempotence
-      verified end-to-end against a tempdir. Open: PostToolUse
-      ambient-recall parity for Codex (apply_patch / read_file
-      matchers + tool_input shape mapping).
+      verified end-to-end against a tempdir.
+- [x] **Phase 8b: Codex PostToolUse parity.** Refactored
+      `smriti.recall.hook` around per-tool `_extract_paths` so
+      Claude Code's `Read|Edit|Write` (using `tool_input.file_path`)
+      and Codex's `apply_patch` (parsing `tool_input.command` for
+      `*** Add/Update/Delete File: <path>` directives, multi-file
+      patches deduped by source) share the same recall pipeline.
+      Bash and `mcp__*` tools intentionally skipped (Bash is too
+      noisy; MCP would recurse on `smriti_read`). Output framing
+      configurable via `SMRITI_RECALL_FRAMING={raw|codex-json}`,
+      mirroring the wake-runner pattern. Codex installer wires
+      `[[hooks.PostToolUse]]` matching `Edit|Write|apply_patch`
+      pointing at deployed `~/.codex/hooks/recall_hook.py`. New
+      `tests/test_recall_hook.py` (17 tests) exercises hook plumbing
+      with synthetic stdin payloads — proves Codex parity works
+      without needing a Codex subscription. Verified end-to-end
+      against the live qmd index.
 - [x] **Phase 1: trunk-distance reranker + qmd-skill quality fold-in.**
 - [x] **Phase 2: LLM provider abstraction** — new `src/smriti/llm/`
       package with `LLMProvider` protocol, factory, four shipped

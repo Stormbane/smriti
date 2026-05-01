@@ -38,6 +38,7 @@ from pathlib import Path
 from smriti.integrations.common import (
     SMRITI_MCP_COMMAND,
     compose_agent_doc,
+    deploy_hook_scripts,
     make_wake_hook_command,
 )
 
@@ -45,6 +46,8 @@ HOME = Path.home()
 CODEX = HOME / ".codex"
 CONFIG_TOML = CODEX / "config.toml"
 AGENTS_MD = CODEX / "AGENTS.md"
+HOOKS_DST = CODEX / "hooks"
+HOOKS_SRC = Path(__file__).resolve().parent / "hooks"
 
 
 # Codex-specific addendum appended after the generic AGENT.md body.
@@ -75,13 +78,20 @@ Files concatenate root-first; total cap is 32 KiB
 (`project_doc_max_bytes`). This file (`~/.codex/AGENTS.md`) holds the
 user-global memory contract; project-level AGENTS.md files override.
 
-## Memory search — prefer smriti_read over Grep
+## Memory search — ambient recall is wired
 
-Codex does not (yet) have a Claude-Code-equivalent ambient recall on
-file touches. The "When to call smriti_read" guidance above is the
-load-bearing mechanism here — call it explicitly when topics open,
-when you encounter unfamiliar references, and when starting
-substantive turns without recent file context.
+PostToolUse recall is wired on `Edit|Write|apply_patch` via
+`~/.codex/config.toml`. After every patch, smriti runs recall against
+the touched files and injects relevant memory as
+`hookSpecificOutput.additionalContext`. Bash and MCP tools are
+intentionally skipped (Bash is too noisy; MCP would recurse on
+`smriti_read`).
+
+For pure-text turns where no patch fires (planning, discussion), the
+"When to call `smriti_read`" guidance above is load-bearing — call it
+explicitly when topics open, when you encounter unfamiliar
+references, and when starting substantive turns without recent file
+context.
 """
 
 
@@ -165,7 +175,39 @@ def patch_config_toml(memory_root: Path) -> None:
         print("[codex] [[hooks.SessionStart]] -> wake.py (codex-json framing)")
         changed = True
 
-    # 3. MCP server registration
+    # 3. PostToolUse hook -> recall_hook.py (codex-json framing).
+    # Codex's matcher accepts apply_patch's aliases (Edit, Write) so a
+    # Claude-Code-style matcher works even though Codex's actual edit
+    # tool is apply_patch. The recall hook handles all three names.
+    recall_cmd = (
+        'SMRITI_RECALL_FRAMING="codex-json" '
+        'python "$HOME/.codex/hooks/recall_hook.py"'
+    )
+    post_tool = hooks.setdefault("PostToolUse", [])
+    recall_wired = False
+    for group in post_tool:
+        for h in group.get("hooks", []):
+            if h.get("command") == recall_cmd:
+                recall_wired = True
+                break
+        if recall_wired:
+            break
+    if recall_wired:
+        print("[codex] PostToolUse recall hook already wired")
+    else:
+        post_tool.append({
+            "matcher": "Edit|Write|apply_patch",
+            "hooks": [{
+                "type": "command",
+                "command": recall_cmd,
+                "statusMessage": "Smriti recall",
+                "timeout": 10,
+            }],
+        })
+        print("[codex] [[hooks.PostToolUse]] -> recall_hook.py (apply_patch)")
+        changed = True
+
+    # 4. MCP server registration
     mcp = data.setdefault("mcp_servers", {})
     desired = {
         "command": SMRITI_MCP_COMMAND["command"],
@@ -210,12 +252,18 @@ def write_agents_md(memory_root: Path) -> None:
     print(f"[codex] wrote {AGENTS_MD}")
 
 
+def install_hook_scripts() -> None:
+    """Deploy hooks from this package into ``~/.codex/hooks/``."""
+    deploy_hook_scripts(HOOKS_SRC, HOOKS_DST, ["recall_hook.py"])
+
+
 def run_codex(
     memory_root: Path,
     *,
     skip_config: bool = False,
 ) -> None:
     """Run all Codex-specific install steps. Idempotent."""
+    install_hook_scripts()
     if not skip_config:
         patch_config_toml(memory_root)
     write_agents_md(memory_root)
