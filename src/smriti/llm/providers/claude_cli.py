@@ -49,9 +49,23 @@ class ClaudeCliProvider:
         return ""
 
     def call(self, request: LLMRequest) -> LLMResponse:
+        # ``claude -p`` is single-shot. For multi-turn we render the
+        # message list with role markers; the model is generally good
+        # at recognizing the convention. Future: route through
+        # ``--resume <session-id>`` to preserve context server-side.
+        turns = request.turns()
+        if len(turns) == 1 and turns[0].role == "user":
+            user_block = turns[0].content
+        else:
+            lines = []
+            for m in turns:
+                tag = "Human" if m.role == "user" else "Assistant"
+                lines.append(f"{tag}: {m.content}")
+            lines.append("Assistant:")
+            user_block = "\n\n".join(lines)
         prompt = (
-            f"{request.system}\n\n{request.user}"
-            if request.system else request.user
+            f"{request.system}\n\n{user_block}"
+            if request.system else user_block
         )
         timeout = request.timeout_s or int(
             os.environ.get("NARADA_CLAUDE_TIMEOUT", "300")

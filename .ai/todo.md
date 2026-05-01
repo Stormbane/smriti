@@ -58,26 +58,28 @@
       the only remaining gap. Serves as a regression check —
       anything in Phases 3-5 that breaks library agnosticism
       breaks this example.
-- [ ] **Phase 7: close the gaps Phase 6 surfaced.**
-  - [ ] Multi-turn conversation in `examples/python_agent.py` — thread
-        messages so each turn carries history, not single-shot. Five
-        lines but reveals whether `LLMRequest` needs a `messages`
-        field (today it has separate `system` + `user`).
-  - [ ] Tool-wiring demo in the example — give the agent a couple of
-        tools (`read_file`, `list_dir`), wrap each with ambient recall
-        the way the Claude Code PostToolUse hook does. Surfaces
-        whether smriti needs a `recall.wrap_tool(fn)` helper or
-        whether call-driven recall is fine as-is.
-  - [ ] Auto-journal on session end — agent writes a turn-by-turn
-        summary via `write_entry(branch="journal")` on `exit`. Makes
-        the example demonstrate smriti's bidirectional nature
-        (read + write), not just retrieval.
-  - [ ] `/provider list` slash command — show all known providers
-        and their availability/default models, so users can confirm
-        the wiring before sending real prompts.
-  - [ ] Document the example in `docs/INSTALL.md` (or new
-        `docs/USAGE.md`) — at minimum the four `SMRITI_LLM_PROVIDER`
-        invocations and what the user needs configured for each.
+- [x] **Phase 7: close the gaps Phase 6 surfaced.**
+  - [x] Multi-turn conversation: added `Message` dataclass and
+        `LLMRequest.messages: list[Message] | None`. All four
+        providers consume `request.turns()` — Anthropic and OpenAI
+        and Ollama natively, claude_cli renders Human/Assistant
+        markers (no `--resume` yet). `call_llm` accepts
+        `messages=`. Example threads history.
+  - [x] Tool-wiring demo: new `smriti.recall.wrap_tool(fn,
+        query_from=...)` returns a callable that bundles
+        `ToolResult(output, recall, recall_block)`. Example wires
+        `/tool read` and `/tool ls`; recall block is appended to
+        history so the next turn sees ambient memory.
+  - [x] Auto-journal on session end: `_auto_journal` writes a
+        turn-by-turn summary to `journal` branch on exit / Ctrl-D.
+        Demonstrates write side of the library.
+  - [x] `/provider list`: new `smriti.llm.list_providers()`
+        enumerates registered providers with availability, default
+        models, aliases. Wired to `/provider list` in the example.
+  - [x] `docs/USAGE.md` — library entry points, four
+        `SMRITI_LLM_PROVIDER` invocations with env var matrix,
+        agent-building recipe with composition snippets. Linked
+        from `INSTALL.md`.
 
 ## Associative recall (qmd integration) -- top of stack
 

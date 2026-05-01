@@ -24,11 +24,17 @@ register it in ``factory._REGISTRY``.
 
 from __future__ import annotations
 
-from smriti.llm.types import LLMRequest, LLMResponse, LLMError, RateLimitExceeded
+from smriti.llm.types import (
+    LLMError,
+    LLMRequest,
+    LLMResponse,
+    Message,
+    RateLimitExceeded,
+)
 from smriti.llm.provider import LLMProvider
-from smriti.llm.factory import call_llm, get_provider
+from smriti.llm.factory import call_llm, get_provider, list_providers
 
 __all__ = [
-    "LLMRequest", "LLMResponse", "LLMError", "RateLimitExceeded",
-    "LLMProvider", "call_llm", "get_provider",
+    "LLMRequest", "LLMResponse", "LLMError", "RateLimitExceeded", "Message",
+    "LLMProvider", "call_llm", "get_provider", "list_providers",
 ]

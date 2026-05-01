@@ -63,7 +63,10 @@ class AnthropicApiProvider:
                     "text": request.system,
                     "cache_control": {"type": "ephemeral"},
                 }],
-                messages=[{"role": "user", "content": request.user}],
+                messages=[
+                    {"role": m.role, "content": m.content}
+                    for m in request.turns()
+                ],
             )
         except Exception as exc:
             # Anthropic SDK raises typed errors; surface rate-limits as

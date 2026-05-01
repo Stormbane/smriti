@@ -57,7 +57,8 @@ class OpenAIApiProvider:
         messages: list[dict] = []
         if request.system:
             messages.append({"role": "system", "content": request.system})
-        messages.append({"role": "user", "content": request.user})
+        for m in request.turns():
+            messages.append({"role": m.role, "content": m.content})
 
         kwargs: dict = {
             "model": model,

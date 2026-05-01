@@ -6,6 +6,10 @@ This document covers:
 2. [New project setup](#2-new-project-setup) — template and mirror wiring for new projects
 3. [PreCompact capture hook](#3-precompact-capture-hook) — the raw-turn backstop
 
+For using smriti as a Python library outside Claude Code (custom
+agents, Cursor / Cline / Continue.dev, evaluation harnesses), see
+[USAGE.md](USAGE.md).
+
 ---
 
 ## 1. smriti + entity session-start
