@@ -230,6 +230,8 @@ def setup_mirror(
     """Create per-project mirror junctions under <memory-root>/mirrors/.
 
     Always: knowledge/ and ai/ junctions (harness-neutral content).
+    Conditional: src-docs/ junction (when project has a src/ dir) — picks
+    up *.md anywhere under src/ (module READMEs, code-adjacent design notes).
     Conditional: auto-memory/ junction (Claude Code only — Codex has no
     equivalent per-project memory dir).
     Always: native subdirs for findings/decisions/research.
@@ -254,6 +256,13 @@ def setup_mirror(
 
     ai_dir = project / ".ai"
     make_junction(mirror / "ai", ai_dir)
+
+    # Code-adjacent docs: any *.md under src/ (module READMEs, design notes
+    # next to the code they describe). The scanner filters to markdown and
+    # skips hidden dirs, so walking src/ is safe even for large repos.
+    src_dir = project / "src"
+    if src_dir.is_dir():
+        make_junction(mirror / "src-docs", src_dir)
 
     # Native directories for smriti-side memory (not junctioned). These hold
     # durable, cascade-aware artifacts that live in the memory tree, not in
