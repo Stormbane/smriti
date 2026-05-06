@@ -210,33 +210,50 @@ def _frame_output(text: str, framing: str) -> str:
 
 
 def main() -> int:
+    # Recall snippets routinely contain non-ASCII (arrows, em-dashes,
+    # devanagari, etc.). On Windows, Python's stdout defaults to the
+    # console codepage (often cp1252), which crashes on those chars.
+    # Reconfigure to UTF-8 with replacement so the hook can never die
+    # on a snippet's encoding.
     try:
-        payload = json.loads(sys.stdin.read() or "{}")
-    except json.JSONDecodeError:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
+    try:
+        try:
+            payload = json.loads(sys.stdin.read() or "{}")
+        except json.JSONDecodeError:
+            return 0
+
+        tool_name = payload.get("tool_name") or payload.get("toolName") or ""
+        tool_input = payload.get("tool_input") or payload.get("toolInput") or {}
+
+        paths = _extract_paths(tool_name, tool_input)
+        if not paths:
+            return 0
+
+        matches = _run_recall_for_paths(paths)
+        if not matches:
+            return 0
+
+        # Header summarises the trigger so the model can tell which tool
+        # call surfaced the memory.
+        if len(paths) == 1:
+            header = f"tool: {tool_name}, file: {Path(paths[0]).name}"
+        else:
+            header = f"tool: {tool_name}, {len(paths)} files"
+
+        block = _format_block(matches, header)
+        framing = os.environ.get("SMRITI_RECALL_FRAMING", "raw").strip()
+        sys.stdout.write(_frame_output(block, framing))
         return 0
-
-    tool_name = payload.get("tool_name") or payload.get("toolName") or ""
-    tool_input = payload.get("tool_input") or payload.get("toolInput") or {}
-
-    paths = _extract_paths(tool_name, tool_input)
-    if not paths:
+    except Exception:
+        # Honour the contract documented in the module docstring: a
+        # recall hook must never break the parent tool call. Anything
+        # unexpected (config parse failure, stdout I/O error, etc.)
+        # collapses to a silent no-op.
         return 0
-
-    matches = _run_recall_for_paths(paths)
-    if not matches:
-        return 0
-
-    # Header summarises the trigger so the model can tell which tool
-    # call surfaced the memory.
-    if len(paths) == 1:
-        header = f"tool: {tool_name}, file: {Path(paths[0]).name}"
-    else:
-        header = f"tool: {tool_name}, {len(paths)} files"
-
-    block = _format_block(matches, header)
-    framing = os.environ.get("SMRITI_RECALL_FRAMING", "raw").strip()
-    sys.stdout.write(_frame_output(block, framing))
-    return 0
 
 
 if __name__ == "__main__":
