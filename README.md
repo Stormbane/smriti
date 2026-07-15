@@ -30,14 +30,14 @@ smriti index
 smriti status
 ```
 
-After install, start a new Claude Code session in any project. The entity's
-identity files load automatically, and `smriti_read` / `smriti_write` /
-`smriti_status` appear as MCP tools.
+After install, start a new session in the selected harness. The entity's
+identity files load automatically. Claude Code and Codex also expose
+`smriti_read` / `smriti_write` / `smriti_status` as MCP tools.
 
 ## What smriti does
 
-smriti gives an AI entity persistent memory across Claude Code sessions and
-projects. It provides:
+smriti gives an AI entity persistent memory across agent sessions and projects.
+It provides:
 
 - **Write**: `smriti_write("learned X about Y", branch="projects/foo")` stores
   a dated entry in the entity's memory tree with YAML frontmatter.
@@ -55,8 +55,9 @@ sqlite-vec and FTS5) provides the search index. No external services required.
 
 ## Install
 
-**Prerequisites**: Python 3.11+, Claude Code installed, Windows 10/11
-(Linux/macOS symlink support is a future task).
+**Prerequisites**: Python 3.11+, at least one supported harness (Claude Code,
+Codex, or Hermes), and Windows 10/11 (Linux/macOS symlink support is a future
+task).
 
 ### Full install (new machine)
 
@@ -69,8 +70,12 @@ pip install -e ".[read,dev]"
 mkdir -p ~/.narada
 # At minimum: echo "# Identity" > ~/.narada/identity.md
 
-# Run installer
+# Run installer (Claude Code is the backwards-compatible default)
 python scripts/install.py
+
+# Or select another harness explicitly
+python scripts/install.py --harness codex
+python scripts/install.py --harness hermes
 ```
 
 The installer is idempotent. It:
@@ -82,6 +87,12 @@ The installer is idempotent. It:
 | MCP server | Registers smriti in `~/.claude.json` so tools are available in every session |
 | Settings | Patches `~/.claude/settings.json` with a SessionStart hook that runs wake.py |
 | CLAUDE.md | Writes `~/.claude/CLAUDE.md` with the memory-system contract |
+
+With `--harness codex`, the harness phase writes the global `AGENTS.md`,
+registers the MCP server, and installs Codex SessionStart/PostToolUse hooks.
+With `--harness hermes`, it atomically generates `~/.hermes/SOUL.md` from the
+shared core context plus `.smriti/context/hermes.md`. This replaces the legacy
+hardlink to `wake-context.md`.
 
 Re-run any time after adding a new project or updating smriti.
 
@@ -109,6 +120,7 @@ tools.
 ```bash
 smriti status    # check index stats
 smriti read "test query"   # verify search works
+smriti doctor --harness codex --project /path/to/project
 ```
 
 See [`docs/INSTALL.md`](docs/INSTALL.md) for the full guide including the
@@ -128,6 +140,7 @@ smriti sleep              # process queued cascade tasks
 smriti queue              # show queue status
 smriti daemon start       # unified watcher + queue processor
 smriti status             # index stats
+smriti doctor --harness codex --project /path/to/project  # bridge readiness
 smriti metrics            # show recent operation metrics
 smriti eval               # run evaluation suite
 ```
@@ -191,13 +204,18 @@ Optional cross-encoder reranking for final result quality.
 
 ### The wake system
 
-On every Claude Code session start, `wake.py` loads:
-- Identity files from `~/.narada/` (always)
-- Current project's auto-memory and todo (via mirror junctions)
-- A list of other reachable project memories
+Smriti separates shared identity from harness-specific instructions:
 
-The load list is configured in `~/.narada/wake.md`. Wake is silent for
-headless calls (`claude -p`) unless `SMRITI_WAKE=1` is set.
+- `.smriti/wake-context.md` is the compact, audience-neutral identity core.
+- `.smriti/context/<audience>.md` is an optional targeted overlay.
+- Claude Code and Codex run `wake.py` with the `coding` audience, then receive
+  the current project's canonical `.ai/STATUS.md` and `.ai/INDEX.md`, recent
+  journal entries, and the identity reading list.
+- Hermes reads `~/.hermes/SOUL.md` directly, so Smriti materializes it from
+  `wake-context.md` plus `context/hermes.md`. Every wake-context rebuild
+  refreshes the live SOUL automatically.
+
+Wake is silent for headless calls (`claude -p`) unless `SMRITI_WAKE=1` is set.
 
 ## Architecture
 

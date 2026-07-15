@@ -6,7 +6,7 @@ This document covers:
 2. [New project setup](#2-new-project-setup) — template and mirror wiring for new projects
 3. [PreCompact capture hook](#3-precompact-capture-hook) — the raw-turn backstop
 
-For using smriti as a Python library outside Claude Code (custom
+For using smriti as a Python library outside the supported harnesses (custom
 agents, Cursor / Cline / Continue.dev, evaluation harnesses), see
 [USAGE.md](USAGE.md).
 
@@ -77,6 +77,18 @@ python scripts/install.py --memory-root ~/.tara
 The installer is idempotent — re-run any time after adding a new project
 or after the smriti repo's `narada/` templates change.
 
+### Selecting a harness
+
+Claude Code is the backwards-compatible default. The installer can wire the
+same memory root into any supported harness:
+
+```bash
+python scripts/install.py --harness claude_code
+python scripts/install.py --harness codex
+python scripts/install.py --harness hermes
+python scripts/install.py --harness none  # core memory setup only
+```
+
 ### What the installer does
 
 | Step | Location | Purpose |
@@ -89,6 +101,28 @@ or after the smriti repo's `narada/` templates change.
 | Register MCP server | `~/.claude.json` | Exposes `smriti_read` / `smriti_write` / `smriti_status` |
 | Patch settings.json | `~/.claude/settings.json` | Wire SessionStart → `python wake.py` |
 | Write CLAUDE.md | `~/.claude/CLAUDE.md` | Wake contract + memory-search tool preference |
+
+The table above describes the default Claude Code bridge. The Codex bridge
+writes `~/.codex/AGENTS.md`, patches `~/.codex/config.toml`, registers the MCP
+server, and installs wake/recall hooks. Verify it without changing state:
+
+```bash
+smriti doctor --harness codex --project C:/Projects/your-project
+```
+
+The Hermes bridge writes `~/.hermes/SOUL.md`. It is a generated composition of
+`<entity>/.smriti/wake-context.md` and
+`<entity>/.smriti/context/hermes.md`; do not edit it as the source of truth.
+The write is atomic, which safely replaces the old core-only hardlink. Whenever
+Smriti rebuilds `wake-context.md`, it rebuilds the live Hermes SOUL as well.
+
+### Audience-specific wake context
+
+The core wake briefing is deliberately harness-neutral. Optional overlays live
+at `<entity>/.smriti/context/<audience>.md`. Claude Code and Codex select the
+`coding` audience; Hermes uses `hermes`. Keeping receptionist/orchestration
+instructions in `context/hermes.md` prevents them from leaking into coding
+sessions while preserving a single shared identity core.
 
 ### Editing the load list
 

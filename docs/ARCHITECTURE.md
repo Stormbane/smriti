@@ -872,6 +872,28 @@ list means the entity cannot shift its own waking self. Making the
 bootstrap path list a near-trunk MOC maintained by the cascade means the
 entity *can*.
 
+#### Core context and audience overlays
+
+The implemented wake path has two layers:
+
+1. `.smriti/wake-context.md` is a derived, compact identity core shared by
+   every harness.
+2. `.smriti/context/<audience>.md` contains instructions that belong only to
+   a particular role or delivery surface.
+
+Claude Code and Codex request the `coding` audience through their SessionStart
+hooks. Hermes does not execute the wake runner; it reads `~/.hermes/SOUL.md`
+directly. Smriti therefore atomically composes that file from the shared core
+plus `context/hermes.md`. `store.wake_summary.rebuild()` synchronizes the SOUL
+after every successful core rebuild. Atomic replacement is load-bearing: it
+removes the former hardlink without writing Hermes-only instructions back into
+the audience-neutral core.
+
+Tests must distinguish rendering from delivery. Audience-selection tests prove
+the correct overlay can be rendered; the Hermes integration test additionally
+proves that the live delivery artifact contains both layers, replaces a legacy
+hardlink, and changes when the core is rebuilt.
+
 **The pattern**:
 
 ```
