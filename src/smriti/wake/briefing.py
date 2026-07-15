@@ -8,8 +8,7 @@ calls this.
 Output order (hardcoded; no config file needed):
     1. PROJECT/SESSION header line
     2. .smriti/wake-context.md (identity + threads briefing)
-    3. Current project files (mirrors/<cwd>/auto-memory/MEMORY.md,
-       mirrors/<cwd>/ai/todo.md)
+    3. Current project files (mirrors/<cwd>/ai/STATUS.md and INDEX.md)
     4. Recent journal entries (last N daily files, newest first)
     5. Reading list (canonical identity files, ordered by importance)
 """
@@ -95,7 +94,7 @@ def _find_recent_daily_files(journal_dir: Path, n: int) -> list[Path]:
     return [p for _, p in daily_files[:n]]
 
 
-def _emit_context(bw: _BudgetWriter, memory_root: Path) -> None:
+def _emit_context(bw: _BudgetWriter, memory_root: Path, audience: str) -> None:
     path = memory_root / ".smriti" / "wake-context.md"
     try:
         content = path.read_text(encoding="utf-8")
@@ -105,16 +104,29 @@ def _emit_context(bw: _BudgetWriter, memory_root: Path) -> None:
     bw.write(content, cap=CONTEXT_CAP, label=f"Read full: {path}")
     bw.write_line("")
 
+    targeted = memory_root / ".smriti" / "context" / f"{audience}.md"
+    try:
+        targeted_content = targeted.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return
+    bw.write_line(f"--- {audience.upper()} CONTEXT ---")
+    bw.write(targeted_content, cap=CONTEXT_CAP, label=f"Read full: {targeted}")
+    bw.write_line("")
+
 
 def _emit_project_files(bw: _BudgetWriter, memory_root: Path, cwd_name: str) -> None:
     project_budget = min(PROJECT_CAP, bw.remaining)
     if project_budget < 100:
         return
     project_used = 0
-    mirror_files = [
-        f"mirrors/{cwd_name}/auto-memory/MEMORY.md",
-        f"mirrors/{cwd_name}/ai/todo.md",
+    canonical_files = [
+        f"mirrors/{cwd_name}/ai/STATUS.md",
+        f"mirrors/{cwd_name}/ai/INDEX.md",
     ]
+    mirror_files = [rel for rel in canonical_files if (memory_root / rel).is_file()]
+    if not mirror_files:
+        mirror_files = [f"mirrors/{cwd_name}/ai/todo.md"]
+    per_file_cap = max(100, project_budget // len(mirror_files))
     for rel in mirror_files:
         path = memory_root / rel
         try:
@@ -123,12 +135,12 @@ def _emit_project_files(bw: _BudgetWriter, memory_root: Path, cwd_name: str) -> 
             continue
         header = f"--- {rel.upper().replace('/', ' / ').replace('.MD', '')} ---\n"
         block = header + content + "\n"
-        remaining = project_budget - project_used
+        remaining = min(project_budget - project_used, per_file_cap)
         if len(block) > remaining:
-            if remaining > 100:
+            if remaining >= 100:
                 bw.write(block, cap=remaining, label=f"Read full: {path}")
                 project_used += remaining
-            break
+            continue
         bw.write(block)
         project_used += len(block)
 
@@ -212,6 +224,7 @@ def briefing(
     cwd: Path | str | None = None,
     budget_chars: int = DEFAULT_BUDGET,
     journal_entries: int = DEFAULT_JOURNAL_ENTRIES,
+    audience: str = "coding",
 ) -> str:
     """Assemble the session-start briefing as a string.
 
@@ -249,7 +262,7 @@ def briefing(
         bw.write_line(f"--- SESSION: {cwd_path} (no project mirror) ---")
     bw.write_line("")
 
-    _emit_context(bw, memory_root)
+    _emit_context(bw, memory_root, audience)
     _emit_project_files(bw, memory_root, cwd_name)
     _emit_recent_journal(bw, memory_root, journal_entries)
     _emit_reading_list(bw, memory_root)

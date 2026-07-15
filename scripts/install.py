@@ -36,7 +36,7 @@ from smriti.install.core import (
 )
 
 
-KNOWN_HARNESSES = ("claude_code", "codex", "none")
+KNOWN_HARNESSES = ("claude_code", "codex", "hermes", "none")
 
 
 def main() -> int:

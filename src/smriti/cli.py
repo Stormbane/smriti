@@ -155,6 +155,18 @@ def _cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    from smriti.core.tree import tree_root
+    from smriti.doctor import run_doctor
+
+    memory_root = Path(args.memory_root).expanduser() if args.memory_root else tree_root()
+    return run_doctor(
+        harness=args.harness,
+        memory_root=memory_root,
+        project=Path(args.project).expanduser(),
+    )
+
+
 def _cmd_watch(args: argparse.Namespace) -> int:
     from smriti import watcher
 
@@ -1180,6 +1192,11 @@ def main(argv: list[str] | None = None) -> int:
     # ── status ───────────────────────────────────────────────────────
     sub.add_parser("status", help="Show index status")
 
+    p_doctor = sub.add_parser("doctor", help="Verify a harness bridge without changing state")
+    p_doctor.add_argument("--harness", required=True, choices=["codex"])
+    p_doctor.add_argument("--project", required=True, help="Project root to inspect")
+    p_doctor.add_argument("--memory-root", default=None, help="Memory root (default: ~/.narada)")
+
     # ── watch ────────────────────────────────────────────────────────
     sub.add_parser("watch", help="Watch the tree for changes (foreground)")
 
@@ -1338,6 +1355,7 @@ def main(argv: list[str] | None = None) -> int:
         "write": _cmd_write,
         "read": _cmd_read,
         "status": _cmd_status,
+        "doctor": _cmd_doctor,
         "watch": _cmd_watch,
         "sleep": _cmd_sleep,
         "queue": _cmd_queue,

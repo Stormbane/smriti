@@ -34,7 +34,8 @@ def wake_tree(tmp_path: Path) -> Path:
     # Project mirror
     mirrors_ai = tmp_path / "mirrors" / "testproject" / "ai"
     mirrors_ai.mkdir(parents=True)
-    (mirrors_ai / "todo.md").write_text("# TODO\n- [ ] Test task\n")
+    (mirrors_ai / "STATUS.md").write_text("# STATUS\nTest current state.\n")
+    (mirrors_ai / "INDEX.md").write_text("# INDEX\nTest project routing.\n")
     mirrors_mem = tmp_path / "mirrors" / "testproject" / "auto-memory"
     mirrors_mem.mkdir(parents=True)
     (mirrors_mem / "MEMORY.md").write_text("# Memory\nTest memory index.\n")
@@ -50,6 +51,7 @@ def _run_wake(wake_tree: Path, env_vars: dict | None = None, cwd: str | None = N
     env = os.environ.copy()
     env.pop("SMRITI_WAKE", None)
     env["SMRITI_ROOT"] = str(wake_tree)  # Point wake.py at the test tree
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
     if env_vars:
         env.update(env_vars)
     return subprocess.run(
@@ -101,14 +103,28 @@ class TestWakeSections:
         assert "test entity" in result.stdout
         assert "IDENTITY" in result.stdout
 
+    def test_targeted_context_requires_matching_audience(self, wake_tree: Path) -> None:
+        targeted = wake_tree / ".smriti" / "context"
+        targeted.mkdir()
+        (targeted / "hermes.md").write_text("Hermes-only routing.\n")
+
+        coding = _run_wake(wake_tree, {"SMRITI_WAKE": "1"})
+        hermes = _run_wake(
+            wake_tree, {"SMRITI_WAKE": "1", "SMRITI_WAKE_AUDIENCE": "hermes"}
+        )
+
+        assert "Hermes-only routing." not in coding.stdout
+        assert "Hermes-only routing." in hermes.stdout
+
     def test_project_files_loaded(self, wake_tree: Path) -> None:
         result = _run_wake(
             wake_tree,
             {"SMRITI_WAKE": "1"},
             cwd=str(wake_tree / "mirrors" / "testproject"),
         )
-        assert "Test task" in result.stdout
-        assert "Test memory" in result.stdout
+        assert "Test current state" in result.stdout
+        assert "Test project routing" in result.stdout
+        assert "Test memory" not in result.stdout
 
     def test_unknown_project_skips_gracefully(self, wake_tree: Path) -> None:
         result = _run_wake(

@@ -74,7 +74,9 @@ def patch_settings_json(memory_root: Path) -> None:
 
     hooks = data.setdefault("hooks", {})
     memory_rel = memory_root.relative_to(HOME).as_posix()
-    wake_cmd = make_wake_hook_command(memory_root, home=HOME, framing="raw")
+    wake_cmd = make_wake_hook_command(
+        memory_root, home=HOME, framing="raw", audience="coding"
+    )
     activity_cmd = (
         f'touch "$HOME/{memory_rel}/.smriti/last-activity" 2>/dev/null || true'
     )
