@@ -111,7 +111,8 @@ def run(
         # smriti not on path; fail silent so we never block the session.
         return 0
 
-    payload = briefing(memory_root=entity_root, cwd=Path(os.getcwd()))
+    audience = os.environ.get("SMRITI_WAKE_AUDIENCE", "coding").strip() or "coding"
+    payload = briefing(memory_root=entity_root, cwd=Path(os.getcwd()), audience=audience)
     sys.stdout.write(_frame(payload, framing))
     return 0
 

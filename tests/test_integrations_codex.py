@@ -42,7 +42,7 @@ class TestPatchConfigTomlFromScratch:
         codex_install.patch_config_toml(memory_root)
 
         data = _read_toml(fake_codex_home / ".codex" / "config.toml")
-        assert data["features"]["codex_hooks"] is True
+        assert data["features"]["hooks"] is True
         assert "SessionStart" in data["hooks"]
         assert "PostToolUse" in data["hooks"]
         assert data["mcp_servers"]["smriti"] == {
@@ -55,6 +55,7 @@ class TestPatchConfigTomlFromScratch:
         data = _read_toml(fake_codex_home / ".codex" / "config.toml")
         ss_cmd = data["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         assert 'SMRITI_WAKE_FRAMING="codex-json"' in ss_cmd
+        assert 'SMRITI_WAKE_AUDIENCE="coding"' in ss_cmd
         assert "wake.py" in ss_cmd
 
     def test_post_tool_use_matcher_includes_apply_patch(self, fake_codex_home):
@@ -67,10 +68,10 @@ class TestPatchConfigTomlFromScratch:
         assert 'SMRITI_RECALL_FRAMING="codex-json"' in cmd
         assert "recall_hook.py" in cmd
 
-    def test_session_start_matcher_is_startup_or_resume(self, fake_codex_home):
+    def test_session_start_matcher_covers_context_resets(self, fake_codex_home):
         codex_install.patch_config_toml(fake_codex_home / ".narada")
         data = _read_toml(fake_codex_home / ".codex" / "config.toml")
-        assert data["hooks"]["SessionStart"][0]["matcher"] == "startup|resume"
+        assert data["hooks"]["SessionStart"][0]["matcher"] == "startup|resume|clear|compact"
 
 
 class TestPatchConfigTomlMergeBehavior:
@@ -90,7 +91,7 @@ class TestPatchConfigTomlMergeBehavior:
         assert data["some_user_setting"]["key"] == "value"
         assert data["unrelated_top_level"] == 42
         # And our keys are still present.
-        assert data["features"]["codex_hooks"] is True
+        assert data["features"]["hooks"] is True
 
     def test_idempotent_re_run_no_duplicate_hooks(self, fake_codex_home, capsys):
         memory_root = fake_codex_home / ".narada"
@@ -104,6 +105,25 @@ class TestPatchConfigTomlMergeBehavior:
         data = _read_toml(fake_codex_home / ".codex" / "config.toml")
         assert len(data["hooks"]["SessionStart"]) == 1
         assert len(data["hooks"]["PostToolUse"]) == 1
+
+    def test_replaces_legacy_smriti_wake_hook(self, fake_codex_home):
+        config = fake_codex_home / ".codex" / "config.toml"
+        config.write_text(
+            "[[hooks.SessionStart]]\n"
+            'matcher = "startup|resume"\n'
+            "[[hooks.SessionStart.hooks]]\n"
+            'type = "command"\n'
+            'command = \'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/.narada" python "$HOME/.narada/.smriti/wake.py"\'\n',
+            encoding="utf-8",
+        )
+
+        codex_install.patch_config_toml(fake_codex_home / ".narada")
+
+        data = _read_toml(config)
+        hooks = data["hooks"]["SessionStart"]
+        assert len(hooks) == 1
+        assert hooks[0]["matcher"] == "startup|resume|clear|compact"
+        assert 'SMRITI_WAKE_AUDIENCE="coding"' in hooks[0]["hooks"][0]["command"]
 
     def test_idempotent_when_mcp_already_registered(self, fake_codex_home, capsys):
         codex_install.patch_config_toml(fake_codex_home / ".narada")

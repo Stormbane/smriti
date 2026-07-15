@@ -42,6 +42,7 @@ class TestMCPSpec:
         # Raw framing has no SMRITI_WAKE_FRAMING var.
         assert "SMRITI_WAKE_FRAMING" not in cmd
         assert "SMRITI_WAKE=1" in cmd
+        assert 'SMRITI_WAKE_AUDIENCE="coding"' in cmd
         assert 'SMRITI_ROOT="$HOME/.narada"' in cmd
         assert '"$HOME/.narada/.smriti/wake.py"' in cmd
         # Forward-slash paths only — bash hostility to backslashes.

@@ -2,7 +2,7 @@
 
 Wires smriti into OpenAI's Codex CLI:
     - Patches ``~/.codex/config.toml``:
-        * ``[features] codex_hooks = true`` (enables the hooks system)
+        * ``[features] hooks = true`` (enables the hooks system)
         * ``[[hooks.SessionStart]]`` -> wake.py with
           ``SMRITI_WAKE_FRAMING=codex-json`` so identity is force-loaded
           before the first user turn (this is the equivalent of Claude
@@ -135,15 +135,18 @@ def patch_config_toml(memory_root: Path) -> None:
     data = _read_toml(CONFIG_TOML)
     changed = False
 
-    # 1. Enable hooks
+    # 1. Enable hooks. ``codex_hooks`` remains a compatibility alias but
+    # ``hooks`` is the current documented key.
     features = data.setdefault("features", {})
-    if features.get("codex_hooks") is not True:
-        features["codex_hooks"] = True
-        print("[codex] [features] codex_hooks = true")
+    if features.get("hooks") is not True:
+        features["hooks"] = True
+        print("[codex] [features] hooks = true")
         changed = True
 
     # 2. SessionStart hook -> wake.py with codex-json framing.
-    wake_cmd = make_wake_hook_command(memory_root, home=HOME, framing="codex-json")
+    wake_cmd = make_wake_hook_command(
+        memory_root, home=HOME, framing="codex-json", audience="coding"
+    )
     hooks = data.setdefault("hooks", {})
     session_start = hooks.setdefault("SessionStart", [])
 
@@ -153,25 +156,39 @@ def patch_config_toml(memory_root: Path) -> None:
     #     [[hooks.SessionStart.hooks]]
     #     type = "command"
     #     command = "..."
-    wake_wired = False
+    def is_smriti_wake(hook: dict) -> bool:
+        command = hook.get("command", "")
+        return "SMRITI_ROOT=" in command and "/.smriti/wake.py" in command
+
+    # Replace only Smriti-managed legacy hooks. User hooks, including hooks
+    # in a group that also contained the legacy wake hook, survive intact.
+    retained_groups = []
+    managed_found = False
     for group in session_start:
-        for h in group.get("hooks", []):
-            if h.get("command") == wake_cmd:
-                wake_wired = True
-                break
-        if wake_wired:
-            break
-    if wake_wired:
-        print("[codex] SessionStart wake hook already wired")
+        retained_hooks = [hook for hook in group.get("hooks", []) if not is_smriti_wake(hook)]
+        if len(retained_hooks) != len(group.get("hooks", [])):
+            managed_found = True
+        if retained_hooks:
+            retained_groups.append({**group, "hooks": retained_hooks})
+
+    canonical_group = {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [{
+            "type": "command",
+            "command": wake_cmd,
+            "statusMessage": "Loading smriti memory briefing",
+        }],
+    }
+    if managed_found:
+        replacement = [*retained_groups, canonical_group]
+        if session_start != replacement:
+            hooks["SessionStart"] = replacement
+            print("[codex] [[hooks.SessionStart]] -> wake.py (migrated)")
+            changed = True
+        else:
+            print("[codex] SessionStart wake hook already wired")
     else:
-        session_start.append({
-            "matcher": "startup|resume",
-            "hooks": [{
-                "type": "command",
-                "command": wake_cmd,
-                "statusMessage": "Loading smriti memory briefing",
-            }],
-        })
+        hooks["SessionStart"].append(canonical_group)
         print("[codex] [[hooks.SessionStart]] -> wake.py (codex-json framing)")
         changed = True
 

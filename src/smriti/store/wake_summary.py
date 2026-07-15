@@ -138,6 +138,15 @@ def rebuild(
     out.write_text(result, encoding="utf-8")
     log.info("Rebuilt wake-context.md (%d chars)", len(result))
 
+    # Hermes consumes SOUL.md directly rather than running wake.py. Keep its
+    # materialized core + audience overlay synchronized with every rebuild.
+    try:
+        from smriti.integrations.hermes.install import compose_soul
+
+        compose_soul(root)
+    except (FileNotFoundError, OSError) as exc:
+        log.warning("Hermes SOUL.md synchronization skipped: %s", exc)
+
     from smriti.metrics import get_logger
     get_logger().log(
         "wake_context_rebuilt",

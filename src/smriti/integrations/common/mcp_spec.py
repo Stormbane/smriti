@@ -24,6 +24,7 @@ def make_wake_hook_command(
     *,
     home: Path,
     framing: str = "raw",
+    audience: str = "coding",
 ) -> str:
     """Shell command string the harness runs at SessionStart.
 
@@ -43,7 +44,8 @@ def make_wake_hook_command(
         f'SMRITI_WAKE_FRAMING="{framing}" ' if framing != "raw" else ""
     )
     return (
-        f'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/{memory_rel}" {framing_var}'
+        f'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/{memory_rel}" '
+        f'SMRITI_WAKE_AUDIENCE="{audience}" {framing_var}'
         f'python "$HOME/{memory_rel}/.smriti/wake.py"'
     ).strip()
 
