@@ -13,6 +13,16 @@ from pathlib import Path
 import pytest
 
 from smriti.integrations.codex import install as codex_install
+from smriti.integrations.common.hook_model import (
+    EQUIVALENT,
+    classify_wake_hook,
+    make_wake_hook_command,
+    parse_wake_command,
+)
+from smriti.integrations.common.managed_doc import (
+    MANAGED_BEGIN,
+    classify_doc,
+)
 
 
 @pytest.fixture
@@ -54,9 +64,13 @@ class TestPatchConfigTomlFromScratch:
         codex_install.patch_config_toml(fake_codex_home / ".narada")
         data = _read_toml(fake_codex_home / ".codex" / "config.toml")
         ss_cmd = data["hooks"]["SessionStart"][0]["hooks"][0]["command"]
-        assert 'SMRITI_WAKE_FRAMING="codex-json"' in ss_cmd
-        assert 'SMRITI_WAKE_AUDIENCE="coding"' in ss_cmd
-        assert "wake.py" in ss_cmd
+        # Parse semantically: the command form is platform-dependent
+        # (sh on POSIX, PowerShell -EncodedCommand on Windows).
+        spec = parse_wake_command(ss_cmd)
+        assert spec is not None
+        assert spec.env["SMRITI_WAKE_FRAMING"] == "codex-json"
+        assert spec.env["SMRITI_WAKE_AUDIENCE"] == "coding"
+        assert spec.wake_path.endswith(".smriti/wake.py")
 
     def test_post_tool_use_matcher_includes_apply_patch(self, fake_codex_home):
         codex_install.patch_config_toml(fake_codex_home / ".narada")
@@ -123,7 +137,13 @@ class TestPatchConfigTomlMergeBehavior:
         hooks = data["hooks"]["SessionStart"]
         assert len(hooks) == 1
         assert hooks[0]["matcher"] == "startup|resume|clear|compact"
-        assert 'SMRITI_WAKE_AUDIENCE="coding"' in hooks[0]["hooks"][0]["command"]
+        verdict, detail = classify_wake_hook(
+            hooks[0]["hooks"][0]["command"],
+            memory_root=fake_codex_home / ".narada",
+            home=fake_codex_home,
+            framing="codex-json",
+        )
+        assert verdict == EQUIVALENT, detail
 
     def test_idempotent_when_mcp_already_registered(self, fake_codex_home, capsys):
         codex_install.patch_config_toml(fake_codex_home / ".narada")
@@ -188,7 +208,7 @@ class TestWriteAgentsMd:
 
 class TestRunCodex:
     def test_full_run_creates_all_artifacts(self, fake_codex_home):
-        codex_install.run_codex(fake_codex_home / ".narada")
+        assert codex_install.run_codex(fake_codex_home / ".narada") is True
         codex = fake_codex_home / ".codex"
         assert (codex / "config.toml").exists()
         assert (codex / "AGENTS.md").exists()
@@ -212,3 +232,78 @@ class TestRunCodex:
 
         assert (fake_codex_home / ".codex" / "config.toml").read_bytes() == config_before
         assert (fake_codex_home / ".codex" / "AGENTS.md").read_bytes() == agents_before
+
+
+# --- agent-doc preflight (adversarial review findings 1 + 5) --------------
+
+class TestAgentDocPreflight:
+    def test_unmarked_agents_md_refuses_before_any_mutation(self, fake_codex_home):
+        """Fail-closed: a legacy AGENTS.md must abort the install BEFORE
+        config.toml or hooks are touched, and run_codex must report
+        failure (not exit-0 success)."""
+        agents = fake_codex_home / ".codex" / "AGENTS.md"
+        agents.write_text("# Legacy generated doc, no markers\n", encoding="utf-8")
+
+        ok = codex_install.run_codex(fake_codex_home / ".narada")
+
+        assert ok is False
+        # Nothing else was mutated.
+        assert not (fake_codex_home / ".codex" / "config.toml").exists()
+        assert not (fake_codex_home / ".codex" / "hooks").exists()
+        # And the doc itself is untouched.
+        assert agents.read_text(encoding="utf-8") == "# Legacy generated doc, no markers\n"
+
+    def test_migrate_doc_flag_converts_then_proceeds(self, fake_codex_home):
+        agents = fake_codex_home / ".codex" / "AGENTS.md"
+        agents.write_text(
+            "# AGENTS.md (user-global)\n\n"
+            "## Memory system — smriti is the single write path\n\nold text\n",
+            encoding="utf-8",
+        )
+
+        ok = codex_install.run_codex(fake_codex_home / ".narada", migrate_doc=True)
+
+        assert ok is True
+        assert classify_doc(agents).kind == "managed"
+        assert agents.with_name("AGENTS.md.pre-migrate.bak").exists()
+        assert (fake_codex_home / ".codex" / "config.toml").exists()
+
+    def test_user_content_outside_block_survives_rerun(self, fake_codex_home):
+        assert codex_install.run_codex(fake_codex_home / ".narada") is True
+        agents = fake_codex_home / ".codex" / "AGENTS.md"
+        text = agents.read_text(encoding="utf-8")
+        agents.write_text(text + "\n## My own Codex notes\n\nkeep me\n", encoding="utf-8")
+
+        assert codex_install.run_codex(fake_codex_home / ".narada") is True
+        assert "keep me" in agents.read_text(encoding="utf-8")
+
+
+class TestLivePowerShellHookPreserved:
+    def test_encoded_equivalent_hook_is_left_untouched(self, fake_codex_home):
+        """Never regress a working hook: the live Windows install uses a
+        PowerShell -EncodedCommand form; a re-run must classify it
+        equivalent and leave the bytes alone."""
+        memory_root = fake_codex_home / ".narada"
+        ps_cmd = make_wake_hook_command(
+            memory_root,
+            home=fake_codex_home,
+            framing="codex-json",
+            style="powershell-encoded",
+        )
+        config = fake_codex_home / ".codex" / "config.toml"
+        config.write_text(
+            "[features]\nhooks = true\n\n"
+            "[[hooks.SessionStart]]\n"
+            'matcher = "startup|resume|clear|compact"\n'
+            "[[hooks.SessionStart.hooks]]\n"
+            'type = "command"\n'
+            f"command = '{ps_cmd}'\n",
+            encoding="utf-8",
+        )
+
+        codex_install.patch_config_toml(memory_root)
+
+        data = _read_toml(config)
+        hooks = data["hooks"]["SessionStart"]
+        assert len(hooks) == 1
+        assert hooks[0]["hooks"][0]["command"] == ps_cmd

@@ -77,6 +77,13 @@ def main() -> int:
         action="store_true",
         help="Don't auto-start qmd's HTTP daemon for associative recall",
     )
+    parser.add_argument(
+        "--migrate-agent-doc",
+        action="store_true",
+        help="One-time conversion of a legacy (unmarked) agent doc "
+             "(~/.claude/CLAUDE.md or ~/.codex/AGENTS.md) to the "
+             "smriti:managed marker form, with a .pre-migrate.bak backup",
+    )
     args = parser.parse_args()
 
     memory_root = Path(args.memory_root).expanduser()
@@ -104,13 +111,28 @@ def main() -> int:
         return 1
 
     if harness == "claude_code":
-        mod.run_claude_code(
+        ok = mod.run_claude_code(
             memory_root,
             skip_settings=args.skip_settings,
             skip_mcp=args.skip_mcp,
+            migrate_doc=args.migrate_agent_doc,
         )
+        if not ok:
+            print(f"
+FAILED ({harness}): install refused before mutating "
+                  "harness state — see message above.", file=sys.stderr)
+            return 1
     elif harness == "codex":
-        mod.run_codex(memory_root, skip_config=args.skip_config)
+        ok = mod.run_codex(
+            memory_root,
+            skip_config=args.skip_config,
+            migrate_doc=args.migrate_agent_doc,
+        )
+        if not ok:
+            print(f"
+FAILED ({harness}): install refused before mutating "
+                  "harness state — see message above.", file=sys.stderr)
+            return 1
     else:
         # Convention for new harnesses: expose a ``run(memory_root, **opts)``.
         if not hasattr(mod, "run"):
