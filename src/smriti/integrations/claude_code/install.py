@@ -126,29 +126,54 @@ def patch_settings_json(memory_root: Path) -> None:
         )
         return verdict
 
-    # SessionStart: wake.py via the canonical hook model.
+    # SessionStart: wake.py via the canonical hook model. Exactly ONE
+    # active smriti wake hook survives: the first equivalent one wins,
+    # else the first deficient one is upgraded in place; every other
+    # smriti wake hook (stale legacy, duplicate) is removed — two
+    # active hooks would run the briefing twice. Unrelated hooks are
+    # never modified.
     session_start = hooks.setdefault("SessionStart", [])
-    equivalent_found = False
+    equivalent_exists = any(
+        classify(hook.get("command", "")) == EQUIVALENT
+        for group in session_start
+        for hook in group.get("hooks", [])
+    )
+    wake_kept = False
     deficient_upgraded = False
+    duplicates_removed = False
+    rebuilt_groups = []
     for group in session_start:
+        kept_hooks = []
         for hook in group.get("hooks", []):
             verdict = classify(hook.get("command", ""))
-            if verdict == EQUIVALENT:
-                equivalent_found = True
-            elif verdict == DEFICIENT:
+            if verdict == EQUIVALENT and not wake_kept:
+                wake_kept = True
+                kept_hooks.append(hook)
+            elif verdict == DEFICIENT and not equivalent_exists and not wake_kept:
                 hook["command"] = wake_cmd
+                wake_kept = True
                 deficient_upgraded = True
+                kept_hooks.append(hook)
+            elif verdict in (EQUIVALENT, DEFICIENT):
+                duplicates_removed = True  # ours, redundant — drop
+            else:
+                kept_hooks.append(hook)
+        if kept_hooks:
+            rebuilt_groups.append({**group, "hooks": kept_hooks})
 
-    if equivalent_found:
-        print("[settings] SessionStart wake hook already wired (equivalent)")
-    elif deficient_upgraded:
-        print("[settings] SessionStart wake hook upgraded to canonical form")
-        changed = True
-    else:
-        session_start.append(
+    if not wake_kept:
+        rebuilt_groups.append(
             {"matcher": "", "hooks": [{"type": "command", "command": wake_cmd}]}
         )
         print("[settings] SessionStart -> wake.py")
+    elif deficient_upgraded:
+        print("[settings] SessionStart wake hook upgraded to canonical form")
+    else:
+        print("[settings] SessionStart wake hook already wired (equivalent)")
+    if duplicates_removed:
+        print("[settings] removed redundant smriti wake hook(s)")
+    if session_start != rebuilt_groups:
+        hooks["SessionStart"] = rebuilt_groups
         changed = True
 
     # UserPromptSubmit: touch last-activity (additive)
@@ -236,12 +261,17 @@ def _claude_md_block(memory_root: Path) -> str:
     )
 
 
+def agent_doc_state():
+    """Classify ~/.claude/CLAUDE.md without modifying it."""
+    return classify_doc(CLAUDE_MD)
+
+
 def preflight_agent_doc() -> str | None:
     """Validate ~/.claude/CLAUDE.md BEFORE any harness mutation.
 
     Returns None when safe to proceed, or a human-readable refusal.
     """
-    state = classify_doc(CLAUDE_MD)
+    state = agent_doc_state()
     if state.kind in ("missing", "managed"):
         return None
     return state.detail
