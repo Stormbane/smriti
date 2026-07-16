@@ -65,6 +65,24 @@ def _script_targets(command: str, home: Path) -> list[Path]:
     return targets
 
 
+def _all_hook_commands(hooks: dict) -> list[str]:
+    """Every command string under list-shaped hook-event entries.
+
+    Skips non-event tables that share the ``hooks`` namespace (Codex
+    keeps a ``[hooks.state]`` trust registry there) and any entry that
+    is not dict-shaped.
+    """
+    return [
+        hook.get("command", "")
+        for groups in hooks.values()
+        if isinstance(groups, list)
+        for group in groups
+        if isinstance(group, dict)
+        for hook in group.get("hooks", [])
+        if isinstance(hook, dict)
+    ]
+
+
 def _hook_targets_check(
     name: str, commands: list[str], home: Path
 ) -> Check:
@@ -183,12 +201,9 @@ def codex_checks(
                 "python -m smriti.mcp_server",
             )
         )
-        all_cmds = [
-            hook.get("command", "")
-            for groups in hooks.values()
-            for group in groups
-            for hook in group.get("hooks", [])
-        ]
+        # hooks holds event arrays AND non-event tables (Codex writes a
+        # [hooks.state] trust registry) — only walk the list-shaped ones.
+        all_cmds = _all_hook_commands(hooks)
         checks.append(_hook_targets_check("Codex hook targets exist", all_cmds, home))
 
     checks.append(_managed_doc_check("Global AGENTS.md", codex / "AGENTS.md"))
@@ -241,12 +256,7 @@ def claude_code_checks(
                 framing="raw",
             )
         )
-        all_cmds = [
-            hook.get("command", "")
-            for groups in hooks.values()
-            for group in groups
-            for hook in group.get("hooks", [])
-        ]
+        all_cmds = _all_hook_commands(hooks)
         checks.append(_hook_targets_check("Claude hook targets exist", all_cmds, home))
 
     claude_config = home / ".claude.json"
