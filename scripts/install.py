@@ -118,8 +118,7 @@ def main() -> int:
             migrate_doc=args.migrate_agent_doc,
         )
         if not ok:
-            print(f"
-FAILED ({harness}): install refused before mutating "
+            print(f"\nFAILED ({harness}): install refused before mutating "
                   "harness state — see message above.", file=sys.stderr)
             return 1
     elif harness == "codex":
@@ -129,8 +128,7 @@ FAILED ({harness}): install refused before mutating "
             migrate_doc=args.migrate_agent_doc,
         )
         if not ok:
-            print(f"
-FAILED ({harness}): install refused before mutating "
+            print(f"\nFAILED ({harness}): install refused before mutating "
                   "harness state — see message above.", file=sys.stderr)
             return 1
     else:
