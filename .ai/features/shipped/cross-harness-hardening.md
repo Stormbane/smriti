@@ -1,8 +1,7 @@
 ---
-status: planning
+status: shipped
 opened: 2026-07-16
-shipped:
-owner: both
+shipped: 2026-07-17 both
 related_findings: []
 related_decisions: []
 ---
@@ -134,7 +133,18 @@ entity-tree-is-versioned context ("no further objection"). One new finding:
 
 ## Implementation notes
 
-_Filled during build._
+Implemented on branch cross-harness-hardening (4 commits: f62c5f3, 30a7ccf, c66c68b, ca03774), NOT yet merged to master — Suti decides the merge.
+
+What shipped:
+- integrations/common/managed_doc.py: marker pair, classify/write/migrate, atomic writes, fail-closed preflight (runs BEFORE run_core in the dispatcher per review P2-1, nonzero exit on refusal per plan-review finding 5).
+- integrations/common/hook_model.py: canonical wake-hook generator + classifier (sh + PowerShell -EncodedCommand), shared by both installers and doctor. Codex on win32 now generates the PS form. Exactly one active wake hook survives any config (review P2-2: dedup, no double briefing).
+- doctor: semantic wake check, MCP superset match, claude-code harness suite, deployed-hook byte-match + hook-target-exists for both harnesses, shape-guard for [hooks.state].
+- Shared recall shim in integrations/common/hooks/, per-harness copies deleted.
+- INSTALL.md: install order, migration how-to, copies-not-symlinks decision.
+
+Live rollout completed 2026-07-17 on the Windows machine: CLAUDE.md and AGENTS.md migrated to managed blocks (backups: *.pre-migrate.bak), session_ending_check.py relocated to ~/.narada/.smriti/hooks/ with settings.json repointed (backup: settings.json.pre-relocate.bak), doctor all-PASS for both harnesses. 271 tests pass (baseline 215).
+
+Review trail (first full cross-agent loop): 2 adversarial plan rounds (5 findings: 4 accepted, 1 partial), 1 diff review (P0: installer syntax error — caught a green-suite-but-broken-install gap, now guarded by test_scripts_parse), 1 recheck (2 P2s, both fixed with regression tests). Every finding round produced at least one genuine defect.
 
 ## Findings
 
