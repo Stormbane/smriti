@@ -339,6 +339,60 @@ it is a backstop that runs alongside smriti's live pipelines.
 
 ---
 
+---
+
+## Install order, agent-doc migration, and the symlink question
+
+### Order on a fresh machine
+
+Clone/restore the **entity repo first**, then run the harness install:
+
+```
+git clone <entity-remote> ~/.narada     # identity, memory, .smriti/ hooks
+pip install -e <smriti-checkout>
+python scripts/install.py --harness claude_code   # or codex
+```
+
+The entity tree is itself a versioned git repository (committed and
+pushed by `backup.py` on every wake and session end), so entity-level
+hook scripts that live under `~/.narada/.smriti/hooks/` — e.g. a
+personal session-ending reminder — come back with the clone. Harness
+configs that reference them assume the clone exists; `smriti doctor`
+has a hook-target-exists check that catches the gap.
+
+### Agent-doc managed block
+
+`~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` are shared real estate:
+smriti owns exactly one block between `<!-- smriti:managed:begin -->`
+and `<!-- smriti:managed:end -->` markers and never touches a byte
+outside it. A pre-marker (unmarked) doc makes the installer refuse at
+preflight — before mutating anything — and exit nonzero. Convert it
+once with:
+
+```
+python scripts/install.py --harness claude_code --migrate-agent-doc
+```
+
+Migration recognizes legacy generated sections by heading, replaces
+them with the marked block, preserves everything else byte-for-byte,
+and leaves a `.pre-migrate.bak` backup next to the file.
+
+### Why deployed hooks are copies, not symlinks
+
+Deployed hook shims (`~/.claude/hooks/`, `~/.codex/hooks/`) are copies
+of the sources in `smriti/integrations/`, on purpose:
+
+- True file symlinks on Windows require Developer Mode or elevation
+  (`WinError 1314` otherwise), and git-bash `ln -s` silently degrades
+  to a copy — a link that looks real but is not.
+- The editable pip install (`pip install -e .`) already single-sources
+  all real logic; the shims are ~20-line stable entry points whose text
+  rarely changes.
+- Byte-compare on deploy plus the `smriti doctor` integrity check make
+  drift visible without link semantics.
+
+Revisit only if the fleet ever becomes POSIX-only.
+
 ## Questions and issues
 
 smriti is being built in public. Include in issue reports:

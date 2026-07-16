@@ -1193,7 +1193,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status", help="Show index status")
 
     p_doctor = sub.add_parser("doctor", help="Verify a harness bridge without changing state")
-    p_doctor.add_argument("--harness", required=True, choices=["codex"])
+    p_doctor.add_argument("--harness", required=True, choices=["codex", "claude-code"])
     p_doctor.add_argument("--project", required=True, help="Project root to inspect")
     p_doctor.add_argument("--memory-root", default=None, help="Memory root (default: ~/.narada)")
 
