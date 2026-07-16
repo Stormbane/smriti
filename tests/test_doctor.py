@@ -124,3 +124,30 @@ def test_claude_doctor_flags_missing_hook_target(tmp_path, monkeypatch) -> None:
 
 def test_run_doctor_rejects_unknown_harness(tmp_path) -> None:
     assert run_doctor(harness="cursor", memory_root=tmp_path, project=tmp_path) == 2
+
+
+def test_codex_doctor_tolerates_hooks_state_table(tmp_path, monkeypatch) -> None:
+    """The live Codex config keeps a [hooks.state] trust registry next to
+    the event arrays; doctor must not crash walking it (live crash,
+    2026-07-17)."""
+    home, memory_root, project = _make_entity_and_project(tmp_path)
+    codex = home / ".codex"
+    codex.mkdir()
+    monkeypatch.setattr(codex_install, "HOME", home)
+    monkeypatch.setattr(codex_install, "CODEX", codex)
+    monkeypatch.setattr(codex_install, "CONFIG_TOML", codex / "config.toml")
+    monkeypatch.setattr(codex_install, "AGENTS_MD", codex / "AGENTS.md")
+    monkeypatch.setattr(codex_install, "HOOKS_DST", codex / "hooks")
+    codex_install.run_codex(memory_root)
+
+    config = codex / "config.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8")
+        + "\n[hooks.state]\n"
+        + '[hooks.state."config:session_start:0:0"]\n'
+        + 'trusted_hash = "sha256:abc"\nenabled = true\n',
+        encoding="utf-8",
+    )
+
+    checks = codex_checks(memory_root=memory_root, project=project, home=home)
+    assert all(check.passed for check in checks), [c for c in checks if not c.passed]
