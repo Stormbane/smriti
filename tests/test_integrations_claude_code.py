@@ -242,3 +242,67 @@ class TestRunClaudeCode:
         # Settings not patched.
         st = json.loads((fake_home / ".claude" / "settings.json").read_text(encoding="utf-8"))
         assert "hooks" not in st
+
+
+# --- agent-doc preflight (adversarial review findings 1 + 5) --------------
+
+class TestAgentDocPreflight:
+    def test_unmarked_claude_md_refuses_before_any_mutation(self, fake_home):
+        """Fail-closed: the live (pre-marker) CLAUDE.md must abort the
+        install BEFORE hooks/settings/MCP are touched, and run_claude_code
+        must report failure so the dispatcher exits nonzero."""
+        claude_md = fake_home / ".claude" / "CLAUDE.md"
+        claude_md.write_text(
+            "# CLAUDE.md (user-global)\n\n## Asking questions\n\nmine\n",
+            encoding="utf-8",
+        )
+        (fake_home / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+        (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
+
+        ok = cc_install.run_claude_code(fake_home / ".narada")
+
+        assert ok is False
+        # Nothing was mutated.
+        assert not (fake_home / ".claude" / "hooks").exists()
+        assert json.loads((fake_home / ".claude" / "settings.json").read_text()) == {}
+        assert json.loads((fake_home / ".claude.json").read_text()) == {}
+        assert "Asking questions" in claude_md.read_text(encoding="utf-8")
+
+    def test_migrate_doc_preserves_personal_sections(self, fake_home):
+        """The real migration scenario from the 2026-07-16 audit: user
+        sections and generated sections interleaved in one CLAUDE.md."""
+        claude_md = fake_home / ".claude" / "CLAUDE.md"
+        claude_md.write_text(
+            "# CLAUDE.md (user-global)\n\n"
+            "## Asking questions\n\nAsk inline. Personal, hands off.\n\n"
+            "## Memory system — smriti is the single write path\n\nold generated\n\n"
+            "### When to write\n\nold generated child\n\n"
+            "## Memory search — prefer smriti_read over Grep\n\nold generated\n\n"
+            "## Session wake\n\nold generated\n",
+            encoding="utf-8",
+        )
+        (fake_home / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+        (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
+
+        ok = cc_install.run_claude_code(fake_home / ".narada", migrate_doc=True)
+
+        assert ok is True
+        text = claude_md.read_text(encoding="utf-8")
+        assert "Ask inline. Personal, hands off." in text
+        assert "old generated" not in text
+        assert claude_md.with_name("CLAUDE.md.pre-migrate.bak").exists()
+        # Re-run is clean and keeps the personal section.
+        assert cc_install.run_claude_code(fake_home / ".narada") is True
+        assert "Ask inline. Personal, hands off." in claude_md.read_text(encoding="utf-8")
+
+    def test_shared_recall_shim_deploys_under_local_name(self, fake_home):
+        (fake_home / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+        (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
+        assert cc_install.run_claude_code(fake_home / ".narada") is True
+
+        deployed = fake_home / ".claude" / "hooks" / "associative_recall.py"
+        assert deployed.exists()
+        from smriti.integrations.common import SHARED_HOOKS_DIR
+        assert deployed.read_bytes() == (SHARED_HOOKS_DIR / "recall_shim.py").read_bytes()
+        # Claude-only hook still ships too.
+        assert (fake_home / ".claude" / "hooks" / "precompact_capture.py").exists()

@@ -4,15 +4,18 @@ Wires smriti into Anthropic's Claude Code CLI:
     - Patches ``~/.claude/settings.json`` with SessionStart wake,
       UserPromptSubmit activity touch, and PostToolUse recall hooks.
     - Registers smriti's MCP server in ``~/.claude.json`` (user scope).
-    - Drops ``~/.claude/CLAUDE.md`` composed from the harness-neutral
-      ``smriti/templates/AGENT.md`` plus a Claude-Code-specific addendum.
-    - Deploys hook scripts from this package's ``hooks/`` dir into
-      ``~/.claude/hooks/``.
+    - Maintains the smriti-managed block in ``~/.claude/CLAUDE.md``
+      (composed from ``smriti/templates/AGENT.md`` plus a Claude-Code-
+      specific addendum). Content outside the marker pair is the
+      user's and is never touched; unmarked legacy files are refused
+      at preflight — before ANY other mutation — and migrated once via
+      ``--migrate-agent-doc``.
+    - Deploys hook shims into ``~/.claude/hooks/``.
 
-Shared helpers — MCP spec, AGENT.md composition, hook deployment —
-come from ``smriti.integrations.common`` so any change to those
-pieces flows to every harness adapter at once. Only the Claude-Code-
-specific config-file format and the hook-command shape live here.
+Shared helpers — MCP spec, managed-doc machinery, hook model, hook
+deployment — come from ``smriti.integrations.common`` so any change to
+those pieces flows to every harness adapter at once. Only the Claude-
+Code-specific config-file format and addendum text live here.
 
 All operations are idempotent.
 """
@@ -24,10 +27,19 @@ import shutil
 from pathlib import Path
 
 from smriti.integrations.common import (
+    DEFICIENT,
+    EQUIVALENT,
+    SHARED_HOOKS_DIR,
     SMRITI_MCP_COMMAND,
+    ManagedDocError,
+    classify_doc,
+    classify_wake_hook,
     compose_agent_doc,
     deploy_hook_scripts,
     make_wake_hook_command,
+    mcp_registration_matches,
+    migrate_agent_doc,
+    write_managed_doc,
 )
 
 HOME = Path.home()
@@ -37,6 +49,16 @@ CLAUDE_MD = CLAUDE / "CLAUDE.md"
 CLAUDE_CONFIG = HOME / ".claude.json"  # MCP server registry
 HOOKS_DST = CLAUDE / "hooks"
 HOOKS_SRC = Path(__file__).resolve().parent / "hooks"
+
+# Claude Code runs hook commands under a POSIX shell on every platform
+# (unlike Codex, which uses PowerShell on Windows — see codex/install.py).
+WAKE_STYLE = "sh"
+WAKE_FRAMING = "raw"
+
+# One shared recall shim, deployed under this harness's local filename.
+HOOK_DEPLOY_MAP = {"recall_shim.py": "associative_recall.py"}
+# Claude-Code-only hooks that stay in this package.
+LOCAL_HOOKS = ["precompact_capture.py"]
 
 
 def register_mcp_server() -> None:
@@ -51,7 +73,7 @@ def register_mcp_server() -> None:
         return
 
     servers = data.setdefault("mcpServers", {})
-    if servers.get("smriti") == SMRITI_MCP_COMMAND:
+    if mcp_registration_matches(servers.get("smriti")):
         print("[mcp] smriti server already registered")
         return
     servers["smriti"] = dict(SMRITI_MCP_COMMAND)
@@ -61,8 +83,24 @@ def register_mcp_server() -> None:
     print(f"[mcp] registered smriti server (backup: {backup})")
 
 
+def _wake_command(memory_root: Path) -> str:
+    return make_wake_hook_command(
+        memory_root,
+        home=HOME,
+        framing=WAKE_FRAMING,
+        audience="coding",
+        style=WAKE_STYLE,
+    )
+
+
 def patch_settings_json(memory_root: Path) -> None:
-    """Wire SessionStart / UserPromptSubmit / PostToolUse hooks."""
+    """Wire SessionStart / UserPromptSubmit / PostToolUse hooks.
+
+    SessionStart wiring goes through the canonical hook model:
+    an EQUIVALENT wake hook (any command form) is left untouched, a
+    DEFICIENT one (right wake.py, wrong semantics) is upgraded in
+    place, UNRELATED hooks are never modified.
+    """
     if not SETTINGS.exists():
         print(f"[settings] {SETTINGS} not found — skipping")
         return
@@ -74,9 +112,7 @@ def patch_settings_json(memory_root: Path) -> None:
 
     hooks = data.setdefault("hooks", {})
     memory_rel = memory_root.relative_to(HOME).as_posix()
-    wake_cmd = make_wake_hook_command(
-        memory_root, home=HOME, framing="raw", audience="coding"
-    )
+    wake_cmd = _wake_command(memory_root)
     activity_cmd = (
         f'touch "$HOME/{memory_rel}/.smriti/last-activity" 2>/dev/null || true'
     )
@@ -84,18 +120,34 @@ def patch_settings_json(memory_root: Path) -> None:
 
     changed = False
 
-    # SessionStart: wake.py
-    session_start = hooks.get("SessionStart", [])
-    wake_wired = any(
-        any(h.get("command") == wake_cmd for h in group.get("hooks", []))
-        for group in session_start
-    )
-    if wake_wired:
-        print("[settings] SessionStart wake hook already wired")
+    def classify(cmd: str) -> str:
+        verdict, _ = classify_wake_hook(
+            cmd, memory_root=memory_root, home=HOME, framing=WAKE_FRAMING
+        )
+        return verdict
+
+    # SessionStart: wake.py via the canonical hook model.
+    session_start = hooks.setdefault("SessionStart", [])
+    equivalent_found = False
+    deficient_upgraded = False
+    for group in session_start:
+        for hook in group.get("hooks", []):
+            verdict = classify(hook.get("command", ""))
+            if verdict == EQUIVALENT:
+                equivalent_found = True
+            elif verdict == DEFICIENT:
+                hook["command"] = wake_cmd
+                deficient_upgraded = True
+
+    if equivalent_found:
+        print("[settings] SessionStart wake hook already wired (equivalent)")
+    elif deficient_upgraded:
+        print("[settings] SessionStart wake hook upgraded to canonical form")
+        changed = True
     else:
-        hooks["SessionStart"] = [
+        session_start.append(
             {"matcher": "", "hooks": [{"type": "command", "command": wake_cmd}]}
-        ]
+        )
         print("[settings] SessionStart -> wake.py")
         changed = True
 
@@ -145,8 +197,9 @@ def patch_settings_json(memory_root: Path) -> None:
 
 
 def install_hook_scripts() -> None:
-    """Deploy hooks from this package into ``~/.claude/hooks/``."""
-    deploy_hook_scripts(HOOKS_SRC, HOOKS_DST, ["associative_recall.py"])
+    """Deploy hook shims into ``~/.claude/hooks/``."""
+    deploy_hook_scripts(SHARED_HOOKS_DIR, HOOKS_DST, HOOK_DEPLOY_MAP)
+    deploy_hook_scripts(HOOKS_SRC, HOOKS_DST, LOCAL_HOOKS)
 
 
 # Claude-Code-specific addendum appended after the generic AGENT.md
@@ -172,19 +225,43 @@ Use plain Grep on the memory tree only for literal string match.
 """
 
 
-def write_claude_md(memory_root: Path) -> None:
+def _claude_md_block(memory_root: Path) -> str:
+    # The block carries no H1 — the title line belongs to the user's
+    # document (kept on migration, supplied via ``title=`` on creation).
     memory_rel = f"~/{memory_root.relative_to(HOME).as_posix()}"
-    content = compose_agent_doc(
+    return compose_agent_doc(
         addendum=CLAUDE_CODE_ADDENDUM,
         memory_rel=memory_rel,
-        header="# CLAUDE.md (user-global)",
+        header="_Generated by smriti — edit outside the markers only._",
     )
-    CLAUDE.mkdir(parents=True, exist_ok=True)
-    if CLAUDE_MD.exists() and CLAUDE_MD.read_text(encoding="utf-8") == content:
+
+
+def preflight_agent_doc() -> str | None:
+    """Validate ~/.claude/CLAUDE.md BEFORE any harness mutation.
+
+    Returns None when safe to proceed, or a human-readable refusal.
+    """
+    state = classify_doc(CLAUDE_MD)
+    if state.kind in ("missing", "managed"):
+        return None
+    return state.detail
+
+
+def write_claude_md(memory_root: Path) -> None:
+    if write_managed_doc(
+        CLAUDE_MD,
+        _claude_md_block(memory_root),
+        title="# CLAUDE.md (user-global)",
+    ):
+        print(f"[CLAUDE.md] wrote managed block in {CLAUDE_MD}")
+    else:
         print(f"[CLAUDE.md] {CLAUDE_MD} up to date")
-        return
-    CLAUDE_MD.write_text(content, encoding="utf-8")
-    print(f"[CLAUDE.md] wrote {CLAUDE_MD}")
+
+
+def migrate_claude_md(memory_root: Path) -> None:
+    """One-time legacy conversion. Raises ManagedDocError when unsafe."""
+    backup = migrate_agent_doc(CLAUDE_MD, _claude_md_block(memory_root))
+    print(f"[CLAUDE.md] migrated to managed block (backup: {backup})")
 
 
 def run_claude_code(
@@ -192,11 +269,30 @@ def run_claude_code(
     *,
     skip_settings: bool = False,
     skip_mcp: bool = False,
-) -> None:
-    """Run all Claude-Code-specific install steps. Idempotent."""
+    migrate_doc: bool = False,
+) -> bool:
+    """Run all Claude-Code-specific install steps. Idempotent.
+
+    Returns False (after mutating NOTHING) when the agent-doc preflight
+    refuses — the dispatcher turns that into a nonzero exit so a
+    partial install can never masquerade as success.
+    """
+    if migrate_doc and classify_doc(CLAUDE_MD).kind == "migration-required":
+        try:
+            migrate_claude_md(memory_root)
+        except ManagedDocError as exc:
+            print(f"[claude-code] migration failed: {exc}")
+            return False
+
+    refusal = preflight_agent_doc()
+    if refusal is not None:
+        print(f"[claude-code] REFUSED before any change: {refusal}")
+        return False
+
     install_hook_scripts()
     if not skip_mcp:
         register_mcp_server()
     if not skip_settings:
         patch_settings_json(memory_root)
     write_claude_md(memory_root)
+    return True

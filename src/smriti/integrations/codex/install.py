@@ -8,10 +8,19 @@ Wires smriti into OpenAI's Codex CLI:
           before the first user turn (this is the equivalent of Claude
           Code's CLAUDE.md + SessionStart combo)
         * ``[mcp_servers.smriti]`` for explicit smriti_read/smriti_write
-    - Drops ``~/.codex/AGENTS.md`` (Codex auto-loads this on every run;
-      32 KiB cap, root-first concatenation across project chain). Body
-      composed from the shared ``templates/AGENT.md`` plus a Codex-
-      specific addendum.
+    - Maintains the smriti-managed block in ``~/.codex/AGENTS.md``
+      (Codex auto-loads this on every run; 32 KiB cap, root-first
+      concatenation across project chain). Unmarked legacy files are
+      refused at preflight and migrated once via ``--migrate-agent-doc``.
+    - Deploys the shared recall shim into ``~/.codex/hooks/``.
+
+Platform note: Codex runs hook commands under PowerShell on Windows —
+NOT bash — so the wake command is emitted as a PowerShell
+``-EncodedCommand`` there. Claude Code, by contrast, runs hooks under a
+POSIX shell on every platform (see claude_code/install.py). The
+canonical hook model (``integrations.common.hook_model``) parses and
+classifies both forms, so the installer never regresses a working hook
+of either shape.
 
 Force-injection mechanism: the SessionStart hook runs under Codex's
 own process before the first user turn. Its stdout (JSON
@@ -23,9 +32,9 @@ Codex hook docs reference:
     https://developers.openai.com/codex/hooks
     https://developers.openai.com/codex/config-reference
 
-This module shares MCP spec, AGENT.md composition, hook deployment,
-and wake-command construction with ``claude_code/install.py`` via
-``smriti.integrations.common``.
+This module shares MCP spec, AGENT.md composition, managed-doc
+machinery, hook deployment, and the wake-hook model with
+``claude_code/install.py`` via ``smriti.integrations.common``.
 """
 
 from __future__ import annotations
@@ -36,10 +45,19 @@ import tomllib
 from pathlib import Path
 
 from smriti.integrations.common import (
+    DEFICIENT,
+    EQUIVALENT,
+    SHARED_HOOKS_DIR,
     SMRITI_MCP_COMMAND,
+    ManagedDocError,
+    classify_doc,
+    classify_wake_hook,
     compose_agent_doc,
     deploy_hook_scripts,
     make_wake_hook_command,
+    mcp_registration_matches,
+    migrate_agent_doc,
+    write_managed_doc,
 )
 
 HOME = Path.home()
@@ -47,7 +65,17 @@ CODEX = HOME / ".codex"
 CONFIG_TOML = CODEX / "config.toml"
 AGENTS_MD = CODEX / "AGENTS.md"
 HOOKS_DST = CODEX / "hooks"
-HOOKS_SRC = Path(__file__).resolve().parent / "hooks"
+
+WAKE_FRAMING = "codex-json"
+SESSION_START_MATCHER = "startup|resume|clear|compact"
+
+# One shared recall shim, deployed under this harness's local filename.
+HOOK_DEPLOY_MAP = {"recall_shim.py": "recall_hook.py"}
+
+
+def _wake_style() -> str:
+    """Codex runs hooks under PowerShell on Windows, POSIX sh elsewhere."""
+    return "powershell-encoded" if sys.platform == "win32" else "sh"
 
 
 # Codex-specific addendum appended after the generic AGENT.md body.
@@ -128,8 +156,13 @@ def patch_config_toml(memory_root: Path) -> None:
     """Idempotently set hook + MCP server entries in ``~/.codex/config.toml``.
 
     Steps:
-        1. ``[features] codex_hooks = true``
-        2. ``[[hooks.SessionStart]]`` with our wake command
+        1. ``[features] hooks = true``
+        2. ``[[hooks.SessionStart]]`` with our wake command, via the
+           canonical hook model: an EQUIVALENT hook in a group with the
+           right matcher is left byte-for-byte untouched (never regress
+           a working hook, whatever its command form); DEFICIENT hooks
+           and equivalent hooks under a wrong matcher are migrated to
+           the canonical group; UNRELATED hooks survive intact.
         3. ``[mcp_servers.smriti]`` pointing at the MCP entrypoint
     """
     data = _read_toml(CONFIG_TOML)
@@ -145,52 +178,63 @@ def patch_config_toml(memory_root: Path) -> None:
 
     # 2. SessionStart hook -> wake.py with codex-json framing.
     wake_cmd = make_wake_hook_command(
-        memory_root, home=HOME, framing="codex-json", audience="coding"
+        memory_root,
+        home=HOME,
+        framing=WAKE_FRAMING,
+        audience="coding",
+        style=_wake_style(),
     )
     hooks = data.setdefault("hooks", {})
     session_start = hooks.setdefault("SessionStart", [])
 
+    def classify(cmd: str) -> str:
+        verdict, _ = classify_wake_hook(
+            cmd, memory_root=memory_root, home=HOME, framing=WAKE_FRAMING
+        )
+        return verdict
+
     # Codex's hook shape is:
     #   [[hooks.SessionStart]]
-    #     matcher = "startup|resume"
+    #     matcher = "startup|resume|clear|compact"
     #     [[hooks.SessionStart.hooks]]
     #     type = "command"
     #     command = "..."
-    def is_smriti_wake(hook: dict) -> bool:
-        command = hook.get("command", "")
-        return "SMRITI_ROOT=" in command and "/.smriti/wake.py" in command
-
-    # Replace only Smriti-managed legacy hooks. User hooks, including hooks
-    # in a group that also contained the legacy wake hook, survive intact.
+    properly_wired = False
+    needs_canonical = False
     retained_groups = []
-    managed_found = False
     for group in session_start:
-        retained_hooks = [hook for hook in group.get("hooks", []) if not is_smriti_wake(hook)]
-        if len(retained_hooks) != len(group.get("hooks", [])):
-            managed_found = True
+        matcher_ok = group.get("matcher") == SESSION_START_MATCHER
+        retained_hooks = []
+        for hook in group.get("hooks", []):
+            verdict = classify(hook.get("command", ""))
+            if verdict == EQUIVALENT and matcher_ok:
+                properly_wired = True
+                retained_hooks.append(hook)
+            elif verdict in (EQUIVALENT, DEFICIENT):
+                # Ours, but wrong semantics or wrong matcher — replace
+                # with the canonical group below.
+                needs_canonical = True
+            else:
+                retained_hooks.append(hook)
         if retained_hooks:
             retained_groups.append({**group, "hooks": retained_hooks})
 
-    canonical_group = {
-        "matcher": "startup|resume|clear|compact",
-        "hooks": [{
-            "type": "command",
-            "command": wake_cmd,
-            "statusMessage": "Loading smriti memory briefing",
-        }],
-    }
-    if managed_found:
-        replacement = [*retained_groups, canonical_group]
-        if session_start != replacement:
-            hooks["SessionStart"] = replacement
-            print("[codex] [[hooks.SessionStart]] -> wake.py (migrated)")
-            changed = True
-        else:
-            print("[codex] SessionStart wake hook already wired")
+    if properly_wired and not needs_canonical:
+        print("[codex] SessionStart wake hook already wired (equivalent)")
     else:
-        hooks["SessionStart"].append(canonical_group)
-        print("[codex] [[hooks.SessionStart]] -> wake.py (codex-json framing)")
-        changed = True
+        if not properly_wired:
+            retained_groups.append({
+                "matcher": SESSION_START_MATCHER,
+                "hooks": [{
+                    "type": "command",
+                    "command": wake_cmd,
+                    "statusMessage": "Loading smriti memory briefing",
+                }],
+            })
+        if session_start != retained_groups:
+            hooks["SessionStart"] = retained_groups
+            print("[codex] [[hooks.SessionStart]] -> wake.py (canonical)")
+            changed = True
 
     # 3. PostToolUse hook -> recall_hook.py (codex-json framing).
     # Codex's matcher accepts apply_patch's aliases (Edit, Write) so a
@@ -201,14 +245,11 @@ def patch_config_toml(memory_root: Path) -> None:
         'python "$HOME/.codex/hooks/recall_hook.py"'
     )
     post_tool = hooks.setdefault("PostToolUse", [])
-    recall_wired = False
-    for group in post_tool:
-        for h in group.get("hooks", []):
-            if h.get("command") == recall_cmd:
-                recall_wired = True
-                break
-        if recall_wired:
-            break
+    recall_wired = any(
+        h.get("command") == recall_cmd
+        for group in post_tool
+        for h in group.get("hooks", [])
+    )
     if recall_wired:
         print("[codex] PostToolUse recall hook already wired")
     else:
@@ -224,16 +265,23 @@ def patch_config_toml(memory_root: Path) -> None:
         print("[codex] [[hooks.PostToolUse]] -> recall_hook.py (apply_patch)")
         changed = True
 
-    # 4. MCP server registration
+    # 4. MCP server registration. Superset match: Codex annotates the
+    # entry with tools.* approval-mode subtables; extras are fine.
     mcp = data.setdefault("mcp_servers", {})
-    desired = {
-        "command": SMRITI_MCP_COMMAND["command"],
-        "args": list(SMRITI_MCP_COMMAND["args"]),
-    }
-    if mcp.get("smriti") == desired:
+    if mcp_registration_matches(mcp.get("smriti")):
         print("[codex] [mcp_servers.smriti] already registered")
     else:
-        mcp["smriti"] = desired
+        existing = mcp.get("smriti")
+        desired = {
+            "command": SMRITI_MCP_COMMAND["command"],
+            "args": list(SMRITI_MCP_COMMAND["args"]),
+        }
+        if isinstance(existing, dict):
+            # Preserve user annotations (approval modes etc.), fix the
+            # command surface.
+            existing.update(desired)
+        else:
+            mcp["smriti"] = desired
         print("[codex] [mcp_servers.smriti] registered")
         changed = True
 
@@ -248,39 +296,83 @@ def patch_config_toml(memory_root: Path) -> None:
     print(f"[codex] saved {CONFIG_TOML}")
 
 
-def write_agents_md(memory_root: Path) -> None:
-    """Drop ~/.codex/AGENTS.md composed from the shared template."""
+def _agents_md_block(memory_root: Path) -> str:
+    # The block carries no H1 — the title line belongs to the document
+    # (kept on migration, supplied via ``title=`` on creation).
     memory_rel = f"~/{memory_root.relative_to(HOME).as_posix()}"
-    content = compose_agent_doc(
+    return compose_agent_doc(
         addendum=CODEX_ADDENDUM,
         memory_rel=memory_rel,
-        header="# AGENTS.md (user-global) — smriti memory contract",
+        header="_Generated by smriti — edit outside the markers only._",
     )
+
+
+def preflight_agent_doc() -> str | None:
+    """Validate ~/.codex/AGENTS.md BEFORE any harness mutation.
+
+    Returns None when safe to proceed, or a human-readable refusal.
+    """
+    state = classify_doc(AGENTS_MD)
+    if state.kind in ("missing", "managed"):
+        return None
+    return state.detail
+
+
+def write_agents_md(memory_root: Path) -> None:
+    """Create or rewrite the managed block in ~/.codex/AGENTS.md."""
+    content = _agents_md_block(memory_root)
     if len(content) > 32_000:
         print(
-            f"[codex] WARNING: AGENTS.md is {len(content)} bytes; "
+            f"[codex] WARNING: AGENTS.md block is {len(content)} bytes; "
             "Codex caps project-doc loading at 32 KiB. Consider trimming."
         )
-    CODEX.mkdir(parents=True, exist_ok=True)
-    if AGENTS_MD.exists() and AGENTS_MD.read_text(encoding="utf-8") == content:
+    if write_managed_doc(
+        AGENTS_MD,
+        content,
+        title="# AGENTS.md (user-global) — smriti memory contract",
+    ):
+        print(f"[codex] wrote managed block in {AGENTS_MD}")
+    else:
         print(f"[codex] {AGENTS_MD} up to date")
-        return
-    AGENTS_MD.write_text(content, encoding="utf-8")
-    print(f"[codex] wrote {AGENTS_MD}")
+
+
+def migrate_agents_md(memory_root: Path) -> None:
+    """One-time legacy conversion. Raises ManagedDocError when unsafe."""
+    backup = migrate_agent_doc(AGENTS_MD, _agents_md_block(memory_root))
+    print(f"[codex] migrated AGENTS.md to managed block (backup: {backup})")
 
 
 def install_hook_scripts() -> None:
-    """Deploy hooks from this package into ``~/.codex/hooks/``."""
-    deploy_hook_scripts(HOOKS_SRC, HOOKS_DST, ["recall_hook.py"])
+    """Deploy the shared recall shim into ``~/.codex/hooks/``."""
+    deploy_hook_scripts(SHARED_HOOKS_DIR, HOOKS_DST, HOOK_DEPLOY_MAP)
 
 
 def run_codex(
     memory_root: Path,
     *,
     skip_config: bool = False,
-) -> None:
-    """Run all Codex-specific install steps. Idempotent."""
+    migrate_doc: bool = False,
+) -> bool:
+    """Run all Codex-specific install steps. Idempotent.
+
+    Returns False (after mutating NOTHING) when the agent-doc preflight
+    refuses — the dispatcher turns that into a nonzero exit so a
+    partial install can never masquerade as success.
+    """
+    if migrate_doc and classify_doc(AGENTS_MD).kind == "migration-required":
+        try:
+            migrate_agents_md(memory_root)
+        except ManagedDocError as exc:
+            print(f"[codex] migration failed: {exc}")
+            return False
+
+    refusal = preflight_agent_doc()
+    if refusal is not None:
+        print(f"[codex] REFUSED before any change: {refusal}")
+        return False
+
     install_hook_scripts()
     if not skip_config:
         patch_config_toml(memory_root)
     write_agents_md(memory_root)
+    return True

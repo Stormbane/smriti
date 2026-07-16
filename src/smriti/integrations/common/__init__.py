@@ -25,16 +25,50 @@ The adapter pattern is:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from smriti.integrations.common.agent_md import compose_agent_doc
-from smriti.integrations.common.hook_scripts import deploy_hook_scripts
+from smriti.integrations.common.hook_model import (
+    DEFICIENT,
+    EQUIVALENT,
+    UNRELATED,
+    classify_wake_hook,
+    make_wake_hook_command,
+    parse_wake_command,
+)
+from smriti.integrations.common.hook_scripts import (
+    check_deployed_hooks,
+    deploy_hook_scripts,
+)
+from smriti.integrations.common.managed_doc import (
+    ManagedDocError,
+    classify_doc,
+    migrate_agent_doc,
+    write_managed_doc,
+)
 from smriti.integrations.common.mcp_spec import (
     SMRITI_MCP_COMMAND,
-    make_wake_hook_command,
+    mcp_registration_matches,
 )
+
+# Shared deployable hook shims (one source, harness-local filenames).
+SHARED_HOOKS_DIR = Path(__file__).resolve().parent / "hooks"
 
 __all__ = [
     "SMRITI_MCP_COMMAND",
+    "SHARED_HOOKS_DIR",
+    "EQUIVALENT",
+    "DEFICIENT",
+    "UNRELATED",
+    "ManagedDocError",
+    "check_deployed_hooks",
+    "classify_doc",
+    "classify_wake_hook",
     "compose_agent_doc",
     "deploy_hook_scripts",
     "make_wake_hook_command",
+    "mcp_registration_matches",
+    "migrate_agent_doc",
+    "parse_wake_command",
+    "write_managed_doc",
 ]
