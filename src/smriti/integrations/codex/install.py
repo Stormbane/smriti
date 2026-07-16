@@ -207,12 +207,14 @@ def patch_config_toml(memory_root: Path) -> None:
         retained_hooks = []
         for hook in group.get("hooks", []):
             verdict = classify(hook.get("command", ""))
-            if verdict == EQUIVALENT and matcher_ok:
+            if verdict == EQUIVALENT and matcher_ok and not properly_wired:
+                # First properly-wired hook wins; further smriti wake
+                # hooks are redundant and would run the briefing twice.
                 properly_wired = True
                 retained_hooks.append(hook)
             elif verdict in (EQUIVALENT, DEFICIENT):
-                # Ours, but wrong semantics or wrong matcher — replace
-                # with the canonical group below.
+                # Ours, but redundant, wrong semantics, or wrong
+                # matcher — subsumed by the canonical group below.
                 needs_canonical = True
             else:
                 retained_hooks.append(hook)
@@ -307,12 +309,17 @@ def _agents_md_block(memory_root: Path) -> str:
     )
 
 
+def agent_doc_state():
+    """Classify ~/.codex/AGENTS.md without modifying it."""
+    return classify_doc(AGENTS_MD)
+
+
 def preflight_agent_doc() -> str | None:
     """Validate ~/.codex/AGENTS.md BEFORE any harness mutation.
 
     Returns None when safe to proceed, or a human-readable refusal.
     """
-    state = classify_doc(AGENTS_MD)
+    state = agent_doc_state()
     if state.kind in ("missing", "managed"):
         return None
     return state.detail

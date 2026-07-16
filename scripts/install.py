@@ -90,6 +90,27 @@ def main() -> int:
     projects_root = Path(args.projects_root).expanduser()
     harness = args.harness.strip().lower()
 
+    # Agent-doc preflight runs BEFORE the core install: a refused
+    # install must change nothing at all, and run_core mutates the
+    # memory tree, mirrors, and wake files.
+    mod = None
+    if harness != "none":
+        try:
+            mod = importlib.import_module(f"smriti.integrations.{harness}.install")
+        except ImportError as exc:
+            print(f"error: unknown harness {harness!r} "
+                  f"(no smriti.integrations.{harness}.install module): {exc}",
+                  file=sys.stderr)
+            return 1
+        if hasattr(mod, "agent_doc_state"):
+            state = mod.agent_doc_state()
+            migratable = state.kind == "migration-required" and args.migrate_agent_doc
+            if state.kind not in ("missing", "managed") and not migratable:
+                print(f"REFUSED before any change: {state.detail}", file=sys.stderr)
+                print(f"\nFAILED ({harness}): install refused — nothing "
+                      "was modified.", file=sys.stderr)
+                return 1
+
     try:
         run_core(memory_root, projects_root, skip_recall_daemon=args.skip_recall_daemon)
     except RuntimeError as exc:
@@ -102,14 +123,6 @@ def main() -> int:
         return 0
 
     # Dispatch to per-harness installer.
-    try:
-        mod = importlib.import_module(f"smriti.integrations.{harness}.install")
-    except ImportError as exc:
-        print(f"error: unknown harness {harness!r} "
-              f"(no smriti.integrations.{harness}.install module): {exc}",
-              file=sys.stderr)
-        return 1
-
     if harness == "claude_code":
         ok = mod.run_claude_code(
             memory_root,
