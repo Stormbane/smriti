@@ -78,7 +78,12 @@ def open_readonly(db_path: Path) -> IndexDB:
     """
     if not db_path.exists():
         raise FileNotFoundError(f"no index at {db_path}")
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=10.0)
+    # Percent-encode the path: '#'/'?' are legal in directory names but
+    # URI-reserved, and a raw interpolation would silently truncate the
+    # path SQLite opens (Codex review P2).
+    from urllib.parse import quote
+    uri = "file:" + quote(str(db_path).replace("\\", "/"), safe="/:") + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=10.0)
     conn.execute("PRAGMA busy_timeout=10000")
     conn.execute("PRAGMA query_only=ON")
     has_vec = _load_sqlite_vec(conn)

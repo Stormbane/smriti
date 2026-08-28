@@ -1141,7 +1141,9 @@ def handle_status() -> str:
     if not db_path.exists():
         lines.append("Status: Not indexed")
         return "\n".join(lines)
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=10.0)
+    from urllib.parse import quote
+    _uri = "file:" + quote(str(db_path).replace("\\", "/"), safe="/:") + "?mode=ro"
+    conn = sqlite3.connect(_uri, uri=True, timeout=10.0)
     conn.execute("PRAGMA busy_timeout=10000")
     chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     files = conn.execute("SELECT COUNT(DISTINCT source) FROM chunks").fetchone()[0]
