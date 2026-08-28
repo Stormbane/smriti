@@ -439,21 +439,26 @@ _db = None
 
 
 def _get_db():
+    """Read-only handle for search. The MCP server never does schema
+    work: ensure_schema WRITES (meta upserts, DDL, an FTS write-probe),
+    and with one server per Claude/codex session those writes deadlocked
+    reads across the fleet ("database is locked", 2026-08-27). The
+    indexer owns the schema; this process only reads it."""
     global _db
     if _db is not None:
         return _db
     from smriti.core.tree import smriti_db_path
-    from smriti.store.schema import ensure_schema
+    from smriti.store.schema import open_readonly
 
     db_path = smriti_db_path()
     if not db_path.exists():
         raise RuntimeError("No index. Run 'smriti index' first.")
-    tmp = sqlite3.connect(str(db_path))
-    row = tmp.execute("SELECT value FROM meta WHERE key = 'dimension'").fetchone()
-    tmp.close()
+    db = open_readonly(db_path)
+    row = db.execute("SELECT value FROM meta WHERE key = 'dimension'").fetchone()
     if not row:
+        db.close()
         raise RuntimeError("Index corrupted. Run 'smriti index --full'.")
-    _db = ensure_schema(db_path, int(row[0]))
+    _db = db
     return _db
 
 
@@ -1136,7 +1141,8 @@ def handle_status() -> str:
     if not db_path.exists():
         lines.append("Status: Not indexed")
         return "\n".join(lines)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=10.0)
+    conn.execute("PRAGMA busy_timeout=10000")
     chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     files = conn.execute("SELECT COUNT(DISTINCT source) FROM chunks").fetchone()[0]
     model = conn.execute("SELECT value FROM meta WHERE key = 'model'").fetchone()
