@@ -65,6 +65,29 @@ def _has_fts5(conn: sqlite3.Connection) -> bool:
         return False
 
 
+def open_readonly(db_path: Path) -> IndexDB:
+    """Read-only connection for search paths.
+
+    Readers must never be failed by writers ("database is locked" under
+    seven concurrent MCP servers, 2026-08-27): mode=ro cannot take a
+    write lock, busy_timeout rides out checkpoints, and no schema work
+    happens — the indexer owns the schema, searchers just read it.
+    Capability flags come from *what exists in the index*, not from
+    write-probes (the old FTS5 probe created a table, which a reader
+    neither can nor should).
+    """
+    if not db_path.exists():
+        raise FileNotFoundError(f"no index at {db_path}")
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=10.0)
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute("PRAGMA query_only=ON")
+    has_vec = _load_sqlite_vec(conn)
+    has_fts = bool(conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name = 'chunks_fts'"
+    ).fetchone())
+    return IndexDB(conn=conn, has_vec=has_vec, has_fts=has_fts)
+
+
 def ensure_schema(
     db_path: Path,
     dimension: int,
@@ -87,9 +110,30 @@ def ensure_schema(
         capability flags.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn.execute("PRAGMA busy_timeout=10000")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        return _ensure_schema_inner(conn, dimension)
+    except BaseException:
+        # Leak-proofing (2026-08-28 lock cascade): a throw mid-schema
+        # left this connection's implicit write transaction OPEN in a
+        # long-lived process, wedging every other writer — and their
+        # own ensure_schema throws then leaked more open transactions,
+        # a self-sustaining fleet-wide deadlock. Roll back and close on
+        # any failure; never leak a connection holding a write lock.
+        try:
+            conn.rollback()
+        finally:
+            conn.close()
+        raise
+
+
+def _ensure_schema_inner(
+    conn: sqlite3.Connection,
+    dimension: int,
+) -> IndexDB:
 
     has_vec = _load_sqlite_vec(conn)
     has_fts = _has_fts5(conn)

@@ -27,7 +27,7 @@ def query(text: str, *, top_k: int, timeout_s: float, rerank: bool) -> RecallRes
     t0 = time.monotonic()
     try:
         from smriti.core.tree import smriti_db_path
-        from smriti.store.schema import ensure_schema
+        from smriti.store.schema import open_readonly
         from smriti.store.search import search
     except Exception as exc:
         return RecallResponse(
@@ -42,14 +42,9 @@ def query(text: str, *, top_k: int, timeout_s: float, rerank: bool) -> RecallRes
         )
 
     try:
-        conn_tmp = sqlite3.connect(str(db_path))
-        row = conn_tmp.execute(
-            "SELECT value FROM meta WHERE key = 'dimension'"
-        ).fetchone()
-        dim = int(row[0]) if row else 384
-        conn_tmp.close()
-
-        conn = ensure_schema(db_path, dim)
+        # Read-only: recall fires on every file-touching tool across
+        # every session — it must never take (or wait on) a write lock.
+        conn = open_readonly(db_path)
         try:
             results = search(conn, text, top_k=top_k, use_reranker=rerank)
         finally:

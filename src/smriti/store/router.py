@@ -351,20 +351,24 @@ def route(
     RoutingResult
         The routing table with actions for relevant candidates.
     """
-    from smriti.core.tree import smriti_db_path
-    from smriti.store.schema import ensure_schema
+    from smriti.store.schema import open_readonly
     from smriti.store.search import search
 
     if judge_fn is None:
         judge_fn = routing_judge_via_claude
 
-    db_path = smriti_db_path()
+    # The index belongs to the tree being routed into — derive it from
+    # *root*, never the global tree. (The old smriti_db_path() call made
+    # every ingest test open ~/.narada's real index; a test suite must
+    # not touch Narada's actual memory.)
+    db_path = root / ".smriti" / "index.db"
     if not db_path.exists():
         log.warning("No search index found. Routing skipped. Run 'smriti index' first.")
         return RoutingResult()
 
-    # Open index and search for candidates
-    conn = ensure_schema(db_path, _get_dimension(db_path))
+    # Candidate search is a pure read: read-only connection, so routing
+    # can neither hold a write lock nor be failed by one (A4).
+    conn = open_readonly(db_path)
     try:
         results = search(conn, content[:1000], top_k=top_k, use_reranker=False)
     finally:
