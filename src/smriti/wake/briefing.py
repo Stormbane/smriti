@@ -263,8 +263,45 @@ def briefing(
     bw.write_line("")
 
     _emit_context(bw, memory_root, audience)
+    _emit_nightly_status(bw, memory_root)
     _emit_project_files(bw, memory_root, cwd_name)
     _emit_recent_journal(bw, memory_root, journal_entries)
     _emit_reading_list(bw, memory_root)
 
     return sink.getvalue()
+
+
+def _emit_nightly_status(bw: _BudgetWriter, memory_root: Path) -> None:
+    """One 'while you slept' line from the last nightly run.
+
+    A failed night must be visible at wake, never silently stale
+    (nightly-cycle spec). Deterministic read of .nightly-status.json;
+    silent when the nightly cycle has never run.
+    """
+    status_path = memory_root / "log" / ".nightly-status.json"
+    try:
+        import json as _json
+
+        status = _json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    steps = status.get("steps", {}) if isinstance(status, dict) else {}
+    digest_days = []
+    if isinstance(steps, dict):
+        digest = steps.get("digest")
+        if isinstance(digest, dict):
+            digest_days = digest.get("days") or []
+    ok = bool(status.get("ok")) if isinstance(status, dict) else False
+    target = status.get("target_day", "?") if isinstance(status, dict) else "?"
+    if ok:
+        summary = f"nightly ok for {target}"
+        if digest_days:
+            summary += f" (digested: {', '.join(digest_days)} — see log/ for digests)"
+    else:
+        failed = [
+            name for name, step in steps.items()
+            if isinstance(step, dict) and step.get("ok") is False
+        ] if isinstance(steps, dict) else []
+        summary = f"NIGHTLY HAD FAILURES for {target}: {', '.join(failed) or 'see status'}"
+    bw.write_line(f"--- WHILE YOU SLEPT: {summary} ---")
+    bw.write_line("")

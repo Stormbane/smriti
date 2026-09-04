@@ -152,6 +152,26 @@ def _cmd_status(args: argparse.Namespace) -> int:
     print(f"Chunks:     {chunk_count}")
     print(f"Model:      {model} (dim={dim})")
     print(f"Indexed:    {last}")
+
+    # Day-log capture health (per-source; scan recency defines liveness).
+    try:
+        from smriti.daylog.config import load_config as _daylog_config
+        from smriti.daylog.state import DaylogState as _DaylogState
+
+        _cfg = _daylog_config()
+        if _cfg.state_path.exists():
+            print("Day-log:")
+            for name, h in sorted(_DaylogState.load(_cfg.state_path).health().items()):
+                scan = h["scan_age_s"]
+                scanning = "STALLED" if (scan == -1 or float(scan) > 600) else "scanning"
+                print(
+                    f"  {name}: {scanning} (last scan {scan}s ago, "
+                    f"{h['files']} files, {h['parse_errors']} parse errors)"
+                )
+        else:
+            print("Day-log:    not started (run 'smriti logd')")
+    except Exception as exc:  # noqa: BLE001 — status must always print
+        print(f"Day-log:    unavailable ({exc})")
     return 0
 
 
@@ -183,8 +203,62 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_nightly(args: argparse.Namespace) -> int:
+    from smriti.daylog.nightly import run_nightly
+
+    status = run_nightly(rollup_cap=args.rollup_cap, reindex=not args.no_reindex)
+    steps = status.get("steps", {})
+    for name, step in steps.items():  # type: ignore[union-attr]
+        if isinstance(step, dict):
+            outcome = "ok" if step.get("ok", True) else f"FAILED: {step.get('error', '?')}"
+            detail = {k: v for k, v in step.items() if k not in ("ok", "error")}
+            print(f"  {name}: {outcome} {detail if detail else ''}")
+    print(f"Nightly {'complete' if status.get('ok') else 'completed WITH FAILURES'} "
+          f"for {status.get('target_day')}")
+    return 0 if status.get("ok") else 1
+
+
+def _cmd_morning(args: argparse.Namespace) -> int:
+    from smriti.daylog.config import load_config
+    from smriti.daylog.morning import run_morning
+
+    cfg = load_config()
+    if args.dry_run:
+        from smriti.daylog.digest import compose
+        from smriti.daylog.morning import _COMPOSE_ARGS, _SYSTEM  # noqa: PLC2701
+
+        attempts: list[dict[str, str]] = []
+        message = compose(_SYSTEM, "Yesterday's digest: (dry run — compose a sample)",
+                          attempts, claude_cli_args=_COMPOSE_ARGS)
+        print(message)
+        return 0
+    result = run_morning(cfg)
+    if result.get("sent"):
+        print(f"Morning message sent ({result.get('day')}).")
+        return 0
+    print(f"Morning message NOT sent: {result.get('reason', 'unknown')}")
+    return 1
+
+
+def _cmd_logd(args: argparse.Namespace) -> int:
+    from smriti.daylog.logd import run_logd
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    run_logd(interval_s=args.interval, max_passes=1 if args.once else None)
+    return 0
+
+
 def _cmd_sleep(args: argparse.Namespace) -> int:
     import time as _time
+
+    if not getattr(args, "deep", False):
+        print(
+            "The deep pipeline (cascade / ingest / consolidate) is parked as future\n"
+            "introspection work and no longer runs by default (spec: nightly-cycle).\n"
+            "  - nightly maintenance:  smriti nightly\n"
+            "  - run the deep pipeline anyway:  smriti sleep --deep [options]"
+        )
+        return 1
 
     from smriti.core.tree import tree_root
     from smriti.metrics import get_logger
@@ -1221,6 +1295,29 @@ def main(argv: list[str] | None = None) -> int:
              "lose Stages 3/4 and corrupt queue state.",
     )
     p_sleep.add_argument("--dry-run", action="store_true", help="Use test stubs instead of claude -p")
+    p_sleep.add_argument(
+        "--deep",
+        action="store_true",
+        help="Actually run the parked deep pipeline (default: refuse and point at 'smriti nightly')",
+    )
+
+    # ── nightly / morning / logd (the narrow cycle) ──────────────────
+    p_nightly = sub.add_parser(
+        "nightly", help="Sleep task: reconcile day-log, render, digest, rollups, reindex"
+    )
+    p_nightly.add_argument("--rollup-cap", type=int, default=2,
+                           help="Max rollups built per night (default 2)")
+    p_nightly.add_argument("--no-reindex", action="store_true",
+                           help="Skip the index + recall refresh step")
+    p_morning = sub.add_parser(
+        "morning", help="Wake task: compose + send the one good-morning message"
+    )
+    p_morning.add_argument("--dry-run", action="store_true",
+                           help="Compose a sample message without ledger or send")
+    p_logd = sub.add_parser("logd", help="Run the day-log watcher daemon (foreground)")
+    p_logd.add_argument("--interval", type=float, default=5.0,
+                        help="Seconds between collection passes (default 5)")
+    p_logd.add_argument("--once", action="store_true", help="Run a single pass and exit")
 
     # ── queue ────────────────────────────────────────────────────────
     p_queue = sub.add_parser(
@@ -1365,6 +1462,9 @@ def main(argv: list[str] | None = None) -> int:
         "ingest": _cmd_ingest,
         "merge-concepts": _cmd_merge_concepts,
         "recall": _cmd_recall,
+        "nightly": _cmd_nightly,
+        "morning": _cmd_morning,
+        "logd": _cmd_logd,
     }
     return handlers[args.command](args)
 

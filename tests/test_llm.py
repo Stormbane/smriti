@@ -138,7 +138,7 @@ class TestListProviders:
     def test_lists_all_canonical_providers(self):
         rows = list_providers()
         names = {r["name"] for r in rows}
-        assert names == {"anthropic_api", "claude_cli", "openai_api", "ollama"}
+        assert names == {"anthropic_api", "claude_cli", "openai_api", "ollama", "codex_cli"}
 
     def test_aliases_grouped_under_canonical(self):
         rows = {r["name"]: r for r in list_providers()}
