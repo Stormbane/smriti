@@ -32,6 +32,11 @@ def _load_ollama() -> LLMProvider:
     return OllamaProvider()
 
 
+def _load_codex_cli() -> LLMProvider:
+    from smriti.llm.providers.codex_cli import CodexCliProvider
+    return CodexCliProvider()
+
+
 # Registry of provider name -> lazy loader. Add new providers here.
 _REGISTRY: dict[str, Callable[[], LLMProvider]] = {
     "anthropic_api": _load_anthropic_api,
@@ -40,6 +45,8 @@ _REGISTRY: dict[str, Callable[[], LLMProvider]] = {
     "openai_api": _load_openai_api,
     "openai": _load_openai_api,         # alias
     "ollama": _load_ollama,
+    "codex_cli": _load_codex_cli,
+    "codex": _load_codex_cli,           # alias
 }
 
 # Process-wide cache so we don't re-import providers per call.

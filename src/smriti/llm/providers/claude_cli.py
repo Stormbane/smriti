@@ -83,6 +83,8 @@ class ClaudeCliProvider:
             stdin_text = None
         if request.model:
             cmd.extend(["--model", request.model])
+        if request.cli_args:
+            cmd.extend(request.cli_args)
 
         # SMRITI_INTERNAL=1 lets SessionEnd hooks (backup.py) skip on
         # smriti-internal subprocesses so they don't pile up and fail
