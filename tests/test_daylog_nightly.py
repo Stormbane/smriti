@@ -229,6 +229,60 @@ def test_nightly_repairs_daemon_marked_dirty_day_beyond_window(
     assert DaylogState.load(cfg.state_path).dirty_days == set()
 
 
+def test_nightly_digest_cap_defers_oldest(tmp_path: Path, fake_llm: FakeProvider) -> None:
+    cfg = _cfg(tmp_path)
+    for day in ("2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04"):
+        _seed_day(cfg, day)
+    status = run_nightly(cfg, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc),
+                         reindex=False, digest_cap=2)
+    digest = status["steps"]["digest"]  # type: ignore[index]
+    assert digest["days"] == ["2026-09-04", "2026-09-03"]  # newest first
+    assert digest["deferred"] == 2
+    # Deferred days remain stale; the next night picks them up.
+    status2 = run_nightly(cfg, now=datetime(2026, 9, 4, 17, 30, tzinfo=timezone.utc),
+                          reindex=False, digest_cap=2)
+    assert status2["steps"]["digest"]["days"] == ["2026-09-02", "2026-09-01"]  # type: ignore[index]
+
+
+def test_dirty_marker_survives_when_day_changes_under_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn landing mid-digest renews the marker instead of being lost."""
+    from smriti.daylog.state import DaylogState
+
+    cfg = _cfg(tmp_path)
+    _seed_day(cfg, "2026-07-01")
+    state = DaylogState.load(cfg.state_path)
+    state.mark_dirty({"2026-07-01"})
+    state.save()
+
+    class RacingProvider(FakeProvider):
+        def call(self, request: LLMRequest) -> LLMResponse:
+            # Simulate logd appending to the same day mid-digest.
+            append_turns(cfg, [_turn("2026-07-01T05:00:00Z", "raced in")])
+            return super().call(request)
+
+    monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: RacingProvider())
+    run_nightly(cfg, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc), reindex=False)
+    # The digest is stale relative to the raced-in turn: marker kept.
+    assert "2026-07-01" in DaylogState.load(cfg.state_path).dirty_days
+
+
+def test_claude_cli_fails_closed_without_isolated_workdir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import smriti.llm.workdir as workdir_mod
+    from smriti.llm.providers.claude_cli import ClaudeCliProvider
+    from smriti.llm.types import LLMError
+
+    def boom() -> Path:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(workdir_mod, "llm_workdir", boom)
+    with pytest.raises(LLMError, match="isolated LLM workdir"):
+        ClaudeCliProvider().call(LLMRequest(system="s", user="u"))
+
+
 # ---------------------------------------------------------------- morning
 
 

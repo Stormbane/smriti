@@ -95,12 +95,16 @@ class ClaudeCliProvider:
         # transcript under ~/.claude/projects/<encoded-cwd>/, and the
         # day-log collector excludes the llm-workdir namespace so
         # internal calls never pollute the day-log (diff review P1).
+        # Fail CLOSED if the workdir can't be created: running from the
+        # ambient cwd would recreate the writeback path, so surface an
+        # LLMError and let the caller's fallback chain take over
+        # (recheck finding 2).
         from smriti.llm.workdir import llm_workdir
 
         try:
-            workdir: str | None = str(llm_workdir())
-        except OSError:
-            workdir = None
+            workdir = str(llm_workdir())
+        except OSError as exc:
+            raise LLMError(f"cannot create isolated LLM workdir: {exc}") from exc
 
         def _spawn() -> subprocess.CompletedProcess:
             return subprocess.run(

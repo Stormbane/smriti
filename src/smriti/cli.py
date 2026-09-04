@@ -206,7 +206,8 @@ def _cmd_watch(args: argparse.Namespace) -> int:
 def _cmd_nightly(args: argparse.Namespace) -> int:
     from smriti.daylog.nightly import run_nightly
 
-    status = run_nightly(rollup_cap=args.rollup_cap, reindex=not args.no_reindex)
+    status = run_nightly(rollup_cap=args.rollup_cap, digest_cap=args.digest_cap,
+                         reindex=not args.no_reindex)
     steps = status.get("steps", {})
     for name, step in steps.items():  # type: ignore[union-attr]
         if isinstance(step, dict):
@@ -1320,6 +1321,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_nightly.add_argument("--rollup-cap", type=int, default=2,
                            help="Max rollups built per night (default 2)")
+    p_nightly.add_argument("--digest-cap", type=int, default=10,
+                           help="Max day digests per night, newest first (default 10)")
     p_nightly.add_argument("--no-reindex", action="store_true",
                            help="Skip the index + recall refresh step")
     p_morning = sub.add_parser(
