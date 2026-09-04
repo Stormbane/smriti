@@ -13,7 +13,11 @@ smriti index                     # build search index over ~/.narada/
 smriti read "query"              # semantic + keyword search
 smriti write "text"              # write entry to memory tree
 smriti ingest file.md            # ingest external content
-smriti sleep                     # process queued cascade tasks
+smriti nightly                   # sleep task: reconcile day-log, render, digest, rollups, reindex
+smriti morning                   # wake task: the one good-morning message
+smriti logd                      # day-log watcher daemon (--ensure for keepalive)
+smriti tasks install             # schedule logd keepalive + nightly + morning
+smriti sleep --deep              # parked deep pipeline (cascade/ingest/consolidate)
 smriti status                    # index stats
 python scripts/install.py        # full install (mirrors, hooks, MCP, CLAUDE.md)
 python scripts/setup_project.py  # set up a new project to use smriti

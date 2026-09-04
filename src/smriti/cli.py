@@ -241,11 +241,24 @@ def _cmd_morning(args: argparse.Namespace) -> int:
 
 
 def _cmd_logd(args: argparse.Namespace) -> int:
-    from smriti.daylog.logd import run_logd
+    from smriti.daylog.logd import ensure_running, run_logd
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    if args.ensure:
+        ensure_running()
+        return 0
     run_logd(interval_s=args.interval, max_passes=1 if args.once else None)
     return 0
+
+
+def _cmd_tasks(args: argparse.Namespace) -> int:
+    from smriti.daylog.schedule import install_tasks, remove_tasks, task_status
+
+    if args.action == "install":
+        return install_tasks()
+    if args.action == "remove":
+        return remove_tasks()
+    return task_status()
 
 
 def _cmd_sleep(args: argparse.Namespace) -> int:
@@ -1318,6 +1331,13 @@ def main(argv: list[str] | None = None) -> int:
     p_logd.add_argument("--interval", type=float, default=5.0,
                         help="Seconds between collection passes (default 5)")
     p_logd.add_argument("--once", action="store_true", help="Run a single pass and exit")
+    p_logd.add_argument("--ensure", action="store_true",
+                        help="Keepalive: start a detached daemon if none is running")
+    p_tasks = sub.add_parser(
+        "tasks", help="Manage the nightly-cycle scheduled tasks (logd keepalive, nightly, morning)"
+    )
+    p_tasks.add_argument("action", choices=["install", "remove", "status"], nargs="?",
+                         default="status")
 
     # ── queue ────────────────────────────────────────────────────────
     p_queue = sub.add_parser(
@@ -1465,6 +1485,7 @@ def main(argv: list[str] | None = None) -> int:
         "nightly": _cmd_nightly,
         "morning": _cmd_morning,
         "logd": _cmd_logd,
+        "tasks": _cmd_tasks,
     }
     return handlers[args.command](args)
 
