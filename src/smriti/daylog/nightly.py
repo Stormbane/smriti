@@ -71,6 +71,7 @@ def run_nightly(
     *,
     now: datetime | None = None,
     rollup_cap: int = 2,
+    digest_cap: int = 10,
     reindex: bool = True,
 ) -> dict[str, object]:
     """Run the sleep task; returns (and persists) the status document."""
@@ -111,9 +112,15 @@ def run_nightly(
     digested: list[str] = []
     digest_errors: dict[str, str] = {}
     try:
-        for day in _stale_days(cfg, changed, dirty, target):
+        stale = _stale_days(cfg, changed, dirty, target)
+        # Render everything (cheap, deterministic); digest newest-first
+        # under a per-night cap so a large backfill catches up over a
+        # few nights instead of burning the seat in one.
+        for day in stale:
             if render_day(cfg, day) is not None:
                 rendered.append(day)
+        digest_days = sorted(stale, reverse=True)[:digest_cap]
+        for day in digest_days:
             try:
                 if digest_day(cfg, day, attempts) is not None:
                     digested.append(day)
@@ -124,7 +131,8 @@ def run_nightly(
         # A failed digest is a failed night (diff review P1): the wake
         # briefing must say so, and the CLI must exit nonzero.
         steps["digest"] = {"ok": not digest_errors, "days": digested,
-                           "errors": digest_errors}
+                           "errors": digest_errors,
+                           "deferred": max(0, len(stale) - len(digest_days))}
         _clear_dirty(cfg, dirty, digest_errors)
     except Exception as exc:  # noqa: BLE001
         steps["render"] = {"ok": False, "error": str(exc)[:300]}
@@ -173,7 +181,13 @@ def run_nightly(
 
 
 def _clear_dirty(cfg: DaylogConfig, dirty: set[str], digest_errors: dict[str, str]) -> None:
-    """Drop repaired dirty-day markers; keep the ones whose digest failed."""
+    """Drop repaired dirty-day markers; keep the ones whose digest failed.
+
+    A marker is cleared only when, under the writer lock, the day's
+    CURRENT input hash still matches both derived artifacts — so a turn
+    logd appended mid-digest renews the marker instead of being silently
+    swallowed for a cycle (recheck finding 1).
+    """
     if not dirty:
         return
     try:
@@ -181,7 +195,16 @@ def _clear_dirty(cfg: DaylogConfig, dirty: set[str], digest_errors: dict[str, st
 
         with writer_lock(cfg.lock_path, timeout_s=30.0):
             state = DaylogState.load(cfg.state_path)
-            state.dirty_days -= {d for d in dirty if d not in digest_errors}
+            for day in dirty:
+                if day in digest_errors:
+                    continue
+                turns = read_day_turns(cfg.day_jsonl(day))
+                if turns:
+                    current = input_hash(turns)
+                    if (read_input_hash(cfg.day_md(day)) != current
+                            or read_input_hash(cfg.day_digest(day)) != current):
+                        continue  # changed underneath us — stays dirty
+                state.dirty_days.discard(day)
             state.save()
     except Exception:  # noqa: BLE001 — markers surviving too long is harmless
         log.warning("could not clear dirty-day markers", exc_info=True)
