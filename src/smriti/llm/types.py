@@ -50,6 +50,10 @@ class LLMRequest:
     max_tokens: int = 4096
     response_format: str = "text"  # "text" | "json"
     timeout_s: int | None = None
+    # Extra argv appended by CLI-backed providers (claude_cli, codex_cli);
+    # API providers ignore it. Lets callers constrain the subprocess, e.g.
+    # ["--strict-mcp-config", "--tools", ""] for a no-tools compose call.
+    cli_args: list[str] | None = None
 
     def turns(self) -> list[Message]:
         """Resolve to a concrete message list regardless of which
