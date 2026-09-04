@@ -154,6 +154,24 @@ def _extract_paths(tool_name: str, tool_input: dict) -> list[str]:
     return []
 
 
+def _presence_line(payload: dict) -> str:
+    """Cross-channel presence for the session firing this hook.
+
+    Excludes the session's own channel (derived from the payload's cwd
+    the same way the day-log adapter does). Deterministic and silent on
+    any failure — presence must never break the parent tool call.
+    """
+    try:
+        from smriti.daylog.adapters.claude_jsonl import channel_for
+        from smriti.daylog.presence import presence_line
+
+        cwd = str(payload.get("cwd", "") or "")
+        own = channel_for(Path(cwd or "."), cwd) if cwd else ""
+        return presence_line(exclude_channel=own)
+    except Exception:
+        return ""
+
+
 def _run_recall_for_paths(paths: list[str]) -> list[RecallMatch]:
     """Aggregate recall results across a list of paths, dedup by source."""
     cfg = load_config()
@@ -234,7 +252,8 @@ def main() -> int:
             return 0
 
         matches = _run_recall_for_paths(paths)
-        if not matches:
+        presence = _presence_line(payload)
+        if not matches and not presence:
             return 0
 
         # Header summarises the trigger so the model can tell which tool
@@ -245,6 +264,13 @@ def main() -> int:
             header = f"tool: {tool_name}, {len(paths)} files"
 
         block = _format_block(matches, header)
+        if presence:
+            if block:
+                block = block.replace(
+                    "</system-reminder>", f"{presence}\n</system-reminder>"
+                )
+            else:
+                block = f"<system-reminder>\n{presence}\n</system-reminder>\n"
         framing = os.environ.get("SMRITI_RECALL_FRAMING", "raw").strip()
         sys.stdout.write(_frame_output(block, framing))
         return 0
