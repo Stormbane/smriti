@@ -5,6 +5,39 @@
      the codebase. Session-level task tracking uses Claude Code's TaskCreate.
      Format: ## Milestone Name / - [ ] Task description / - [x] Completed task -->
 
+## Nightly cycle (spec: .ai/features/nightly-cycle.md) — top of stack
+
+- [x] Capture core: per-source adapters (claude_jsonl incl. Telegram,
+      codex_rollout, voice_md), stable turn ids + dedup writer,
+      per-burst writer lock, event-time (+10) day placement, secret
+      scrub, per-source scan-recency health.
+- [x] `smriti nightly`: reconcile sweep -> repair pass (changed dates
+      any age + 7-day scan) -> render -> no-tools digest
+      (claude_cli primary, codex_cli fallback) -> capped closed-period
+      rollup scan -> reindex -> `.nightly-status.json`.
+- [x] `smriti morning`: fail-closed sent ledger, web-search-only
+      compose, delivery via `notify_cmd` shim (the future
+      presence-routing tool's first call site).
+- [x] `smriti logd` daemon + `--ensure` keepalive; `smriti tasks
+      install` (Task Scheduler fallback; migrate to Hermes cron once
+      its cron home is verified live).
+- [x] Presence line in the recall hook; WHILE YOU SLEPT in the wake
+      briefing; day-log health in `smriti status`.
+- [ ] Deploy: `smriti tasks install`, wire `notify_cmd` to the Hermes
+      Telegram gateway, archive queue.json (251 pending / 10 failed /
+      13 done -> queue-archive-2026-09.json, reversible), first full
+      reindex.
+- [ ] Add prana-brain/phone-app transcript dirs to daylog.json sources
+      when that work lands.
+
+## Future introspection (parked 2026-09-04 — Suti's ruling: the deep
+## pipeline was too ambitious to run at all; revisit only after the
+## nightly cycle has run reliably for a sustained stretch)
+
+- The cognitive cascade, ingest routing, batch consolidation, concept
+  synthesis, and the entire "Active" research backlog below run only
+  via `smriti sleep --deep` (manual). Nothing schedules them.
+
 ## Model & harness agnosticism
 
 - [x] **Phase 9: install-script harness parity.** Three fixes that

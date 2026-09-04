@@ -26,6 +26,46 @@ _DEFAULT_INTERVAL_S = 5.0
 _ERROR_BACKOFF_S = 30.0
 
 
+def _pid_path(cfg: DaylogConfig):  # noqa: ANN202
+    return cfg.log_dir / ".logd.pid"
+
+
+def _running_pid(cfg: DaylogConfig) -> int:
+    from smriti.daylog.lock import _pid_alive
+
+    try:
+        pid = int(_pid_path(cfg).read_text(encoding="ascii").strip() or "0")
+    except (OSError, ValueError):
+        return 0
+    return pid if _pid_alive(pid) else 0
+
+
+def ensure_running(cfg: DaylogConfig | None = None) -> bool:
+    """Keepalive entry point: start a detached logd if none is alive.
+
+    Returns True if a daemon is (now) running. Called by the scheduled
+    ``smriti logd --ensure`` task every 10 minutes — this is the
+    self-recovery mechanism: a crashed daemon is restarted on the next
+    tick, and the idempotent passes make the gap harmless.
+    """
+    import subprocess
+    import sys
+
+    cfg = cfg or load_config()
+    if _running_pid(cfg):
+        return True
+    flags = 0
+    if hasattr(subprocess, "DETACHED_PROCESS"):
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    proc = subprocess.Popen(  # noqa: S603
+        [sys.executable, "-m", "smriti", "logd"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL, creationflags=flags,
+    )
+    log.info("logd: started daemon pid %d", proc.pid)
+    return True
+
+
 def run_logd(
     cfg: DaylogConfig | None = None,
     *,
@@ -36,6 +76,11 @@ def run_logd(
     cfg = cfg or load_config()
     state = DaylogState.load(cfg.state_path)
     passes = 0
+    try:
+        _pid_path(cfg).parent.mkdir(parents=True, exist_ok=True)
+        _pid_path(cfg).write_text(str(__import__("os").getpid()), encoding="ascii")
+    except OSError:
+        pass  # keepalive degrades to always-spawn; dedup keeps that safe
     log.info("logd: watching %d sources -> %s", len(cfg.sources), cfg.log_dir)
     while max_passes is None or passes < max_passes:
         passes += 1
