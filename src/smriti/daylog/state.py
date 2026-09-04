@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -55,6 +56,10 @@ class DaylogState:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.sources: dict[str, SourceState] = {}
+        # Days changed by capture but not yet repaired by a nightly run.
+        # Persisted so a historical change the daemon captured survives
+        # until nightly consumes it (diff review P1).
+        self.dirty_days: set[str] = set()
 
     @classmethod
     def load(cls, path: Path) -> "DaylogState":
@@ -63,6 +68,9 @@ class DaylogState:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return state
+        dirty = raw.get("dirty_days")
+        if isinstance(dirty, list):
+            state.dirty_days = {str(d) for d in dirty}
         for name, src in raw.get("sources", {}).items():
             if not isinstance(src, dict):
                 continue
@@ -93,10 +101,22 @@ class DaylogState:
     def note_scan(self, source: str) -> None:
         self.source(source).last_scan = time.time()
 
+    def mark_dirty(self, days: "set | list") -> None:
+        from smriti.daylog.model import day_key as _day_key
+
+        for day in days:
+            self.dirty_days.add(day if isinstance(day, str) else _day_key(day))
+
     def save(self) -> None:
-        payload = {"sources": {n: asdict(s) for n, s in self.sources.items()}}
+        payload = {
+            "sources": {n: asdict(s) for n, s in self.sources.items()},
+            "dirty_days": sorted(self.dirty_days),
+        }
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_name(self.path.name + ".tmp")
+        # PID-unique temp name: concurrent savers (daemon + nightly, when
+        # not lock-serialized, e.g. crash recovery) must never collide on
+        # the same temp path (diff review P2).
+        tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(payload, indent=1), encoding="utf-8")
         tmp.replace(self.path)
 

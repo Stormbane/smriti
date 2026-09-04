@@ -91,10 +91,21 @@ class ClaudeCliProvider:
         # the LLM call.
         env = {**os.environ, "SMRITI_INTERNAL": "1"}
 
+        # Run from the dedicated LLM workdir: claude -p writes a session
+        # transcript under ~/.claude/projects/<encoded-cwd>/, and the
+        # day-log collector excludes the llm-workdir namespace so
+        # internal calls never pollute the day-log (diff review P1).
+        from smriti.llm.workdir import llm_workdir
+
+        try:
+            workdir: str | None = str(llm_workdir())
+        except OSError:
+            workdir = None
+
         def _spawn() -> subprocess.CompletedProcess:
             return subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout,
-                input=stdin_text, env=env,
+                input=stdin_text, env=env, cwd=workdir,
                 encoding="utf-8", errors="replace",
             )
 

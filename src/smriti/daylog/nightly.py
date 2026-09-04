@@ -34,9 +34,24 @@ def _target_day(now: datetime) -> date:
     return (now.astimezone(day_tz()) - timedelta(days=1)).date()
 
 
-def _stale_days(cfg: DaylogConfig, changed: set[date], target: date) -> list[str]:
-    """Days needing render/digest: reconcile-changed (any age) + 7-day scan."""
-    candidates = {day_key(d) for d in changed}
+def _all_log_days(cfg: DaylogConfig) -> set[str]:
+    days: set[str] = set()
+    for path in cfg.log_dir.glob("[0-9]" * 4 + "/[0-9][0-9]/[0-9][0-9].jsonl"):
+        days.add(f"{path.parent.parent.name}-{path.parent.name}-{path.stem}")
+    return days
+
+
+def _stale_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
+                target: date) -> list[str]:
+    """Days needing render/digest.
+
+    Candidates: reconcile-changed dates (any age), persisted dirty-day
+    markers from daemon passes (diff review P1 — a historical change
+    captured by logd before nightly ran must not be lost), the 7-day
+    window, and — because staleness is a cheap hash compare — every day
+    file in the tree, so no drift can ever survive a night unnoticed.
+    """
+    candidates = {day_key(d) for d in changed} | set(dirty) | _all_log_days(cfg)
     for back in range(_REPAIR_WINDOW_DAYS):
         candidates.add(day_key(target - timedelta(days=back)))
     stale: list[str] = []
@@ -73,12 +88,13 @@ def run_nightly(
 
     # 1. Reconcile sweep (backstop for daemon gaps).
     changed: set[date] = set()
+    dirty: set[str] = set()
     try:
         from smriti.daylog.collect import collect_once
 
-        state = DaylogState.load(cfg.state_path)
-        report = collect_once(cfg, state)
+        report = collect_once(cfg)
         changed = report.changed_days
+        dirty = DaylogState.load(cfg.state_path).dirty_days
         steps["reconcile"] = {
             "ok": True,
             "appended": report.appended,
@@ -88,12 +104,14 @@ def run_nightly(
     except Exception as exc:  # noqa: BLE001
         steps["reconcile"] = {"ok": False, "error": str(exc)[:300]}
 
-    # 2+3+4. Repair/render/digest every stale day (reconcile-changed at any
-    # age, plus the 7-day window).
+    # 2+3+4. Repair/render/digest every stale day: reconcile-changed and
+    # daemon-marked dirty dates at any age, the 7-day window, and a full
+    # hash sweep of the tree.
     rendered: list[str] = []
     digested: list[str] = []
+    digest_errors: dict[str, str] = {}
     try:
-        for day in _stale_days(cfg, changed, target):
+        for day in _stale_days(cfg, changed, dirty, target):
             if render_day(cfg, day) is not None:
                 rendered.append(day)
             try:
@@ -101,9 +119,13 @@ def run_nightly(
                     digested.append(day)
             except Exception as exc:  # noqa: BLE001 — a failed digest leaves
                 # the stale hash in place; the next nightly retries it.
-                steps.setdefault("digest_errors", {})[day] = str(exc)[:300]  # type: ignore[union-attr]
+                digest_errors[day] = str(exc)[:300]
         steps["render"] = {"ok": True, "days": rendered}
-        steps["digest"] = {"ok": True, "days": digested}
+        # A failed digest is a failed night (diff review P1): the wake
+        # briefing must say so, and the CLI must exit nonzero.
+        steps["digest"] = {"ok": not digest_errors, "days": digested,
+                           "errors": digest_errors}
+        _clear_dirty(cfg, dirty, digest_errors)
     except Exception as exc:  # noqa: BLE001
         steps["render"] = {"ok": False, "error": str(exc)[:300]}
 
@@ -148,6 +170,21 @@ def run_nightly(
     )
     _write_status(cfg.nightly_status_path, status)
     return status
+
+
+def _clear_dirty(cfg: DaylogConfig, dirty: set[str], digest_errors: dict[str, str]) -> None:
+    """Drop repaired dirty-day markers; keep the ones whose digest failed."""
+    if not dirty:
+        return
+    try:
+        from smriti.daylog.lock import writer_lock
+
+        with writer_lock(cfg.lock_path, timeout_s=30.0):
+            state = DaylogState.load(cfg.state_path)
+            state.dirty_days -= {d for d in dirty if d not in digest_errors}
+            state.save()
+    except Exception:  # noqa: BLE001 — markers surviving too long is harmless
+        log.warning("could not clear dirty-day markers", exc_info=True)
 
 
 def _write_status(path: Path, status: dict[str, object]) -> None:

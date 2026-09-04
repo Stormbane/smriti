@@ -202,10 +202,31 @@ def test_nightly_survives_digest_failure_and_reports_it(
     status = run_nightly(cfg, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc),
                          reindex=False)
     steps = status["steps"]
-    assert "2026-09-04" in steps["digest_errors"]  # type: ignore[index,operator]
+    # A failed digest is a failed night: step not ok, whole status not ok.
+    assert steps["digest"]["ok"] is False  # type: ignore[index]
+    assert "2026-09-04" in steps["digest"]["errors"]  # type: ignore[index,operator]
+    assert status["ok"] is False
     assert cfg.day_md("2026-09-04").exists()  # render still happened
     # The stale digest hash means the next night retries.
     assert read_input_hash(cfg.day_digest("2026-09-04")) == ""
+
+
+def test_nightly_repairs_daemon_marked_dirty_day_beyond_window(
+    tmp_path: Path, fake_llm: FakeProvider
+) -> None:
+    """A historical day the daemon captured (dirty marker) is repaired even
+    though reconcile sees nothing new and the day is outside 7 days."""
+    from smriti.daylog.state import DaylogState
+
+    cfg = _cfg(tmp_path)
+    _seed_day(cfg, "2026-07-01")  # far outside the window
+    state = DaylogState.load(cfg.state_path)
+    state.mark_dirty({"2026-07-01"})
+    state.save()
+    status = run_nightly(cfg, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc),
+                         reindex=False)
+    assert "2026-07-01" in status["steps"]["digest"]["days"]  # type: ignore[index]
+    assert DaylogState.load(cfg.state_path).dirty_days == set()
 
 
 # ---------------------------------------------------------------- morning

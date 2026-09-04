@@ -2,8 +2,13 @@
 
 The nightly cycle's fallback seat (spec: subscription seats only, no
 per-token billing). ``codex exec`` runs one non-interactive turn and
-prints the final message to stdout. We pass ``--skip-git-repo-check``
-because nightly runs execute from the tree root, not a repo.
+prints the final message to stdout.
+
+Isolation (diff review P1s): ``--ephemeral`` so internal calls persist
+no rollout for the day-log daemon to ingest; ``--sandbox read-only`` +
+``-c mcp_servers={}`` so transcript-derived prompt content cannot
+trigger writes, exec, or the user's MCP servers; ``--cd`` into the
+empty smriti LLM workdir so even reads see nothing.
 """
 
 from __future__ import annotations
@@ -46,7 +51,13 @@ class CodexCliProvider:
         prompt = f"{request.system}\n\n{body}" if request.system else body
         timeout = request.timeout_s or int(os.environ.get("SMRITI_CODEX_TIMEOUT", "300"))
 
-        cmd = [self._path(), "exec", "--skip-git-repo-check"]
+        from smriti.llm.workdir import llm_workdir
+
+        cmd = [
+            self._path(), "exec", "--skip-git-repo-check", "--ephemeral",
+            "--sandbox", "read-only", "-c", "mcp_servers={}",
+            "--cd", str(llm_workdir()),
+        ]
         if request.model:
             cmd.extend(["--model", request.model])
         if request.cli_args:

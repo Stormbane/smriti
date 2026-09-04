@@ -107,9 +107,10 @@ def load_config(root: Path | None = None) -> DaylogConfig:
                     specs.append(SourceSpec(name=name, kind=kind, glob=pattern))
         return specs
 
-    replaced = _parse(raw.get("sources"))
-    if replaced:
-        cfg.sources = replaced
+    # Key presence, not truthiness: an explicit "sources": [] disables
+    # every default source (diff review P2).
+    if isinstance(raw.get("sources"), list):
+        cfg.sources = _parse(raw.get("sources"))
     cfg.sources.extend(_parse(raw.get("extra_sources")))
     notify = raw.get("notify_cmd")
     if isinstance(notify, list) and all(isinstance(x, str) for x in notify):

@@ -281,12 +281,11 @@ def test_collect_tails_incrementally_without_duplicates(tmp_path: Path) -> None:
     cfg, src_dir = _voice_source(tmp_path)
     f = src_dir / "20260904-100000-box.md"
     f.write_text("- `10:00:05` **user:** first\n", encoding="utf-8")
-    state = DaylogState.load(cfg.state_path)
-    r1 = collect_once(cfg, state)
+    r1 = collect_once(cfg)
     assert r1.appended == 1
     with f.open("a", encoding="utf-8") as fh:
         fh.write("- `10:00:09` **assistant:** second\n")
-    r2 = collect_once(cfg, state)
+    r2 = collect_once(cfg)
     assert r2.appended == 1
     turns = read_day_turns(cfg.day_jsonl("2026-09-04"))
     assert [t.text for t in turns] == ["first", "second"]
@@ -297,11 +296,10 @@ def test_collect_crash_between_append_and_state_save(tmp_path: Path) -> None:
     cfg, src_dir = _voice_source(tmp_path)
     f = src_dir / "20260904-100000-box.md"
     f.write_text("- `10:00:05` **user:** once only\n", encoding="utf-8")
-    stale = DaylogState.load(cfg.state_path)  # loaded before the first pass
-    live = DaylogState.load(cfg.state_path)
-    assert collect_once(cfg, live).appended == 1
-    # "Crash": rerun the pass with the stale (pre-append) state.
-    assert collect_once(cfg, stale).appended == 0
+    assert collect_once(cfg).appended == 1
+    # "Crash": the state save never landed — marks regress to zero.
+    cfg.state_path.unlink()
+    assert collect_once(cfg).appended == 0
     assert len(read_day_turns(cfg.day_jsonl("2026-09-04"))) == 1
 
 
@@ -309,21 +307,70 @@ def test_collect_reread_on_truncation(tmp_path: Path) -> None:
     cfg, src_dir = _voice_source(tmp_path)
     f = src_dir / "20260904-100000-box.md"
     f.write_text("- `10:00:05` **user:** original\n", encoding="utf-8")
-    state = DaylogState.load(cfg.state_path)
-    collect_once(cfg, state)
+    collect_once(cfg)
     # Recreate the file with different content (identity change).
     f.write_text("- `10:00:07` **user:** rewritten\n", encoding="utf-8")
-    collect_once(cfg, state)
+    collect_once(cfg)
     texts = {t.text for t in read_day_turns(cfg.day_jsonl("2026-09-04"))}
     assert texts == {"original", "rewritten"}
 
 
 def test_collect_health_tracks_scan_recency(tmp_path: Path) -> None:
     cfg, _src_dir = _voice_source(tmp_path)
-    state = DaylogState.load(cfg.state_path)
-    collect_once(cfg, state)
-    health = state.health()
+    collect_once(cfg)
+    health = DaylogState.load(cfg.state_path).health()
     assert health["voice"]["scan_age_s"] >= 0  # scanned, even with no turns
     assert health["voice"]["turn_age_s"] == -1  # quiet source, distinguishable
     time.sleep(0.01)
     assert DaylogState.load(cfg.state_path).sources["voice"].last_scan > 0
+
+
+def test_collect_marks_dirty_days_until_cleared(tmp_path: Path) -> None:
+    cfg, src_dir = _voice_source(tmp_path)
+    f = src_dir / "20260901-100000-box.md"
+    f.write_text("- `10:00:05` **user:** old day turn\n", encoding="utf-8")
+    collect_once(cfg)
+    assert DaylogState.load(cfg.state_path).dirty_days == {"2026-09-01"}
+
+
+def test_collect_excludes_llm_workdir_transcripts(tmp_path: Path) -> None:
+    src_dir = tmp_path / "projects" / "C--Users-admin--narada--smriti-llm-workdir"
+    src_dir.mkdir(parents=True)
+    spec = SourceSpec(name="claude", kind="claude_jsonl",
+                      glob=str(tmp_path / "projects" / "*" / "*.jsonl"))
+    cfg = _cfg(tmp_path, [spec])
+    (src_dir / "s.jsonl").write_bytes(_claude_line(cwd=""))
+    assert collect_once(cfg).appended == 0
+
+
+def test_collect_runs_while_lock_held_only_after_release(tmp_path: Path) -> None:
+    """A concurrent writer-lock holder delays but does not corrupt a pass."""
+    cfg, src_dir = _voice_source(tmp_path)
+    (src_dir / "20260904-100000-box.md").write_text(
+        "- `10:00:05` **user:** locked run\n", encoding="utf-8"
+    )
+    entered = threading.Event()
+    release = threading.Event()
+
+    def hold() -> None:
+        with writer_lock(cfg.lock_path):
+            entered.set()
+            release.wait(timeout=5)
+
+    t = threading.Thread(target=hold)
+    t.start()
+    assert entered.wait(timeout=5)
+    with pytest.raises(LockTimeout):
+        collect_once(cfg, lock_timeout_s=0.3)
+    release.set()
+    t.join(timeout=5)
+    assert collect_once(cfg).appended == 1
+
+
+def test_config_explicit_empty_sources_disable_defaults(tmp_path: Path) -> None:
+    from smriti.daylog.config import load_config
+
+    smriti_dir = tmp_path / ".smriti"
+    smriti_dir.mkdir()
+    (smriti_dir / "daylog.json").write_text('{"sources": []}', encoding="utf-8")
+    assert load_config(tmp_path).sources == []

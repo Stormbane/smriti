@@ -166,7 +166,14 @@ def _presence_line(payload: dict) -> str:
         from smriti.daylog.presence import presence_line
 
         cwd = str(payload.get("cwd", "") or "")
-        own = channel_for(Path(cwd or "."), cwd) if cwd else ""
+        if not cwd:
+            own = ""
+        elif os.environ.get("SMRITI_RECALL_FRAMING", "raw").strip() == "codex-json":
+            # This hook is firing inside Codex — its transcripts land in
+            # the day-log under the codex:<project> channel, not claude:.
+            own = f"codex:{Path(cwd).name}"
+        else:
+            own = channel_for(Path(cwd), cwd)
         return presence_line(exclude_channel=own)
     except Exception:
         return ""
