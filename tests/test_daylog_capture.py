@@ -129,6 +129,7 @@ def test_claude_adapter_skips_meta_sidechain_wrappers_and_tools(tmp_path: Path) 
         + _claude_line(message={"content": "<command-name>/clear</command-name>"})
         + _claude_line(message={"content": [{"type": "tool_result", "content": "out"}]})
         + _claude_line(message={"content": "<system-reminder>injected</system-reminder>"})
+        + _claude_line(message={"content": "[Request interrupted by user]"})
         + json.dumps({"type": "progress"}).encode() + b"\n"
         + b"not json at all\n"
     )

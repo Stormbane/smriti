@@ -30,6 +30,12 @@ _WRAPPER_RE = re.compile(
 # Strip inline system-reminder blocks that ride inside a genuine user turn.
 _INLINE_REMINDER_RE = re.compile(r"<system-reminder>[\s\S]*?</system-reminder>", re.MULTILINE)
 
+# Harness-synthetic user records observed in live transcripts.
+_SYNTHETIC_TEXTS = frozenset({
+    "[Request interrupted by user]",
+    "[Request interrupted by user for tool use]",
+})
+
 
 def channel_for(path: Path, cwd: str) -> str:
     probe = f"{cwd} {path.parent.name}".lower()
@@ -85,7 +91,7 @@ class ClaudeJsonlAdapter:
             content = message.get("content") if isinstance(message, dict) else None
             text = _text_from_content(content)
             text = _INLINE_REMINDER_RE.sub("", text).strip()
-            if not text or _WRAPPER_RE.match(text):
+            if not text or _WRAPPER_RE.match(text) or text in _SYNTHETIC_TEXTS:
                 continue
             result.turns.append(
                 Turn(
