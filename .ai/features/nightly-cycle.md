@@ -1,7 +1,10 @@
 ---
-status: planned
+status: implemented
 opened: 2026-09-04
 revised: 2026-09-05 (post adversarial review round 1)
+implemented: 2026-09-05 (branch nightly-cycle, 8 commits; 2 plan rounds +
+  diff review + recheck, all findings fixed; live deploy done — merge to
+  master is Suti's call)
 related_findings: []
 related_decisions: []
 ---

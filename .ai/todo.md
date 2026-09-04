@@ -23,10 +23,15 @@
       its cron home is verified live).
 - [x] Presence line in the recall hook; WHILE YOU SLEPT in the wake
       briefing; day-log health in `smriti status`.
-- [ ] Deploy: `smriti tasks install`, wire `notify_cmd` to the Hermes
-      Telegram gateway, archive queue.json (251 pending / 10 failed /
-      13 done -> queue-archive-2026-09.json, reversible), first full
-      reindex.
+- [x] Deploy (2026-09-05): `smriti tasks install` (logd keepalive /10min,
+      nightly 03:00, morning 07:00), queue.json archived to
+      queue-archive-2026-09.json (274 tasks, reversible), logd live —
+      49 days backfilled into ~/.narada/log/. NOTE: scheduled tasks run
+      the working tree (pip -e); branch nightly-cycle is deployed but
+      unmerged — merge to master is Suti's call.
+- [ ] Wire `notify_cmd` in ~/.narada/.smriti/daylog.json to the Hermes
+      Telegram gateway (until then `smriti morning` exits without
+      composing — no seat burn, no message).
 - [ ] Add prana-brain/phone-app transcript dirs to daylog.json sources
       when that work lands.
 
