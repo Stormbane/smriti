@@ -18,7 +18,6 @@ import time
 
 from smriti.daylog.collect import collect_once
 from smriti.daylog.config import DaylogConfig, load_config
-from smriti.daylog.state import DaylogState
 
 log = logging.getLogger(__name__)
 
@@ -74,7 +73,6 @@ def run_logd(
 ) -> None:
     """Run the collection loop (``max_passes`` bounds it for tests)."""
     cfg = cfg or load_config()
-    state = DaylogState.load(cfg.state_path)
     passes = 0
     try:
         _pid_path(cfg).parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +83,7 @@ def run_logd(
     while max_passes is None or passes < max_passes:
         passes += 1
         try:
-            report = collect_once(cfg, state)
+            report = collect_once(cfg)
             if report.appended:
                 log.info(
                     "logd: +%d turns (%d files scanned, %d parse errors)",
@@ -94,7 +92,6 @@ def run_logd(
             delay = interval_s
         except Exception:  # noqa: BLE001 — the loop must survive anything
             log.exception("logd: pass failed; backing off")
-            state = DaylogState.load(cfg.state_path)  # re-load, state may be torn
             delay = _ERROR_BACKOFF_S
         if max_passes is not None and passes >= max_passes:
             break

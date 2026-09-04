@@ -3,12 +3,16 @@
 Shared by the logd daemon (frequent small passes) and the nightly
 reconcile sweep (backstop). Discovers files by glob, tails each from
 its persisted offset through the source's adapter, appends the
-extracted turns, then persists state. State saves AFTER appends, so a
-crash between the two re-reads a range — dedup absorbs it.
+extracted turns, then persists state.
+
+Concurrency (diff review P2): the ENTIRE pass runs under the writer
+lock, and the state is re-loaded from disk inside the lock — so a logd
+pass and the nightly reconcile can interleave but never race a
+read-modify-write, clobber each other's saves, or regress offsets.
 
 File identity: a stored head-fingerprint + size. A size regression or
 fingerprint change means the path was truncated or reused — re-read
-from zero (spec: review round 1, finding 1).
+from zero; dedup by turn id absorbs any overlap.
 """
 
 from __future__ import annotations
@@ -21,13 +25,18 @@ from pathlib import Path
 
 from smriti.daylog.adapters import get_adapter
 from smriti.daylog.config import DaylogConfig
-from smriti.daylog.model import Turn
+from smriti.daylog.lock import writer_lock
 from smriti.daylog.state import DaylogState, fingerprint_head
-from smriti.daylog.writer import append_turns
+from smriti.daylog.writer import append_turns_unlocked
 
 # Read at most this much new data from one file per pass; huge backlogs
 # drain over successive passes instead of ballooning memory.
 _MAX_CHUNK = 8 * 1024 * 1024
+
+# Transcript namespaces produced by smriti's OWN internal LLM
+# subprocesses (see smriti.llm.workdir) — never captured, or derived
+# text would feed back into future digests.
+_EXCLUDE_SUBSTRINGS = ("llm-workdir",)
 
 
 @dataclass
@@ -38,12 +47,26 @@ class CollectReport:
     parse_errors: int = 0
 
 
-def collect_once(cfg: DaylogConfig, state: DaylogState) -> CollectReport:
-    """Run one pass: scan sources, extract new turns, append, save state."""
-    report = CollectReport()
-    pending: list[Turn] = []
-    touched: list[tuple[str, str, int, int, int]] = []  # (source, file, new_offset, turns, errors)
+def collect_once(cfg: DaylogConfig, *, lock_timeout_s: float = 60.0) -> CollectReport:
+    """Run one pass: scan sources, extract new turns, append, save state.
 
+    Loads the persisted state inside the writer lock; the caller never
+    owns state across passes (a stale in-memory copy is exactly the
+    race this design removes).
+    """
+    with writer_lock(cfg.lock_path, timeout_s=lock_timeout_s):
+        state = DaylogState.load(cfg.state_path)
+        report = _collect_locked(cfg, state)
+        # Persist dirty-day markers so historical changes captured by the
+        # daemon survive until the next nightly repair pass (diff review
+        # P1) — nightly consumes and clears them.
+        state.mark_dirty(report.changed_days)
+        state.save()
+    return report
+
+
+def _collect_locked(cfg: DaylogConfig, state: DaylogState) -> CollectReport:
+    report = CollectReport()
     for spec in cfg.sources:
         state.note_scan(spec.name)
         try:
@@ -52,6 +75,8 @@ def collect_once(cfg: DaylogConfig, state: DaylogState) -> CollectReport:
             state.source(spec.name).parse_errors += 1
             continue
         for raw_path in sorted(globmod.glob(spec.glob)):
+            if any(marker in raw_path for marker in _EXCLUDE_SUBSTRINGS):
+                continue
             path = Path(raw_path)
             fstate = state.file(spec.name, path)
             fstate.last_scan = time.time()
@@ -78,27 +103,15 @@ def collect_once(cfg: DaylogConfig, state: DaylogState) -> CollectReport:
             result = adapter.extract(path, blob)
             if result.consumed <= 0 and not result.errors:
                 continue
-            pending.extend(result.turns)
-            touched.append(
-                (spec.name, str(path), fstate.offset + result.consumed,
-                 len(result.turns), result.errors)
-            )
-
-    appended, changed = append_turns(cfg, pending)
-    report.appended = appended
-    report.changed_days = changed
-
-    # Advance marks only after the append landed.
-    now = time.time()
-    for source, fpath, new_offset, turn_count, errors in touched:
-        src = state.source(source)
-        fstate = src.files[fpath]
-        fstate.offset = new_offset
-        fstate.parse_errors += errors
-        src.parse_errors += errors
-        report.parse_errors += errors
-        if turn_count:
-            fstate.last_turn = now
-            src.last_turn = now
-    state.save()
+            appended, changed = append_turns_unlocked(cfg, result.turns)
+            report.appended += appended
+            report.changed_days |= changed
+            fstate.offset += result.consumed
+            fstate.parse_errors += result.errors
+            state.source(spec.name).parse_errors += result.errors
+            report.parse_errors += result.errors
+            if result.turns:
+                now = time.time()
+                fstate.last_turn = now
+                state.source(spec.name).last_turn = now
     return report

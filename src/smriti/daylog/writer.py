@@ -54,12 +54,12 @@ def read_day_turns(path: Path) -> list[Turn]:
     return sorted(turns.values(), key=lambda t: (t.ts, t.id))
 
 
-def append_turns(cfg: DaylogConfig, turns: list[Turn]) -> tuple[int, set[date]]:
+def append_turns_unlocked(cfg: DaylogConfig, turns: list[Turn]) -> tuple[int, set[date]]:
     """Append *turns* to their day-files (event-time placement).
 
-    Takes the writer lock for the duration of the burst. Returns
-    ``(appended_count, changed_days)`` — changed days drive the nightly
-    repair pass regardless of age (spec: review round 2, finding 2).
+    The caller MUST hold the writer lock. Returns ``(appended_count,
+    changed_days)`` — changed days drive the nightly repair pass
+    regardless of age (spec: review round 2, finding 2).
     """
     if not turns:
         return 0, set()
@@ -69,19 +69,26 @@ def append_turns(cfg: DaylogConfig, turns: list[Turn]) -> tuple[int, set[date]]:
 
     appended = 0
     changed: set[date] = set()
-    with writer_lock(cfg.lock_path):
-        for day, day_turns in sorted(by_day.items()):
-            path = cfg.day_jsonl(day_key(day))
-            existing = load_day_ids(path)
-            fresh = [t for t in day_turns if t.id not in existing]
-            if not fresh:
-                continue
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8", newline="\n") as f:
-                for turn in fresh:
-                    record = turn.to_json()
-                    record["text"] = scrub(record["text"])
-                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
-            appended += len(fresh)
-            changed.add(day)
+    for day, day_turns in sorted(by_day.items()):
+        path = cfg.day_jsonl(day_key(day))
+        existing = load_day_ids(path)
+        fresh = [t for t in day_turns if t.id not in existing]
+        if not fresh:
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8", newline="\n") as f:
+            for turn in fresh:
+                record = turn.to_json()
+                record["text"] = scrub(record["text"])
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        appended += len(fresh)
+        changed.add(day)
     return appended, changed
+
+
+def append_turns(cfg: DaylogConfig, turns: list[Turn]) -> tuple[int, set[date]]:
+    """Locked wrapper around :func:`append_turns_unlocked`."""
+    if not turns:
+        return 0, set()
+    with writer_lock(cfg.lock_path):
+        return append_turns_unlocked(cfg, turns)
