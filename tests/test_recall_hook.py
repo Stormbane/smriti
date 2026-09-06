@@ -19,6 +19,17 @@ from smriti.recall import hook
 from smriti.recall.types import RecallMatch, RecallResponse
 
 
+@pytest.fixture(autouse=True)
+def _isolated_tree(monkeypatch, tmp_path):
+    """Point the memory tree at an empty temp root.
+
+    The hook now also emits cross-channel presence read from the live
+    day-log; without isolation these tests inherit whatever the
+    machine's logd captured in the last 15 minutes (flaked live,
+    2026-09-06)."""
+    monkeypatch.setenv("SMRITI_ROOT", str(tmp_path / "tree"))
+
+
 @pytest.fixture
 def fake_recall(monkeypatch):
     """Replace run_recall with a stub returning canned matches."""
@@ -284,3 +295,28 @@ def test_extract_paths_skipped_tools():
     assert hook._extract_paths("Bash", {"command": "cat foo"}) == []
     assert hook._extract_paths("mcp__smriti__smriti_read", {"q": "x"}) == []
     assert hook._extract_paths("WhateverElse", {"file_path": "x.py"}) == []
+
+
+def test_presence_only_output_without_matches(fake_recall, monkeypatch, tmp_path):
+    """Fresh other-channel activity is injected even with zero recall matches."""
+    from datetime import datetime, timezone
+
+    from smriti.daylog.config import load_config
+    from smriti.daylog.model import Turn
+    from smriti.daylog.writer import append_turns
+
+    cfg = load_config()  # resolves to the isolated SMRITI_ROOT tree
+    append_turns(cfg, [Turn(
+        ts=datetime.now(timezone.utc), channel="telegram", who="suti",
+        text="are you around?", session="t1",
+    )])
+    target = tmp_path / "thing.md"
+    target.write_text("hi", encoding="utf-8")
+    fake_recall([])
+    out = _run_main(
+        {"tool_name": "Read", "tool_input": {"file_path": str(target)},
+         "cwd": str(tmp_path)},
+        monkeypatch,
+    )
+    assert "Active on other channels" in out and "telegram" in out
+    assert "<system-reminder>" in out
