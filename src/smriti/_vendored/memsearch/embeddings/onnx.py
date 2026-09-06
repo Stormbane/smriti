@@ -50,7 +50,14 @@ class OnnxEmbedding:
         self._tokenizer.enable_padding(pad_id=1, pad_token="<pad>")
         self._tokenizer.enable_truncation(max_length=8192)
 
-        self._session = ort.InferenceSession(model_path)
+        # Arena off: the default CPU memory arena grows to fit the
+        # largest batch seen and never returns pages to the OS — a poor
+        # fit for long-lived MCP servers (one per session) that embed a
+        # few chunks at a time. The per-call allocation cost is noise
+        # next to inference time.
+        opts = ort.SessionOptions()
+        opts.enable_cpu_mem_arena = False
+        self._session = ort.InferenceSession(model_path, sess_options=opts)
         self._output_names = [o.name for o in self._session.get_outputs()]
         self._has_dense_vecs = "dense_vecs" in self._output_names
         self._model = model
@@ -131,8 +138,13 @@ class OnnxEmbedding:
         import numpy as np
 
         encoded = self._tokenizer.encode_batch(texts)
-        input_ids = np.array([e.ids for e in encoded])
-        attention_mask = np.array([e.attention_mask for e in encoded])
+        # dtype must be explicit: the model declares int64 inputs, and
+        # numpy's default integer is int32 on Windows (int64 on Linux) —
+        # so without it every session on this box failed the constructor's
+        # probe embed with INVALID_ARGUMENT and silently fell back to the
+        # torch provider (16s load, ~1 GB resident, per session).
+        input_ids = np.array([e.ids for e in encoded], dtype=np.int64)
+        attention_mask = np.array([e.attention_mask for e in encoded], dtype=np.int64)
         feed = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
