@@ -236,6 +236,15 @@ def index_tree(
             ).fetchone()[0]
 
             if conn.has_vec:
+                # Guard against orphaned vec rows: INSERT OR REPLACE on
+                # chunks frees a rowid without any trigger cleaning its
+                # chunks_vec row (vec0 has no triggers), and crash-era
+                # partial commits left such orphans behind. When SQLite
+                # recycles one of those rowids the plain INSERT hits
+                # "UNIQUE constraint failed on chunks_vec" — which
+                # crashed every incremental index from mid-July until
+                # 2026-09-06. Delete-then-insert is idempotent.
+                conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
                 conn.execute(
                     "INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)",
                     (rowid, _serialize_f32(embeddings[i])),
