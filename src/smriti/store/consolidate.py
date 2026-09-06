@@ -67,18 +67,15 @@ class ClusterResult:
 
 
 def _get_embedding_provider():
-    """Get the local embedding provider (same one the indexer uses)."""
-    from smriti._vendored.memsearch.embeddings import get_provider
+    """The indexer's provider — one selection policy for the whole store.
 
-    try:
-        return get_provider("onnx")
-    except Exception:
-        try:
-            return get_provider("local")
-        except Exception:
-            raise RuntimeError(
-                "No embedding provider available. Install onnxruntime or sentence-transformers."
-            )
+    A private duplicate of the try-onnx-then-local ladder lived here and
+    drifted: the indexer grew index-aware selection (match the provider
+    the index was built with) that this copy lacked.
+    """
+    from smriti.store.indexer import _get_embedding_provider as _indexer_provider
+
+    return _indexer_provider()
 
 
 async def _embed_texts(texts: list[str]) -> list[list[float]]:

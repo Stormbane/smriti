@@ -238,3 +238,46 @@ def test_index_file_single_upsert(mini_tree: Path) -> None:
     ).fetchone()[0]
     conn.close()
     assert n == chunks  # same shape, no accumulation
+
+
+class TestProviderPreference:
+    """Selection policy for the embedding provider (indexer)."""
+
+    def test_env_override_wins(self, monkeypatch):
+        from smriti.store import indexer
+
+        monkeypatch.setenv("SMRITI_EMBED_PROVIDER", "onnx")
+        monkeypatch.setattr(indexer, "_recorded_provider_key", lambda db=None: "local")
+        assert indexer._provider_preference() == ("onnx",)
+
+    def test_recorded_provider_pins_selection(self, monkeypatch):
+        # A process embedding against an existing index must load the
+        # provider that index was built with — never try others first
+        # (the onnx-then-torch sequence mixed OpenMP runtimes and
+        # aborted the MCP server mid-load, 2026-09-06).
+        from smriti.store import indexer
+
+        monkeypatch.delenv("SMRITI_EMBED_PROVIDER", raising=False)
+        monkeypatch.setattr(indexer, "_recorded_provider_key", lambda db=None: "local")
+        assert indexer._provider_preference() == ("local",)
+
+    def test_auto_order_when_nothing_recorded(self, monkeypatch):
+        from smriti.store import indexer
+
+        monkeypatch.delenv("SMRITI_EMBED_PROVIDER", raising=False)
+        monkeypatch.setattr(indexer, "_recorded_provider_key", lambda db=None: None)
+        assert indexer._provider_preference() == indexer._PROVIDER_AUTO_ORDER
+
+    def test_recorded_key_read_from_meta(self, mini_tree: Path):
+        from smriti.store import indexer
+
+        db_path = mini_tree / ".smriti" / "index.db"
+        index_tree(root=mini_tree, db=db_path)
+        key = indexer._recorded_provider_key(db_path)
+        # index_tree records whichever provider it used.
+        assert key in ("onnx", "local")
+
+    def test_recorded_key_none_for_missing_db(self, tmp_path: Path):
+        from smriti.store import indexer
+
+        assert indexer._recorded_provider_key(tmp_path / "nope.db") is None
