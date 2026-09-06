@@ -123,145 +123,160 @@ def index_tree(
 
     # ── Open / create database ───────────────────────────────────────
     conn = ensure_schema(db, dim)
+    try:
 
-    if full:
-        log.info("Full re-index requested — clearing existing data")
-        conn.execute("DELETE FROM chunks")
-        if conn.has_vec:
-            conn.execute("DELETE FROM chunks_vec")
-        if conn.has_fts:
-            conn.execute("DELETE FROM chunks_fts")
+        if full:
+            log.info("Full re-index requested — clearing existing data")
+            conn.execute("DELETE FROM chunks")
+            if conn.has_vec:
+                conn.execute("DELETE FROM chunks_vec")
+            if conn.has_fts:
+                conn.execute("DELETE FROM chunks_fts")
+            conn.commit()
+
+        # ── Scan tree ────────────────────────────────────────────────────
+        scanned_files = scan_paths([str(root)])
+        # Exclude .smriti/ system directory
+        scanned_files = [f for f in scanned_files if ".smriti" not in f.path.parts]
+        stats["scanned"] = len(scanned_files)
+        log.info("Scanned %d files", len(scanned_files))
+
+        # ── Determine which files need (re-)indexing ─────────────────────
+        indexed = _indexed_files(conn)
+        to_index: list[tuple[Path, str]] = []
+
+        for sf in scanned_files:
+            rel_source = str(sf.path.relative_to(root.resolve())).replace("\\", "/")
+            prev = indexed.get(rel_source)
+            if prev and not full:
+                prev_dt = datetime.fromisoformat(prev)
+                file_dt = datetime.fromtimestamp(sf.mtime, tz=timezone.utc)
+                if file_dt <= prev_dt:
+                    stats["skipped"] += 1
+                    continue
+            to_index.append((sf.path, rel_source))
+
+        if not to_index:
+            log.info("Nothing to index (all files up to date)")
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_indexed', ?)",
+                (datetime.now(timezone.utc).isoformat(),),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('model', ?)",
+                (provider.model_name,),
+            )
+            conn.commit()
+            conn.close()
+            return stats
+
+        log.info("Indexing %d files (%d skipped)", len(to_index), stats["skipped"])
+
+        # ── Chunk all files ──────────────────────────────────────────────
+        all_chunks = []
+        chunk_sources = []
+
+        for fpath, rel_source in to_index:
+            try:
+                text = fpath.read_text(encoding="utf-8")
+            except Exception as exc:
+                log.warning("Could not read %s: %s", fpath, exc)
+                stats["errors"] += 1
+                continue
+
+            chunks = chunk_markdown(text, source=rel_source)
+            for c in chunks:
+                cid = compute_chunk_id(
+                    c.source, c.start_line, c.end_line, c.content_hash, provider.model_name
+                )
+                all_chunks.append((cid, c, rel_source, fpath))
+            chunk_sources.append(rel_source)
+
+        if not all_chunks:
+            log.info("No chunks produced")
+            conn.close()
+            return stats
+
+        # ── Embed all chunks in one batch ────────────────────────────────
+        texts = [c.content for _, c, _, _ in all_chunks]
+        log.info("Embedding %d chunks...", len(texts))
+        embeddings = asyncio.run(provider.embed(texts))
+
+        # ── Delete old data for re-indexed sources ───────────────────────
+        for src in chunk_sources:
+            _delete_source(conn, src)
         conn.commit()
 
-    # ── Scan tree ────────────────────────────────────────────────────
-    scanned_files = scan_paths([str(root)])
-    # Exclude .smriti/ system directory
-    scanned_files = [f for f in scanned_files if ".smriti" not in f.path.parts]
-    stats["scanned"] = len(scanned_files)
-    log.info("Scanned %d files", len(scanned_files))
+        # ── Insert ───────────────────────────────────────────────────────
+        now = datetime.now(timezone.utc).isoformat()
 
-    # ── Determine which files need (re-)indexing ─────────────────────
-    indexed = _indexed_files(conn)
-    to_index: list[tuple[Path, str]] = []
+        for i, (cid, c, rel_source, fpath) in enumerate(all_chunks):
+            dist = trunk_distance(fpath, root)
+            conn.execute(
+                """INSERT OR REPLACE INTO chunks
+                   (id, source, heading, heading_level, content,
+                    start_line, end_line, content_hash, trunk_distance, indexed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    cid,
+                    rel_source,
+                    c.heading,
+                    c.heading_level,
+                    c.content,
+                    c.start_line,
+                    c.end_line,
+                    c.content_hash,
+                    dist,
+                    now,
+                ),
+            )
+            # Get the rowid for vec0 insertion
+            rowid = conn.execute(
+                "SELECT rowid FROM chunks WHERE id = ?", (cid,)
+            ).fetchone()[0]
 
-    for sf in scanned_files:
-        rel_source = str(sf.path.relative_to(root.resolve())).replace("\\", "/")
-        prev = indexed.get(rel_source)
-        if prev and not full:
-            prev_dt = datetime.fromisoformat(prev)
-            file_dt = datetime.fromtimestamp(sf.mtime, tz=timezone.utc)
-            if file_dt <= prev_dt:
-                stats["skipped"] += 1
-                continue
-        to_index.append((sf.path, rel_source))
+            if conn.has_vec:
+                conn.execute(
+                    "INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)",
+                    (rowid, _serialize_f32(embeddings[i])),
+                )
 
-    if not to_index:
-        log.info("Nothing to index (all files up to date)")
+        stats["indexed"] = len(chunk_sources)
+        stats["chunks"] = len(all_chunks)
+
+        # ── Update metadata ──────────────────────────────────────────────
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_indexed', ?)",
-            (datetime.now(timezone.utc).isoformat(),),
+            (now,),
         )
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('model', ?)",
             (provider.model_name,),
         )
+
         conn.commit()
         conn.close()
-        return stats
 
-    log.info("Indexing %d files (%d skipped)", len(to_index), stats["skipped"])
-
-    # ── Chunk all files ──────────────────────────────────────────────
-    all_chunks = []
-    chunk_sources = []
-
-    for fpath, rel_source in to_index:
-        try:
-            text = fpath.read_text(encoding="utf-8")
-        except Exception as exc:
-            log.warning("Could not read %s: %s", fpath, exc)
-            stats["errors"] += 1
-            continue
-
-        chunks = chunk_markdown(text, source=rel_source)
-        for c in chunks:
-            cid = compute_chunk_id(
-                c.source, c.start_line, c.end_line, c.content_hash, provider.model_name
-            )
-            all_chunks.append((cid, c, rel_source, fpath))
-        chunk_sources.append(rel_source)
-
-    if not all_chunks:
-        log.info("No chunks produced")
-        conn.close()
-        return stats
-
-    # ── Embed all chunks in one batch ────────────────────────────────
-    texts = [c.content for _, c, _, _ in all_chunks]
-    log.info("Embedding %d chunks...", len(texts))
-    embeddings = asyncio.run(provider.embed(texts))
-
-    # ── Delete old data for re-indexed sources ───────────────────────
-    for src in chunk_sources:
-        _delete_source(conn, src)
-    conn.commit()
-
-    # ── Insert ───────────────────────────────────────────────────────
-    now = datetime.now(timezone.utc).isoformat()
-
-    for i, (cid, c, rel_source, fpath) in enumerate(all_chunks):
-        dist = trunk_distance(fpath, root)
-        conn.execute(
-            """INSERT OR REPLACE INTO chunks
-               (id, source, heading, heading_level, content,
-                start_line, end_line, content_hash, trunk_distance, indexed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                cid,
-                rel_source,
-                c.heading,
-                c.heading_level,
-                c.content,
-                c.start_line,
-                c.end_line,
-                c.content_hash,
-                dist,
-                now,
-            ),
+        log.info(
+            "Indexed %d files → %d chunks (model=%s)",
+            stats["indexed"],
+            stats["chunks"],
+            provider.model_name,
         )
-        # Get the rowid for vec0 insertion
-        rowid = conn.execute(
-            "SELECT rowid FROM chunks WHERE id = ?", (cid,)
-        ).fetchone()[0]
-
-        if conn.has_vec:
-            conn.execute(
-                "INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)",
-                (rowid, _serialize_f32(embeddings[i])),
-            )
-
-    stats["indexed"] = len(chunk_sources)
-    stats["chunks"] = len(all_chunks)
-
-    # ── Update metadata ──────────────────────────────────────────────
-    conn.execute(
-        "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_indexed', ?)",
-        (now,),
-    )
-    conn.execute(
-        "INSERT OR REPLACE INTO meta (key, value) VALUES ('model', ?)",
-        (provider.model_name,),
-    )
-
-    conn.commit()
-    conn.close()
-
-    log.info(
-        "Indexed %d files → %d chunks (model=%s)",
-        stats["indexed"],
-        stats["chunks"],
-        provider.model_name,
-    )
-    metrics = get_logger()
-    metrics.log("index_completed", **stats, elapsed_ms=int((_time.monotonic() - t0) * 1000), model=provider.model_name, dimension=dim)
-    return stats
+        metrics = get_logger()
+        metrics.log("index_completed", **stats, elapsed_ms=int((_time.monotonic() - t0) * 1000), model=provider.model_name, dimension=dim)
+        return stats
+    except BaseException:
+        # Never leak an open write transaction from a long-lived
+        # process: a mid-index crash with the connection left open
+        # wedged every writer fleet-wide (2026-08-28, and again via
+        # zombie MCP servers on 2026-09-06). Roll back and close on
+        # ANY failure, then re-raise.
+        try:
+            conn.rollback()
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        raise
