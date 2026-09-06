@@ -205,3 +205,36 @@ def test_incremental_index(mini_tree: Path) -> None:
     stats3 = index_tree(root=mini_tree, db=db_path)
     assert stats3["indexed"] == 1
     assert stats3["skipped"] == 3
+
+
+def test_index_file_single_upsert(mini_tree: Path) -> None:
+    """index_file indexes exactly one source, replaces on re-run, and is
+    searchable — the write path's fast lane."""
+    from smriti.store.indexer import index_file
+
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+
+    new = mini_tree / "threads" / "new-entry.md"
+    new.write_text("# Fresh entry\n\nThe daylog captures every channel.\n", encoding="utf-8")
+    chunks = index_file(new, root=mini_tree, db=db_path)
+    assert chunks >= 1
+
+    from smriti.store.schema import open_readonly
+
+    db = open_readonly(db_path)
+    results = search(db, "daylog captures channel", top_k=5, use_reranker=False)
+    db.close()
+    assert any("new-entry.md" in r.source for r in results)
+
+    # Re-index after an edit: replaced, not duplicated.
+    new.write_text("# Fresh entry\n\nRewritten body about the daylog.\n", encoding="utf-8")
+    index_file(new, root=mini_tree, db=db_path)
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    n = conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE source = 'threads/new-entry.md'"
+    ).fetchone()[0]
+    conn.close()
+    assert n == chunks  # same shape, no accumulation

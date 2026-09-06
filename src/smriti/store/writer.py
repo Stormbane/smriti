@@ -208,17 +208,19 @@ def _append_entry(path: Path, entry_block: str) -> None:
 
 
 def _reindex_one(path: Path, root: Path) -> None:
-    """Run an incremental index -- will pick up the new file by mtime."""
-    try:
-        from smriti.store.indexer import index_tree
+    """Index just the written file — the write path's fast lane.
 
-        stats = index_tree(root=root)
-        log.info(
-            "Reindex after write: scanned=%d indexed=%d chunks=%d",
-            stats["scanned"],
-            stats["indexed"],
-            stats["chunks"],
-        )
+    A full ``index_tree`` here meant every MCP server did a ~7000-file
+    scan per write while contending for the one write lock (the
+    "connection closed" era). ``index_file`` embeds only this entry's
+    chunks in one short transaction; the nightly full pass remains the
+    backstop for anything a degraded write leaves behind.
+    """
+    try:
+        from smriti.store.indexer import index_file
+
+        chunks = index_file(path, root=root)
+        log.info("Indexed written file %s (%d chunks)", path.name, chunks)
     except Exception as exc:
         log.warning("Reindex after write failed: %s", exc)
 
