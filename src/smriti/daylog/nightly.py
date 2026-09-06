@@ -154,13 +154,7 @@ def run_nightly(
 
     # 6. Reindex (smriti index incremental + qmd refresh, best-effort).
     if reindex:
-        try:
-            from smriti.store.indexer import index_tree
-
-            stats = index_tree(root=cfg.root)
-            steps["index"] = {"ok": True, **{k: int(v) for k, v in stats.items()}}
-        except Exception as exc:  # noqa: BLE001
-            steps["index"] = {"ok": False, "error": str(exc)[:300]}
+        steps["index"] = _index_with_retries(cfg)
         try:
             from smriti.metrics import get_logger
 
@@ -178,6 +172,42 @@ def run_nightly(
     )
     _write_status(cfg.nightly_status_path, status)
     return status
+
+
+# Retry schedule for the index step: a live session's MCP server can
+# hold index.db's write lock for minutes (first live nightly, 2026-09-06,
+# failed on exactly this). Waits between attempts ride out a transient
+# hold; a truly wedged writer still surfaces as a failed step.
+_INDEX_RETRY_DELAYS_S = (0.0, 30.0, 90.0)
+_INDEX_BUSY_TIMEOUT_MS = "60000"
+
+
+def _index_with_retries(cfg: DaylogConfig) -> dict[str, object]:
+    import os
+
+    from smriti.store.indexer import index_tree
+
+    previous = os.environ.get("SMRITI_DB_BUSY_TIMEOUT_MS")
+    os.environ["SMRITI_DB_BUSY_TIMEOUT_MS"] = _INDEX_BUSY_TIMEOUT_MS
+    try:
+        last_error = ""
+        for attempt, delay in enumerate(_INDEX_RETRY_DELAYS_S, start=1):
+            if delay:
+                time.sleep(delay)
+            try:
+                stats = index_tree(root=cfg.root)
+                return {"ok": True, "attempts": attempt,
+                        **{k: int(v) for k, v in stats.items()}}
+            except Exception as exc:  # noqa: BLE001
+                last_error = str(exc)[:300]
+                log.warning("index attempt %d failed: %s", attempt, last_error)
+        return {"ok": False, "error": last_error,
+                "attempts": len(_INDEX_RETRY_DELAYS_S)}
+    finally:
+        if previous is None:
+            os.environ.pop("SMRITI_DB_BUSY_TIMEOUT_MS", None)
+        else:
+            os.environ["SMRITI_DB_BUSY_TIMEOUT_MS"] = previous
 
 
 def _clear_dirty(cfg: DaylogConfig, dirty: set[str], digest_errors: dict[str, str]) -> None:

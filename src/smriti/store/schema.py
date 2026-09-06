@@ -11,6 +11,7 @@ The FTS5 and vec0 tables are linked to ``chunks`` by rowid.
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -115,8 +116,17 @@ def ensure_schema(
         capability flags.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
-    conn.execute("PRAGMA busy_timeout=10000")
+    # Writer busy timeout, overridable for batch contexts: a live
+    # session's MCP server can hold the write lock for minutes (observed
+    # 2026-09-04), so the 03:00 nightly indexes with a much longer wait
+    # while interactive writers keep the snappier default.
+    try:
+        busy_ms = int(os.environ.get("SMRITI_DB_BUSY_TIMEOUT_MS", "10000"))
+    except ValueError:
+        busy_ms = 10_000
+    busy_ms = max(busy_ms, 1000)
+    conn = sqlite3.connect(str(db_path), timeout=max(busy_ms / 1000.0, 1.0))
+    conn.execute(f"PRAGMA busy_timeout={busy_ms}")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     try:
