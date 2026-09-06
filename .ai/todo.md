@@ -29,9 +29,16 @@
       49 days backfilled into ~/.narada/log/. NOTE: scheduled tasks run
       the working tree (pip -e); branch nightly-cycle is deployed but
       unmerged — merge to master is Suti's call.
-- [ ] Wire `notify_cmd` in ~/.narada/.smriti/daylog.json to the Hermes
-      Telegram gateway (until then `smriti morning` exits without
-      composing — no seat burn, no message).
+- [x] Wire `notify_cmd` (2026-09-06): standalone stdlib sender at
+      ~/.narada/.smriti/hooks/notify_telegram.py (bot token + chat id
+      read at send time from ~/.hermes/.env, prana-alerts pattern —
+      no dependency on the Hermes process). Live-verified: test send +
+      first real morning message delivered. Branch merged to master
+      and pushed same day.
+- [ ] Nightly index step hit "database is locked" on its first run
+      (2026-09-06 03:00) — a live session's MCP server holds index.db
+      overnight. Add a busy_timeout / retry to `index_tree`'s
+      connection, or make nightly retry the step once after a delay.
 - [ ] Add prana-brain/phone-app transcript dirs to daylog.json sources
       when that work lands.
 
