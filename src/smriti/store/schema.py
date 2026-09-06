@@ -58,6 +58,12 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> bool:
 
 def _has_fts5(conn: sqlite3.Connection) -> bool:
     """Check whether the sqlite3 build includes FTS5."""
+    # An existing chunks_fts table IS the proof — skip the write-probe,
+    # which added two DDL statements to every write-path ensure_schema.
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name = 'chunks_fts'"
+    ).fetchone():
+        return True
     try:
         conn.execute("CREATE VIRTUAL TABLE _fts5_probe USING fts5(x)")
         conn.execute("DROP TABLE _fts5_probe")
@@ -168,6 +174,14 @@ def _ensure_schema_inner(
             indexed_at  TEXT NOT NULL
         )
     """)
+    # Covering index for the two hot source-shaped queries: the write
+    # path's delete-then-insert upsert (WHERE source = ?) and the
+    # incremental indexer's mtime map (GROUP BY source, MAX(indexed_at)).
+    # Without it both were full scans of a 74k-chunk table per write.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chunks_source_indexed_at "
+        "ON chunks (source, indexed_at)"
+    )
 
     # ── Metadata table ───────────────────────────────────────────────
     conn.execute("""
