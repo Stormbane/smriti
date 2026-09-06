@@ -56,11 +56,24 @@ def ensure_running(cfg: DaylogConfig | None = None) -> bool:
     flags = 0
     if hasattr(subprocess, "DETACHED_PROCESS"):
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    # Keep a diagnosable trail: the daemon's output goes to a capped log
+    # file, not DEVNULL — a 39-hour run that died silently on 2026-09-06
+    # left nothing to autopsy. Truncate at spawn if it has grown large.
+    log_path = cfg.log_dir / ".logd.log"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        if log_path.exists() and log_path.stat().st_size > 5 * 1024 * 1024:
+            log_path.unlink()
+        sink = log_path.open("a", encoding="utf-8", errors="replace")
+    except OSError:
+        sink = subprocess.DEVNULL  # type: ignore[assignment]
     proc = subprocess.Popen(  # noqa: S603
         [sys.executable, "-m", "smriti", "logd"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=sink, stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL, creationflags=flags,
     )
+    if sink is not subprocess.DEVNULL:
+        sink.close()  # the child holds its own handle
     log.info("logd: started daemon pid %d", proc.pid)
     return True
 
