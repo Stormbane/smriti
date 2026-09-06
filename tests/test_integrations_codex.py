@@ -7,6 +7,7 @@ duplicates piling up on re-run, user keys clobbered.
 
 from __future__ import annotations
 
+import sys
 import tomllib
 from pathlib import Path
 
@@ -56,7 +57,7 @@ class TestPatchConfigTomlFromScratch:
         assert "SessionStart" in data["hooks"]
         assert "PostToolUse" in data["hooks"]
         assert data["mcp_servers"]["smriti"] == {
-            "command": "python",
+            "command": sys.executable,
             "args": ["-m", "smriti.mcp_server"],
         }
 

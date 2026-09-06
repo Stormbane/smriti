@@ -113,7 +113,14 @@ class TestSmritiMCPRegistered:
         data = json.loads(config.read_text(encoding="utf-8"))
         servers = data.get("mcpServers", {})
         assert "smriti" in servers, "smriti MCP server not registered in ~/.claude.json"
-        assert servers["smriti"].get("command") == "python"
+        # Bare "python" resolves against the spawning process's PATH and
+        # broke under daemon-launched sessions (hermes venv, 2026-09-06);
+        # the registration must pin an absolute interpreter that exists.
+        command = servers["smriti"].get("command", "")
+        assert Path(command).is_absolute(), (
+            f"smriti MCP command must be an absolute interpreter path, got {command!r}"
+        )
+        assert Path(command).exists(), f"pinned interpreter missing: {command}"
         assert "-m" in servers["smriti"].get("args", [])
         assert "smriti.mcp_server" in servers["smriti"].get("args", [])
 

@@ -31,9 +31,20 @@ from smriti.integrations.common.agent_md import AGENT_MD_PATH
 class TestMCPSpec:
     def test_command_constant_shape(self):
         assert SMRITI_MCP_COMMAND == {
-            "command": "python",
+            "command": sys.executable,
             "args": ["-m", "smriti.mcp_server"],
         }
+
+    def test_bare_python_registration_no_longer_matches(self):
+        # A pre-pin registration ("command": "python") must read as
+        # unregistered so installers repair it — bare "python" resolves
+        # against the spawner's PATH and broke under the hermes gateway.
+        from smriti.integrations.common.mcp_spec import mcp_registration_matches
+
+        assert not mcp_registration_matches(
+            {"command": "python", "args": ["-m", "smriti.mcp_server"]}
+        )
+        assert mcp_registration_matches(dict(SMRITI_MCP_COMMAND))
 
     def test_make_wake_hook_command_raw(self):
         cmd = make_wake_hook_command(

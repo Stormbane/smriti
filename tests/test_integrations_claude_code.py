@@ -11,6 +11,7 @@ constants (HOME, CLAUDE, SETTINGS, etc.).
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -57,7 +58,7 @@ class TestRegisterMCPServer:
         data = json.loads(cfg.read_text(encoding="utf-8"))
         assert data["some_other_key"] == "preserved"
         assert data["mcpServers"]["smriti"] == {
-            "command": "python",
+            "command": sys.executable,
             "args": ["-m", "smriti.mcp_server"],
         }
         # Backup created.
@@ -67,7 +68,7 @@ class TestRegisterMCPServer:
         cfg = fake_home / ".claude.json"
         cfg.write_text(json.dumps({
             "mcpServers": {"smriti": {
-                "command": "python",
+                "command": sys.executable,
                 "args": ["-m", "smriti.mcp_server"],
             }},
         }), encoding="utf-8")

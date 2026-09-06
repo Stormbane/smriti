@@ -9,12 +9,14 @@ Run via stdio::
 
     python -m smriti.mcp_server
 
-Configure in .mcp.json::
+Configure in .mcp.json (pin the interpreter's absolute path — a bare
+"python" resolves against the spawning process's PATH, which for
+daemon-launched sessions may be a venv without smriti)::
 
     {
       "mcpServers": {
         "smriti": {
-          "command": "python",
+          "command": "C:/path/to/python.exe",
           "args": ["-m", "smriti.mcp_server"]
         }
       }
