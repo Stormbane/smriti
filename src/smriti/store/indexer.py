@@ -28,29 +28,90 @@ def _serialize_f32(vec: list[float]) -> bytes:
     return struct.pack(f"<{len(vec)}f", *vec)
 
 
+# Registry keys tried when nothing pins the choice, best-first.
+_PROVIDER_AUTO_ORDER = ("onnx", "local")
+
+# Map provider class name → registry key, for recording the selection
+# in the index's meta table (the class doesn't know its registry key).
+_PROVIDER_KEYS = {"OnnxEmbedding": "onnx", "LocalEmbedding": "local"}
+
+
+def provider_key(provider: object) -> str | None:
+    """Registry key ("onnx"/"local") for a provider instance, if known."""
+    return _PROVIDER_KEYS.get(type(provider).__name__)
+
+
+def _recorded_provider_key(db: Path | None = None) -> str | None:
+    """The provider the existing index was built with, from its meta table.
+
+    Every process embedding against an existing index must load the SAME
+    provider — a different one at best mismatches the vector dimension
+    (vec search silently degrades to FTS) and at worst mixes native
+    runtimes: trying onnxruntime first and then importing torch into the
+    same process aborted intermittently with 0xC0000409 mid-model-load,
+    which the harness surfaced as "Connection closed" (2026-09-06).
+    """
+    if db is None:
+        db = smriti_db_path()
+    if not db.exists():
+        return None
+    try:
+        from smriti.store.schema import open_readonly
+
+        conn = open_readonly(db)
+        try:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = 'embedding_provider'"
+            ).fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
+def _provider_preference() -> tuple[str, ...]:
+    """Ordered provider keys to try.
+
+    1. ``SMRITI_EMBED_PROVIDER`` env — explicit override, used for
+       deliberate migrations (with ``smriti index --full``).
+    2. The provider recorded in the index's meta table — self-consistency
+       with the data being searched/updated.
+    3. Auto order (onnx first: lighter, offline-first).
+    """
+    import os
+
+    override = os.environ.get("SMRITI_EMBED_PROVIDER", "").strip().lower()
+    if override:
+        return (override,)
+    recorded = _recorded_provider_key()
+    if recorded:
+        return (recorded,)
+    return _PROVIDER_AUTO_ORDER
+
+
 @functools.cache
 def _get_embedding_provider():  # noqa: ANN202
-    """Return the best available embedding provider (cached per process).
+    """Return the embedding provider for this index (cached per process).
 
-    Building the provider costs 5-18s (ONNX model load); embedding a
-    chunk costs ~0.02s warm. Without the cache every write paid the
-    build cost again — the bulk of smriti_write latency in long-lived
-    MCP servers.
+    Building the provider costs 5-18s (model load); embedding a chunk
+    costs ~0.02s warm. Without the cache every write paid the build
+    cost again — the bulk of smriti_write latency in long-lived MCP
+    servers. See ``_provider_preference`` for the selection rules.
     """
     from smriti._vendored.memsearch.embeddings import get_provider
 
-    # Try ONNX first (lightweight, offline-first)
-    try:
-        return get_provider("onnx")
-    except Exception:
-        pass
-    # Fall back to local sentence-transformers
-    try:
-        return get_provider("local")
-    except Exception:
-        pass
+    keys = _provider_preference()
+    last_error: Exception | None = None
+    for key in keys:
+        try:
+            return get_provider(key)
+        except Exception as exc:
+            last_error = exc
+            log.warning("embedding provider %r unavailable: %s", key, exc)
     raise RuntimeError(
-        "No embedding provider available. Install onnxruntime or "
+        f"No embedding provider available (tried {', '.join(keys)}; "
+        f"last error: {last_error}). Install onnxruntime or "
         "sentence-transformers: pip install 'smriti[read]'"
     )
 
@@ -132,6 +193,42 @@ def index_tree(
     # ── Open / create database ───────────────────────────────────────
     conn = ensure_schema(db, dim)
     try:
+        # Dimension guard: chunks_vec is created with a fixed dimension
+        # and CREATE IF NOT EXISTS silently keeps the old one, so a
+        # provider switch would fail every vector insert mid-index. A
+        # full re-index rebuilds the vec table for the new provider;
+        # an incremental run must refuse loudly instead of half-writing.
+        meta_dim_row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'dimension'"
+        ).fetchone()
+        meta_dim = int(meta_dim_row[0]) if meta_dim_row else dim
+        if meta_dim != dim:
+            if not full:
+                raise RuntimeError(
+                    f"index dimension is {meta_dim} but provider "
+                    f"{provider.model_name!r} embeds at {dim}; run "
+                    "'smriti index --full' to migrate the index"
+                )
+            if conn.has_vec:
+                conn.execute("DROP TABLE chunks_vec")
+                conn.execute(
+                    "CREATE VIRTUAL TABLE chunks_vec USING vec0"
+                    f"(embedding float[{dim}])"
+                )
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) "
+                "VALUES ('dimension', ?)",
+                (str(dim),),
+            )
+
+        key = provider_key(provider)
+        if key:
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) "
+                "VALUES ('embedding_provider', ?)",
+                (key,),
+            )
+        conn.commit()
 
         if full:
             log.info("Full re-index requested — clearing existing data")
