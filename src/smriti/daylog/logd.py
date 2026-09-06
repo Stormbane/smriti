@@ -39,18 +39,40 @@ def _running_pid(cfg: DaylogConfig) -> int:
     return pid if _pid_alive(pid) else 0
 
 
+def _ensure_qmd_daemon() -> None:
+    """Best-effort: keep the qmd recall daemon warm alongside logd.
+
+    The ambient recall hook fires on every Read/Edit/Write in every
+    session; with the daemon up it answers over HTTP in under a second,
+    and with it down every fire pays a 10-24s cold `qmd` CLI subprocess
+    (observed in recall.jsonl, 2026-09-06 — including 20s timeouts that
+    returned nothing). Nothing restarted the daemon after a crash or
+    reboot; this 10-minute keepalive tick is the natural supervisor.
+    """
+    try:
+        from smriti.recall.backends import qmd
+
+        ok, msg = qmd.daemon_start()  # health-checks first; no-op when up
+        if not ok:
+            log.warning("qmd daemon keepalive: %s", msg)
+    except Exception as exc:  # noqa: BLE001 — never break the logd keepalive
+        log.warning("qmd daemon keepalive failed: %s", exc)
+
+
 def ensure_running(cfg: DaylogConfig | None = None) -> bool:
     """Keepalive entry point: start a detached logd if none is alive.
 
     Returns True if a daemon is (now) running. Called by the scheduled
     ``smriti logd --ensure`` task every 10 minutes — this is the
     self-recovery mechanism: a crashed daemon is restarted on the next
-    tick, and the idempotent passes make the gap harmless.
+    tick, and the idempotent passes make the gap harmless. The same
+    tick keeps the qmd recall daemon warm.
     """
     import subprocess
     import sys
 
     cfg = cfg or load_config()
+    _ensure_qmd_daemon()
     if _running_pid(cfg):
         return True
     flags = 0
