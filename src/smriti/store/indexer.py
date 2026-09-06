@@ -8,6 +8,7 @@ files whose mtime has changed since the last index run are re-processed.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import sqlite3
 import struct
@@ -27,8 +28,15 @@ def _serialize_f32(vec: list[float]) -> bytes:
     return struct.pack(f"<{len(vec)}f", *vec)
 
 
+@functools.cache
 def _get_embedding_provider():  # noqa: ANN202
-    """Return the best available embedding provider."""
+    """Return the best available embedding provider (cached per process).
+
+    Building the provider costs 5-18s (ONNX model load); embedding a
+    chunk costs ~0.02s warm. Without the cache every write paid the
+    build cost again — the bulk of smriti_write latency in long-lived
+    MCP servers.
+    """
     from smriti._vendored.memsearch.embeddings import get_provider
 
     # Try ONNX first (lightweight, offline-first)
@@ -281,6 +289,71 @@ def index_tree(
         # wedged every writer fleet-wide (2026-08-28, and again via
         # zombie MCP servers on 2026-09-06). Roll back and close on
         # ANY failure, then re-raise.
+        try:
+            conn.rollback()
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        raise
+
+
+def index_file(path: Path, *, root: Path | None = None, db: Path | None = None) -> int:
+    """Index exactly one file — the write-path fast lane.
+
+    ``smriti_write`` used to run a full ``index_tree`` inside every
+    session's MCP server: an embedding-model load plus a ~7000-file
+    scan per write, with N concurrent servers contending for the one
+    write lock (the "connection closed" era, ended 2026-09-06). This
+    upserts a single source in one short transaction: chunk, embed
+    only its chunks, delete-then-insert. Same leak guard as
+    ``index_tree`` — never leave a transaction open on failure.
+
+    Returns the number of chunks indexed.
+    """
+    if root is None:
+        root = tree_root()
+    if db is None:
+        db = smriti_db_path()
+
+    text = path.read_text(encoding="utf-8")
+    rel_source = str(path.resolve().relative_to(root.resolve())).replace("\\", "/")
+
+    provider = _get_embedding_provider()
+    chunks = chunk_markdown(text, source=rel_source)
+    embeddings = asyncio.run(provider.embed([c.content for c in chunks])) if chunks else []
+
+    conn = ensure_schema(db, provider.dimension)
+    try:
+        _delete_source(conn, rel_source)
+        now = datetime.now(timezone.utc).isoformat()
+        dist = trunk_distance(path, root)
+        for i, c in enumerate(chunks):
+            cid = compute_chunk_id(
+                c.source, c.start_line, c.end_line, c.content_hash, provider.model_name
+            )
+            conn.execute(
+                """INSERT OR REPLACE INTO chunks
+                   (id, source, heading, heading_level, content,
+                    start_line, end_line, content_hash, trunk_distance, indexed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (cid, rel_source, c.heading, c.heading_level, c.content,
+                 c.start_line, c.end_line, c.content_hash, dist, now),
+            )
+            rowid = conn.execute(
+                "SELECT rowid FROM chunks WHERE id = ?", (cid,)
+            ).fetchone()[0]
+            if conn.has_vec:
+                conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
+                conn.execute(
+                    "INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)",
+                    (rowid, _serialize_f32(embeddings[i])),
+                )
+        conn.commit()
+        conn.close()
+        return len(chunks)
+    except BaseException:
         try:
             conn.rollback()
         finally:
