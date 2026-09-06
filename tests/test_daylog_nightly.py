@@ -283,6 +283,52 @@ def test_claude_cli_fails_closed_without_isolated_workdir(
         ClaudeCliProvider().call(LLMRequest(system="s", user="u"))
 
 
+def test_index_step_retries_through_transient_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    import smriti.store.indexer as indexer_mod
+    from smriti.daylog.nightly import _index_with_retries
+
+    calls = {"n": 0}
+
+    def flaky(**kwargs: object) -> dict[str, int]:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise sqlite3.OperationalError("database is locked")
+        # The step must run with the raised busy timeout in effect.
+        import os
+        assert os.environ["SMRITI_DB_BUSY_TIMEOUT_MS"] == "60000"
+        return {"scanned": 5, "indexed": 2}
+
+    monkeypatch.setattr(indexer_mod, "index_tree", flaky)
+    monkeypatch.setattr("smriti.daylog.nightly.time.sleep", lambda s: None)
+    result = _index_with_retries(_cfg(tmp_path))
+    assert result["ok"] is True and result["attempts"] == 3 and result["indexed"] == 2
+    import os
+    assert "SMRITI_DB_BUSY_TIMEOUT_MS" not in os.environ  # restored
+
+
+def test_index_step_fails_visibly_when_wedged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    import smriti.store.indexer as indexer_mod
+    from smriti.daylog.nightly import _INDEX_RETRY_DELAYS_S, _index_with_retries
+
+    def wedged(**kwargs: object) -> dict[str, int]:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(indexer_mod, "index_tree", wedged)
+    monkeypatch.setattr("smriti.daylog.nightly.time.sleep", lambda s: None)
+    result = _index_with_retries(_cfg(tmp_path))
+    assert result["ok"] is False
+    assert result["attempts"] == len(_INDEX_RETRY_DELAYS_S)
+    assert "locked" in str(result["error"])
+
+
 # ---------------------------------------------------------------- morning
 
 
