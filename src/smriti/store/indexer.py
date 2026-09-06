@@ -369,6 +369,13 @@ def index_tree(
         )
 
         conn.commit()
+        # Keep planner statistics fresh on the (growing) chunks table so
+        # the source index actually gets picked. Cheap no-op when stats
+        # are already current; runs on the nightly cadence.
+        try:
+            conn.execute("PRAGMA optimize")
+        except sqlite3.OperationalError:
+            pass
         conn.close()
 
         log.info(
