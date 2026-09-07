@@ -73,14 +73,16 @@ class ClaudeCliProvider:
         t0 = time.monotonic()
         cli = self._path()
 
-        # Argv limit on Windows is ~32KB. Pipe via stdin past 8KB.
-        use_stdin = len(prompt) > 8000
-        if use_stdin:
-            cmd = [cli, "-p", "--output-format", "json"]
-            stdin_text: str | None = prompt
-        else:
-            cmd = [cli, "-p", prompt, "--output-format", "json"]
-            stdin_text = None
+        # ALWAYS pipe the prompt via stdin. On Windows ``claude`` resolves
+        # to npm's ``claude.cmd`` shim, and cmd.exe ends a command at the
+        # first newline: an argv prompt was cut to its first line AND
+        # every flag after it vanished (2026-09-08 07:00 morning run —
+        # system text only, no digest, --allowedTools gone, WebSearch
+        # denied; the "I could not compose" apology then went out as the
+        # morning message and paged Suti). Long prompts already used
+        # stdin, which is why big days worked and small ones broke.
+        cmd = [cli, "-p", "--output-format", "json"]
+        stdin_text: str | None = prompt
         if request.model:
             cmd.extend(["--model", request.model])
         if request.cli_args:

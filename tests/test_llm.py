@@ -222,3 +222,41 @@ class TestCallLLM:
     def test_max_tokens_threaded_through(self, stub_provider):
         call_llm(system="S", user="x", max_tokens=999, provider="stub")
         assert stub_provider.last_request.max_tokens == 999
+
+
+# --- claude_cli: the prompt ALWAYS rides stdin (2026-09-08 morning page) --
+
+def test_claude_cli_pipes_prompt_via_stdin_never_argv(monkeypatch, tmp_path):
+    """On Windows ``claude`` resolves to npm's claude.cmd shim and cmd.exe
+    ends the command at the first newline: an argv prompt lost its body
+    AND every flag after it (--allowedTools gone → WebSearch denied →
+    the "I could not compose" apology paged Suti). Short prompts used
+    to take the argv path; none may."""
+    import json as _json
+    import subprocess
+
+    from smriti.llm.providers import claude_cli as mod
+    from smriti.llm.types import LLMRequest
+
+    seen: dict = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        seen["input"] = kw.get("input")
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=_json.dumps({"result": "ok"}), stderr="")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "claude.cmd")
+    monkeypatch.setattr(mod, "llm_workdir", lambda: tmp_path, raising=False)
+
+    provider = mod.ClaudeCliProvider()
+    provider.call(LLMRequest(
+        system="Sys line", user="short\nmulti-line\nprompt", max_tokens=10,
+        cli_args=["--strict-mcp-config", "--allowedTools", "WebSearch"]))
+
+    cmd = seen["cmd"]
+    assert cmd[:4] == ["claude.cmd", "-p", "--output-format", "json"]
+    assert not any("\n" in part for part in cmd), "prompt leaked into argv"
+    assert cmd[-3:] == ["--strict-mcp-config", "--allowedTools", "WebSearch"]
+    assert seen["input"] == "Sys line\n\nshort\nmulti-line\nprompt"
