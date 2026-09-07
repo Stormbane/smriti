@@ -98,4 +98,5 @@ def run_morning(cfg: DaylogConfig | None = None, *, now: datetime | None = None)
         result["reason"] = str(exc)[:300]
         log.warning("morning message not delivered: %s", exc)
     result["message"] = message
+    _write_status(cfg, result | {"composed_chars": len(message)})
     return result
