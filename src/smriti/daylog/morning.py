@@ -35,6 +35,15 @@ _SYSTEM = (
 _COMPOSE_ARGS = ["--strict-mcp-config", "--allowedTools", "WebSearch"]
 
 
+def _write_status(cfg: DaylogConfig, result: dict[str, object]) -> None:
+    try:
+        path = cfg.log_dir / ".morning-status.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, indent=1, default=str), encoding="utf-8")
+    except OSError as exc:  # status is a courtesy, never a failure
+        log.warning("morning status not written: %s", exc)
+
+
 def run_morning(cfg: DaylogConfig | None = None, *, now: datetime | None = None) -> dict[str, object]:
     cfg = cfg or load_config()
     now = now or datetime.now(tz=day_tz())
@@ -71,6 +80,9 @@ def run_morning(cfg: DaylogConfig | None = None, *, now: datetime | None = None)
         claude_cli_args=_COMPOSE_ARGS,
     )
     result["llm_attempts"] = attempts
+    # The scheduled task's stdout is lost with its console; leave the
+    # attempts on disk so a bad morning can be diagnosed (2026-09-08).
+    _write_status(cfg, result | {"composed_chars": len(message)})
 
     # Fail-closed: ledger BEFORE send.
     ledger.parent.mkdir(parents=True, exist_ok=True)
