@@ -471,3 +471,26 @@ def test_morning_status_written_when_compose_fails(tmp_path: Path, monkeypatch) 
     assert status["llm_attempts"] == [{"provider": "claude_cli", "outcome": "error: exit 1"}]
     # No ledger: the day is still open for a retry once the seat is back.
     assert not cfg.morning_ledger_dir.exists() or not any(cfg.morning_ledger_dir.iterdir())
+
+
+def test_morning_status_scrubs_quoted_and_trailing_secrets(tmp_path: Path, monkeypatch) -> None:
+    """Recheck: scrubbing must happen on the values, not the JSON text —
+    escaping hides a quoted credential, and a trailing match would eat
+    the closing quote and leave invalid JSON."""
+    cfg = _cfg(tmp_path)
+    cfg.notify_cmd = [sys.executable, "-c", "pass"]
+
+    def boom(system, user, attempts_log, **kw):  # noqa: ANN001
+        attempts_log.append({"provider": "claude_cli",
+                             "outcome": 'error: api_key="sk-EXAMPLE1234567890SECRET"'})
+        attempts_log.append({"provider": "codex_cli",
+                             "outcome": "error: token=sk-EXAMPLE1234567890SECRET"})
+        raise RuntimeError("every provider failed")
+
+    monkeypatch.setattr("smriti.daylog.morning.compose", boom)
+    with pytest.raises(RuntimeError):
+        run_morning(cfg, now=datetime(2026, 9, 4, 21, 0, tzinfo=timezone.utc))
+    status_text = (cfg.log_dir / ".morning-status.json").read_text(encoding="utf-8")
+    status = json.loads(status_text)  # still valid JSON
+    assert "EXAMPLE1234567890SECRET" not in status_text
+    assert [a["provider"] for a in status["llm_attempts"]] == ["claude_cli", "codex_cli"]
