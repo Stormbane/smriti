@@ -17,6 +17,7 @@ from smriti.daylog.config import DaylogConfig, load_config
 from smriti.daylog.digest import compose
 from smriti.daylog.model import day_key, day_tz
 from smriti.daylog.notify import notify_suti
+from smriti.daylog.scrub import scrub
 
 log = logging.getLogger(__name__)
 
@@ -36,10 +37,13 @@ _COMPOSE_ARGS = ["--strict-mcp-config", "--allowedTools", "WebSearch"]
 
 
 def _write_status(cfg: DaylogConfig, result: dict[str, object]) -> None:
+    """Diagnostics for the scheduled run. Provider attempt strings can
+    quote stderr, so the whole document passes through the day-log's
+    secret scrub before it touches the (backed-up) log tree."""
     try:
         path = cfg.log_dir / ".morning-status.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(result, indent=1, default=str), encoding="utf-8")
+        path.write_text(scrub(json.dumps(result, indent=1, default=str)), encoding="utf-8")
     except OSError as exc:  # status is a courtesy, never a failure
         log.warning("morning status not written: %s", exc)
 
@@ -73,16 +77,26 @@ def run_morning(cfg: DaylogConfig | None = None, *, now: datetime | None = None)
         digest_text = "(no digest was produced for yesterday)"
 
     attempts: list[dict[str, str]] = []
-    message = compose(
-        _SYSTEM,
-        f"Yesterday's digest ({yesterday}):\n\n{digest_text[:20_000]}",
-        attempts,
-        claude_cli_args=_COMPOSE_ARGS,
-    )
     result["llm_attempts"] = attempts
-    # The scheduled task's stdout is lost with its console; leave the
-    # attempts on disk so a bad morning can be diagnosed (2026-09-08).
-    _write_status(cfg, result | {"composed_chars": len(message)})
+    # The scheduled task's stdout is lost with its console; the status
+    # file is the only trace of a bad morning (2026-09-08). It is
+    # written on every exit from here on, and holds no argv and no
+    # exception text: a notify_cmd or timeout error string can carry a
+    # bearer token, and the log tree is backed up (review).
+    try:
+        message = compose(
+            _SYSTEM,
+            f"Yesterday's digest ({yesterday}):\n\n{digest_text[:20_000]}",
+            attempts,
+            claude_cli_args=_COMPOSE_ARGS,
+        )
+    except Exception as exc:
+        result["sent"] = False
+        result["phase"] = "compose"
+        result["reason"] = type(exc).__name__
+        _write_status(cfg, result)
+        raise
+    result["composed_chars"] = len(message)
 
     # Fail-closed: ledger BEFORE send.
     ledger.parent.mkdir(parents=True, exist_ok=True)
@@ -95,8 +109,9 @@ def run_morning(cfg: DaylogConfig | None = None, *, now: datetime | None = None)
         result["sent"] = True
     except Exception as exc:  # noqa: BLE001
         result["sent"] = False
-        result["reason"] = str(exc)[:300]
+        result["phase"] = "deliver"
+        result["reason"] = type(exc).__name__
         log.warning("morning message not delivered: %s", exc)
+    _write_status(cfg, result)
     result["message"] = message
-    _write_status(cfg, result | {"composed_chars": len(message)})
     return result

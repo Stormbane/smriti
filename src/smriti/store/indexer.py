@@ -41,6 +41,16 @@ def provider_key(provider: object) -> str | None:
     return _PROVIDER_KEYS.get(type(provider).__name__)
 
 
+def _provider_for_model(model: str) -> str | None:
+    """Legacy inference: which registry provider serves this model name."""
+    name = model.lower()
+    if "bge-m3" in name:
+        return "onnx"
+    if "minilm" in name or "mpnet" in name or "sentence-transformers" in name:
+        return "local"
+    return None
+
+
 def _recorded_provider_key(db: Path | None = None) -> str | None:
     """The provider the existing index was built with, from its meta table.
 
@@ -63,7 +73,14 @@ def _recorded_provider_key(db: Path | None = None) -> str | None:
             row = conn.execute(
                 "SELECT value FROM meta WHERE key = 'embedding_provider'"
             ).fetchone()
-            return row[0] if row else None
+            if row:
+                return row[0]
+            # Indexes built before the provider was recorded (< e8d98c2)
+            # still name their model: infer the provider from it rather
+            # than let the auto order pick a different one and strand
+            # the vectors behind the dimension guard (review).
+            row = conn.execute("SELECT value FROM meta WHERE key = 'model'").fetchone()
+            return _provider_for_model(row[0]) if row and row[0] else None
         finally:
             conn.close()
     except Exception:

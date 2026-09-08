@@ -434,3 +434,40 @@ def test_wake_briefing_silent_without_nightly_status(tmp_path: Path) -> None:
     from smriti.wake.briefing import briefing
 
     assert "WHILE YOU SLEPT" not in briefing(tmp_path, cwd=tmp_path)
+
+
+def test_morning_status_file_never_carries_exception_text(tmp_path: Path,
+                                                          fake_llm: FakeProvider) -> None:
+    """Review: a failing notify_cmd's exception string carries its argv,
+    which can hold a token; the status file lives in the backed-up log
+    tree, so it records the failure CLASS only."""
+    cfg = _cfg(tmp_path)
+    cfg.notify_cmd = [sys.executable, "-c", "import sys; sys.exit(3)",
+                      "--auth", "Bearer-SECRET-123"]
+    result = run_morning(cfg, now=datetime(2026, 9, 4, 21, 0, tzinfo=timezone.utc))
+    assert result["sent"] is False and result["phase"] == "deliver"
+    status_text = (cfg.log_dir / ".morning-status.json").read_text(encoding="utf-8")
+    assert "SECRET" not in status_text and "Bearer" not in status_text
+    status = json.loads(status_text)
+    assert status["reason"] == result["reason"]
+    assert "message" not in status  # the text itself is the day's business, not status
+
+
+def test_morning_status_written_when_compose_fails(tmp_path: Path, monkeypatch) -> None:
+    cfg = _cfg(tmp_path)
+    cfg.notify_cmd = [sys.executable, "-c", "pass"]
+
+    def boom(system, user, attempts_log, **kw):  # noqa: ANN001
+        attempts_log.append({"provider": "claude_cli", "outcome": "error: exit 1"})
+        raise RuntimeError("every provider failed: token=Bearer-SECRET")
+
+    monkeypatch.setattr("smriti.daylog.morning.compose", boom)
+    with pytest.raises(RuntimeError):
+        run_morning(cfg, now=datetime(2026, 9, 4, 21, 0, tzinfo=timezone.utc))
+    status_text = (cfg.log_dir / ".morning-status.json").read_text(encoding="utf-8")
+    assert "SECRET" not in status_text
+    status = json.loads(status_text)
+    assert status["phase"] == "compose" and status["reason"] == "RuntimeError"
+    assert status["llm_attempts"] == [{"provider": "claude_cli", "outcome": "error: exit 1"}]
+    # No ledger: the day is still open for a retry once the seat is back.
+    assert not cfg.morning_ledger_dir.exists() or not any(cfg.morning_ledger_dir.iterdir())
