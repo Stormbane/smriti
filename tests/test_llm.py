@@ -248,7 +248,8 @@ def test_claude_cli_pipes_prompt_via_stdin_never_argv(monkeypatch, tmp_path):
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
     monkeypatch.setattr(mod.shutil, "which", lambda _name: "claude.cmd")
-    monkeypatch.setattr(mod, "llm_workdir", lambda: tmp_path, raising=False)
+    # The provider imports llm_workdir inside call(): patch the source.
+    monkeypatch.setattr("smriti.llm.workdir.llm_workdir", lambda: tmp_path)
 
     provider = mod.ClaudeCliProvider()
     provider.call(LLMRequest(
