@@ -1,7 +1,7 @@
 """``smriti nightly`` — the sleep task (~03:00).
 
 Steps (spec Design 4): reconcile sweep -> repair pass -> render ->
-digest -> rollup scan (capped) -> reindex -> status file. Idempotent by
+digest -> rollup scan (capped) -> reindex -> witness -> status file. Idempotent by
 construction: every step derives from inputs carrying an input hash;
 re-running a completed night is a no-op. Failure of any step is
 recorded in the status file and never blocks the remaining steps —
@@ -73,6 +73,7 @@ def run_nightly(
     rollup_cap: int = 2,
     digest_cap: int = 10,
     reindex: bool = True,
+    witness: bool = True,
 ) -> dict[str, object]:
     """Run the sleep task; returns (and persists) the status document."""
     cfg = cfg or load_config()
@@ -165,7 +166,17 @@ def run_nightly(
         except Exception as exc:  # noqa: BLE001
             steps["recall_refresh"] = {"ok": False, "error": str(exc)[:300]}
 
-    # 7. Status file (consumed by the wake briefing).
+    # 7. Witness: commit the tree and timestamp its HEAD, so a rewritten
+    # history can't pass unnoticed.
+    if witness:
+        try:
+            from smriti.witness import run_witness
+
+            steps["witness"] = run_witness(cfg.root, day_key(target))
+        except Exception as exc:  # noqa: BLE001
+            steps["witness"] = {"ok": False, "error": str(exc)[:300]}
+
+    # 8. Status file (consumed by the wake briefing).
     status["finished"] = datetime.now(tz=day_tz()).isoformat()
     status["ok"] = all(
         (s.get("ok", True) if isinstance(s, dict) else True) for s in steps.values()

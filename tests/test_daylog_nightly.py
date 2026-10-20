@@ -172,7 +172,7 @@ def test_nightly_renders_digests_and_writes_status(
     cfg = _cfg(tmp_path)
     _seed_day(cfg)  # UTC 2026-09-04 => Brisbane 2026-09-04 (early-morning turns)
     # 17:05 UTC = 03:05 Brisbane on 09-05 => target day is the just-closed 09-04.
-    status = run_nightly(cfg, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc), reindex=False)
+    status = run_nightly(cfg, witness=False, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc), reindex=False)
     assert status["target_day"] == "2026-09-04"
     assert cfg.day_md("2026-09-04").exists()
     assert cfg.day_digest("2026-09-04").exists()
@@ -180,7 +180,7 @@ def test_nightly_renders_digests_and_writes_status(
     assert saved["steps"]["digest"]["days"] == ["2026-09-04"]
     assert saved["ok"] is True
     # Second run is a no-op (idempotent by input hash).
-    status2 = run_nightly(cfg, now=datetime(2026, 9, 4, 17, 10, tzinfo=timezone.utc),
+    status2 = run_nightly(cfg, witness=False, now=datetime(2026, 9, 4, 17, 10, tzinfo=timezone.utc),
                           reindex=False)
     assert status2["steps"]["digest"]["days"] == []  # type: ignore[index]
 
@@ -199,7 +199,7 @@ def test_nightly_survives_digest_failure_and_reports_it(
             raise RuntimeError("seat down")
 
     monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: Boom())
-    status = run_nightly(cfg, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc),
+    status = run_nightly(cfg, witness=False, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc),
                          reindex=False)
     steps = status["steps"]
     # A failed digest is a failed night: step not ok, whole status not ok.
@@ -223,7 +223,7 @@ def test_nightly_repairs_daemon_marked_dirty_day_beyond_window(
     state = DaylogState.load(cfg.state_path)
     state.mark_dirty({"2026-07-01"})
     state.save()
-    status = run_nightly(cfg, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc),
+    status = run_nightly(cfg, witness=False, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc),
                          reindex=False)
     assert "2026-07-01" in status["steps"]["digest"]["days"]  # type: ignore[index]
     assert DaylogState.load(cfg.state_path).dirty_days == set()
@@ -233,13 +233,13 @@ def test_nightly_digest_cap_defers_oldest(tmp_path: Path, fake_llm: FakeProvider
     cfg = _cfg(tmp_path)
     for day in ("2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04"):
         _seed_day(cfg, day)
-    status = run_nightly(cfg, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc),
+    status = run_nightly(cfg, witness=False, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc),
                          reindex=False, digest_cap=2)
     digest = status["steps"]["digest"]  # type: ignore[index]
     assert digest["days"] == ["2026-09-04", "2026-09-03"]  # newest first
     assert digest["deferred"] == 2
     # Deferred days remain stale; the next night picks them up.
-    status2 = run_nightly(cfg, now=datetime(2026, 9, 4, 17, 30, tzinfo=timezone.utc),
+    status2 = run_nightly(cfg, witness=False, now=datetime(2026, 9, 4, 17, 30, tzinfo=timezone.utc),
                           reindex=False, digest_cap=2)
     assert status2["steps"]["digest"]["days"] == ["2026-09-02", "2026-09-01"]  # type: ignore[index]
 
@@ -263,7 +263,7 @@ def test_dirty_marker_survives_when_day_changes_under_digest(
             return super().call(request)
 
     monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: RacingProvider())
-    run_nightly(cfg, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc), reindex=False)
+    run_nightly(cfg, witness=False, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc), reindex=False)
     # The digest is stale relative to the raced-in turn: marker kept.
     assert "2026-07-01" in DaylogState.load(cfg.state_path).dirty_days
 

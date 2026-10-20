@@ -40,6 +40,9 @@ codex = [
 private = [
     "cryptography>=42.0",
 ]
+witness = [
+    "opentimestamps>=0.4",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
@@ -49,6 +52,7 @@ dev = [
     "onnxruntime>=1.17",
     "anthropic>=0.40",
     "tomli-w>=1.0",
+    "opentimestamps>=0.4",
 ]
 
 [project.urls]
