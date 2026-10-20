@@ -207,7 +207,7 @@ def _cmd_nightly(args: argparse.Namespace) -> int:
     from smriti.daylog.nightly import run_nightly
 
     status = run_nightly(rollup_cap=args.rollup_cap, digest_cap=args.digest_cap,
-                         reindex=not args.no_reindex)
+                         reindex=not args.no_reindex, witness=not args.no_witness)
     steps = status.get("steps", {})
     for name, step in steps.items():  # type: ignore[union-attr]
         if isinstance(step, dict):
@@ -217,6 +217,44 @@ def _cmd_nightly(args: argparse.Namespace) -> int:
     print(f"Nightly {'complete' if status.get('ok') else 'completed WITH FAILURES'} "
           f"for {status.get('target_day')}")
     return 0 if status.get("ok") else 1
+
+
+def _cmd_witness(args: argparse.Namespace) -> int:
+    from datetime import datetime, timezone
+
+    from smriti.core.tree import tree_root
+    from smriti.daylog.model import day_key, day_tz
+    from smriti.witness import run_witness, verify
+
+    root = tree_root()
+    if args.action == "stamp":
+        result = run_witness(root, day_key(datetime.now(tz=day_tz()).date()))
+        detail = {k: v for k, v in result.items() if k not in ("ok", "error")}
+        print(f"witness: {'ok' if result.get('ok') else 'FAILED: ' + str(result.get('error'))}"
+              f" {detail}")
+        return 0 if result.get("ok") else 1
+
+    checks = verify(root, offline=args.offline)
+    if not checks:
+        print("witness: no stamped nights yet")
+        return 1
+    for c in checks:
+        if c.anchor_ok and c.block_time:
+            mined = datetime.fromtimestamp(c.block_time, timezone.utc).date().isoformat()
+            anchor = f"anchored in Bitcoin block {c.block_height} ({mined})"
+        elif c.block_height:
+            anchor = f"anchored in block {c.block_height} (not checked)"
+        else:
+            anchor = "pending Bitcoin confirmation"
+        state = "ok" if c.ok else "PROBLEM: " + "; ".join(c.problems)
+        print(f"  {c.night}  {c.head[:7]}  {anchor}  {state}")
+    broken = [c for c in checks if not c.ok]
+    if broken:
+        print(f"Witness found problems from {broken[0].night}.")
+        return 1
+    print(f"History intact across {len(checks)} night(s), "
+          f"{checks[0].night} to {checks[-1].night}.")
+    return 0
 
 
 def _cmd_morning(args: argparse.Namespace) -> int:
@@ -1325,6 +1363,14 @@ def main(argv: list[str] | None = None) -> int:
                            help="Max day digests per night, newest first (default 10)")
     p_nightly.add_argument("--no-reindex", action="store_true",
                            help="Skip the index + recall refresh step")
+    p_nightly.add_argument("--no-witness", action="store_true",
+                           help="Skip the commit + timestamp step")
+    p_witness = sub.add_parser(
+        "witness", help="Tamper-evidence: timestamp the memory tree's HEAD, or verify history"
+    )
+    p_witness.add_argument("action", choices=["stamp", "verify"])
+    p_witness.add_argument("--offline", action="store_true",
+                           help="verify: skip checking proofs against Bitcoin")
     p_morning = sub.add_parser(
         "morning", help="Wake task: compose + send the one good-morning message"
     )
@@ -1486,6 +1532,7 @@ def main(argv: list[str] | None = None) -> int:
         "merge-concepts": _cmd_merge_concepts,
         "recall": _cmd_recall,
         "nightly": _cmd_nightly,
+        "witness": _cmd_witness,
         "morning": _cmd_morning,
         "logd": _cmd_logd,
         "tasks": _cmd_tasks,
