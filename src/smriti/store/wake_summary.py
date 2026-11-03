@@ -31,11 +31,14 @@ from smriti.core.tree import tree_root
 log = logging.getLogger(__name__)
 
 CONTEXT_CHAR_LIMIT = 5000
+CHARACTER_FILE = "mind/practices/character.md"
+CHARACTER_CHAR_LIMIT = 2400
 
 # Files that feed into the wake context, in read order.
 # Paths relative to the tree root.
 IDENTITY_FILES = [
     "identity.md",
+    CHARACTER_FILE,
     "mind/mind.md",
     "mind/desires/beliefs.md",
     "mind/desires/values.md",
@@ -95,9 +98,26 @@ def rebuild(
     if root is None:
         root = tree_root()
 
+    # Optional, curated practice survives summarization verbatim. Every
+    # consumer of wake-context (coding, brain, chat bridge, Hermes) gets
+    # the same behavior guidance, within the existing total budget.
+    try:
+        character = (root / CHARACTER_FILE).read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        character = ""
+    except OSError as exc:
+        log.error("Cannot read character practice: %s", exc)
+        return None
+    if len(character) > CHARACTER_CHAR_LIMIT:
+        log.error("Character practice exceeds %d characters; shorten %s",
+                  CHARACTER_CHAR_LIMIT, CHARACTER_FILE)
+        return None
+
     # Read identity files
     sources: list[str] = []
     for rel in IDENTITY_FILES:
+        if rel == CHARACTER_FILE:
+            continue  # appended verbatim, not rewritten by the summarizer
         path = root / rel
         if path.exists():
             try:
@@ -106,7 +126,7 @@ def rebuild(
             except OSError:
                 continue
 
-    if not sources:
+    if not sources and not character:
         log.warning("No identity files found, skipping wake-context rebuild")
         return None
 
@@ -119,19 +139,22 @@ def rebuild(
         executor_fn = summarize_via_claude
 
     source_text = "\n".join(sources)
-    prompt = REBUILD_PROMPT.format(limit=CONTEXT_CHAR_LIMIT, sources=source_text)
+    prefix = character + "\n\n---\n\n" if character else ""
+    summary_limit = CONTEXT_CHAR_LIMIT - len(prefix)
+    prompt = REBUILD_PROMPT.format(limit=summary_limit, sources=source_text)
 
     try:
-        result, _meta = executor_fn(prompt)
+        result, _meta = executor_fn(prompt) if sources else ("", None)
     except Exception as exc:
         log.error("Wake context rebuild failed: %s", exc)
         return None
 
     # Enforce the character limit
-    if len(result) > CONTEXT_CHAR_LIMIT:
-        result = result[:CONTEXT_CHAR_LIMIT]
+    if len(result) > summary_limit:
+        result = result[:summary_limit]
         if "\n" in result:
             result = result[:result.rfind("\n") + 1]
+    result = prefix + result
 
     out = context_path(root)
     out.parent.mkdir(parents=True, exist_ok=True)

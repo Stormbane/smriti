@@ -194,7 +194,15 @@ def _emit_reading_list(bw: _BudgetWriter, memory_root: Path) -> None:
             except ValueError:
                 today_journal = str(recent[0])
 
-    lines = ["--- READING LIST (ordered by importance) ---", ""]
+    # Show omitted-source notices before the long absolute-path list;
+    # otherwise the list can consume the reserve and hide the warning.
+    lines: list[str] = []
+    if bw.truncated:
+        lines.append("Truncated (read these, they were cut for budget):")
+        for notice in bw.truncated:
+            lines.append(f"  * {notice}")
+        lines.append("")
+    lines += ["--- READING LIST (ordered by importance) ---", ""]
     if today_journal:
         lines.append(f"  1. {memory_root}/{today_journal}  -- today's journal")
     lines += [
@@ -208,11 +216,6 @@ def _emit_reading_list(bw: _BudgetWriter, memory_root: Path) -> None:
         f"  9. {memory_root}/mind/mind.md  -- synthesis of beliefs/values/desires",
         "  10. .ai/knowledge/  -- project spec, architecture, conventions",
     ]
-    if bw.truncated:
-        lines.append("")
-        lines.append("Truncated (read these, they were cut for budget):")
-        for notice in bw.truncated:
-            lines.append(f"  * {notice}")
     lines.append("")
     for line in lines:
         bw.write_line(line)
