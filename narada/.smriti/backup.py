@@ -24,6 +24,7 @@ cleared only when no git process is running.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
@@ -43,15 +44,36 @@ LOG_KEEP_LINES = 1000
 # survive PID reuse after a crash.
 RUN_LOCK_NAME = "smriti-backup.lock"
 RUN_LOCK_MAX_AGE_S = 6 * 3600
+RUN_LOCK_INIT_GRACE_S = 60
 
 
 def repo_root() -> Path:
     return Path(os.environ.get("SMRITI_ROOT", Path.home() / ".narada"))
 
 
+_GIT_DIRS: dict[str, tuple[Path, Path]] = {}
+
+
+def git_dirs(cwd: Path) -> tuple[Path, Path]:
+    """(git dir, common dir). In a linked worktree ``.git`` is a file, not a directory."""
+    key = str(cwd)
+    if key not in _GIT_DIRS:
+        dot = cwd / ".git"
+        dirs = (dot, dot)
+        if not dot.is_dir():
+            code, out = run_git(["rev-parse", "--absolute-git-dir", "--git-common-dir"], cwd,
+                                timeout=30)
+            lines = out.splitlines()
+            if code == 0 and len(lines) >= 2:
+                common = Path(lines[1])
+                dirs = (Path(lines[0]), (common if common.is_absolute() else cwd / common).resolve())
+        _GIT_DIRS[key] = dirs
+    return _GIT_DIRS[key]
+
+
 def log_event(cwd: Path, **fields: object) -> None:
-    """Append one JSON line to .git/smriti-backup.jsonl. Never raises."""
-    path = cwd / ".git" / LOG_NAME
+    """Append one JSON line to <git common dir>/smriti-backup.jsonl. Never raises."""
+    path = git_dirs(cwd)[1] / LOG_NAME
     record = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **fields}
     try:
         with path.open("a", encoding="utf-8") as f:
@@ -139,9 +161,37 @@ def pid_alive(pid: int) -> bool:
 
 
 def acquire_run_lock(cwd: Path) -> str | None:
-    """Take the one-backup-at-a-time lock. Returns its token, or None if busy."""
-    path = cwd / ".git" / RUN_LOCK_NAME
+    """Take the one-backup-at-a-time lock. Returns its token, or None if busy.
+
+    The token is written to a temp file first and then hard-linked into
+    place, so the lock never exists without its owner's token. Filesystems
+    without hard links fall back to O_EXCL, where a fresh empty lock (an
+    owner mid-write) counts as busy.
+    """
+    path = git_dirs(cwd)[1] / RUN_LOCK_NAME
     token = f"{os.getpid()} {uuid.uuid4().hex}"
+    tmp = path.with_name(f"{RUN_LOCK_NAME}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(token, encoding="ascii")
+    except OSError:
+        return None
+    try:
+        for _ in range(2):
+            try:
+                os.link(tmp, path)
+                return token
+            except FileExistsError:
+                if not _break_dead_run_lock(path):
+                    return None
+            except OSError:
+                return _acquire_excl(path, token)
+        return None
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+
+
+def _acquire_excl(path: Path, token: str) -> str | None:
     for _ in range(2):
         try:
             fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -162,7 +212,13 @@ def _break_dead_run_lock(path: Path) -> bool:
     except OSError:
         return True  # vanished in between: just retry
     first = held.split()[0] if held.split() else ""
-    if pid_alive(int(first) if first.isdigit() else 0) and age < RUN_LOCK_MAX_AGE_S:
+    if not first.isdigit():
+        if age < RUN_LOCK_INIT_GRACE_S:
+            return False  # empty or partial: its owner may still be writing the token
+        owner_alive = False
+    else:
+        owner_alive = pid_alive(int(first))
+    if owner_alive and age < RUN_LOCK_MAX_AGE_S:
         return False
     try:
         if path.read_text(encoding="ascii") == held:  # still the lock we judged dead
@@ -173,7 +229,7 @@ def _break_dead_run_lock(path: Path) -> bool:
 
 
 def release_run_lock(cwd: Path, token: str) -> None:
-    path = cwd / ".git" / RUN_LOCK_NAME
+    path = git_dirs(cwd)[1] / RUN_LOCK_NAME
     try:
         if path.read_text(encoding="ascii") == token:  # only ever our own
             path.unlink()
@@ -188,12 +244,12 @@ def _identity(path: Path) -> tuple[int, int, int]:
 
 def stale_locks(cwd: Path, now: float | None = None) -> list[tuple[Path, tuple[int, int, int]]]:
     """Git lock files older than LOCK_STALE_S, each with the identity it had when seen."""
-    git = cwd / ".git"
+    git, common = git_dirs(cwd)
     now = time.time() if now is None else now
-    candidates = [git / "index.lock", git / "HEAD.lock", git / "packed-refs.lock",
-                  git / "config.lock", git / "objects" / "maintenance.lock"]
-    if (git / "refs").is_dir():
-        candidates += sorted((git / "refs").rglob("*.lock"))
+    candidates = [git / "index.lock", git / "HEAD.lock", common / "packed-refs.lock",
+                  common / "config.lock", common / "objects" / "maintenance.lock"]
+    if (common / "refs").is_dir():
+        candidates += sorted((common / "refs").rglob("*.lock"))
     found = []
     for p in candidates:
         try:

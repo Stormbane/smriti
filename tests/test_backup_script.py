@@ -131,6 +131,56 @@ def test_run_lock_of_a_live_owner_is_not_broken_by_age_alone(
     assert backup.acquire_run_lock(repo) is None
 
 
+def test_a_fresh_empty_run_lock_counts_as_busy(backup: ModuleType, tmp_path: Path,
+                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    # Another backup has created the lock but not yet written its token.
+    repo = _repo(tmp_path)
+    (repo / ".git" / backup.RUN_LOCK_NAME).write_text("", encoding="ascii")
+    monkeypatch.setattr(backup, "pid_alive", lambda pid: False)
+    assert backup.acquire_run_lock(repo) is None
+    assert (repo / ".git" / backup.RUN_LOCK_NAME).exists()
+
+
+def test_an_old_empty_run_lock_is_broken(backup: ModuleType, tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    _lock(repo / ".git" / backup.RUN_LOCK_NAME, backup.RUN_LOCK_INIT_GRACE_S + 60)
+    assert backup.acquire_run_lock(repo) is not None
+
+
+def test_the_lock_never_exists_without_its_token(backup: ModuleType, tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    token = backup.acquire_run_lock(repo)
+    assert token is not None
+    assert (repo / ".git" / backup.RUN_LOCK_NAME).read_text(encoding="ascii") == token
+    assert not list((repo / ".git").glob(f"{backup.RUN_LOCK_NAME}.*.tmp"))
+
+
+def test_run_lock_works_in_a_linked_worktree(backup: ModuleType, tmp_path: Path) -> None:
+    import shutil
+    import subprocess
+
+    if not shutil.which("git"):
+        pytest.skip("git not available")
+    main, linked = tmp_path / "main", tmp_path / "linked"
+    main.mkdir()
+
+    def git(*args: str, cwd: Path = main) -> None:
+        subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+    git("init", "-q")
+    git("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q",
+        "--allow-empty", "-m", "init")
+    git("worktree", "add", "-q", str(linked))
+    assert (linked / ".git").is_file()
+
+    token = backup.acquire_run_lock(linked)
+    assert token is not None
+    assert (main / ".git" / backup.RUN_LOCK_NAME).exists()  # shared across worktrees
+    assert backup.acquire_run_lock(main) is None
+    backup.release_run_lock(linked, token)
+    assert not (main / ".git" / backup.RUN_LOCK_NAME).exists()
+
+
 @pytest.mark.parametrize("without_psutil", [False, True])
 def test_pid_alive_sees_this_process_and_not_a_finished_one(
         backup: ModuleType, monkeypatch: pytest.MonkeyPatch, without_psutil: bool) -> None:
