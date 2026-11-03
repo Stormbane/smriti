@@ -58,6 +58,92 @@ def test_stale_locks_are_cleared_when_no_git_runs(backup: ModuleType, tmp_path: 
     assert set(event["locks"]) == {".git/index.lock", ".git/refs/remotes/origin/master.lock"}
 
 
+def test_a_lock_replaced_after_inspection_is_not_deleted(
+        backup: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _repo(tmp_path)
+    old = _lock(repo / ".git" / "index.lock", 3600)
+    seen = backup.stale_locks(repo)
+    # A live git removes the stale lock and takes a fresh one before we act.
+    old.unlink()
+    (repo / ".git" / "index.lock").write_text("live", encoding="utf-8")
+    monkeypatch.setattr(backup, "stale_locks", lambda cwd: seen)
+    monkeypatch.setattr(backup, "git_running", lambda: False)
+
+    backup.clear_stale_locks(repo)
+
+    assert (repo / ".git" / "index.lock").read_text(encoding="utf-8") == "live"
+
+
+@pytest.mark.parametrize("returncode,stdout,expect", [
+    (0, '"git.exe","1234","Console","1","50,000 K"\n', True),
+    (0, "INFO: No tasks are running which match the specified criteria.\n", False),
+    (1, "", True),  # the check itself failed: unknown counts as running
+])
+def test_git_running_trusts_only_a_successful_listing(
+        backup: ModuleType, monkeypatch: pytest.MonkeyPatch,
+        returncode: int, stdout: str, expect: bool) -> None:
+    import subprocess
+
+    monkeypatch.setattr(backup.os, "name", "nt")
+    monkeypatch.setattr(backup.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], returncode, stdout=stdout, stderr=""))
+    assert backup.git_running() is expect
+
+
+@pytest.mark.parametrize("returncode,expect", [(0, True), (1, False), (2, True), (3, True)])
+def test_pgrep_status_other_than_none_found_counts_as_running(
+        backup: ModuleType, monkeypatch: pytest.MonkeyPatch, returncode: int, expect: bool) -> None:
+    import subprocess
+
+    monkeypatch.setattr(backup.os, "name", "posix")
+    monkeypatch.setattr(backup.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a[0], returncode, stdout=b"", stderr=b""))
+    assert backup.git_running() is expect
+
+
+def test_run_lock_is_exclusive_and_released_only_by_its_owner(
+        backup: ModuleType, tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    token = backup.acquire_run_lock(repo)
+    assert token is not None
+    assert backup.acquire_run_lock(repo) is None  # held by this live process
+    backup.release_run_lock(repo, "someone else's token")
+    assert (repo / ".git" / backup.RUN_LOCK_NAME).exists()
+    backup.release_run_lock(repo, token)
+    assert not (repo / ".git" / backup.RUN_LOCK_NAME).exists()
+
+
+def test_run_lock_of_a_dead_owner_is_broken(backup: ModuleType, tmp_path: Path,
+                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _repo(tmp_path)
+    (repo / ".git" / backup.RUN_LOCK_NAME).write_text("999999 deadbeef", encoding="ascii")
+    monkeypatch.setattr(backup, "pid_alive", lambda pid: False)
+    assert backup.acquire_run_lock(repo) is not None
+
+
+def test_run_lock_of_a_live_owner_is_not_broken_by_age_alone(
+        backup: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _repo(tmp_path)
+    _lock(repo / ".git" / backup.RUN_LOCK_NAME, 3600).write_text("4242 cafe", encoding="ascii")
+    old = time.time() - 3600
+    os.utime(repo / ".git" / backup.RUN_LOCK_NAME, (old, old))
+    monkeypatch.setattr(backup, "pid_alive", lambda pid: True)
+    assert backup.acquire_run_lock(repo) is None
+
+
+@pytest.mark.parametrize("without_psutil", [False, True])
+def test_pid_alive_sees_this_process_and_not_a_finished_one(
+        backup: ModuleType, monkeypatch: pytest.MonkeyPatch, without_psutil: bool) -> None:
+    import subprocess
+
+    if without_psutil:  # exercise the ctypes / os.kill fallback that fresh installs use
+        monkeypatch.setitem(sys.modules, "psutil", None)
+    assert backup.pid_alive(os.getpid())
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    assert not backup.pid_alive(proc.pid)
+
+
 def test_stale_locks_are_kept_while_git_runs(backup: ModuleType, tmp_path: Path,
                                              monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)

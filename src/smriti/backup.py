@@ -10,6 +10,7 @@ next trigger catches up.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -21,7 +22,7 @@ def trigger(
     *,
     push: bool = False,
     root: Path | None = None,
-    timeout: int = 120,
+    timeout: int = 900,
 ) -> None:
     """Invoke the memory-tree backup script.
 
@@ -52,13 +53,16 @@ def trigger(
             args.append("--push")
         env = os.environ.copy()
         env["SMRITI_ROOT"] = str(root)
-        subprocess.run(
+        # Wait, but never kill: killing the script mid-run cuts off its
+        # commit/push/logging, and a killed git leaves .git/*.lock behind.
+        # On timeout the script is left to finish on its own.
+        proc = subprocess.Popen(
             args,
-            timeout=timeout,
-            check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env=env,
         )
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=timeout)
     except Exception:
         pass

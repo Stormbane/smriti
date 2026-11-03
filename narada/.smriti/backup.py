@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,6 +38,11 @@ LOCK_STALE_S = 15 * 60
 LOG_NAME = "smriti-backup.jsonl"
 LOG_MAX_BYTES = 200_000
 LOG_KEEP_LINES = 1000
+# One backup at a time. The run lock is broken only when its owner is dead,
+# or after RUN_LOCK_MAX_AGE_S: far beyond any real run, and only there to
+# survive PID reuse after a crash.
+RUN_LOCK_NAME = "smriti-backup.lock"
+RUN_LOCK_MAX_AGE_S = 6 * 3600
 
 
 def repo_root() -> Path:
@@ -81,42 +87,138 @@ def run_git(args: list[str], cwd: Path, timeout: float = 120) -> tuple[int, str]
 
 
 def git_running() -> bool:
-    """True if any git process is running. Unknown counts as running."""
+    """True if any git process is running. A failed or unclear check counts as running."""
     try:
         if os.name == "nt":
-            out = subprocess.run(
-                ["tasklist", "/FI", "IMAGENAME eq git.exe", "/NH"],
+            proc = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq git.exe", "/FO", "CSV", "/NH"],
                 capture_output=True, text=True, timeout=10,
-            ).stdout
-            return "git.exe" in out.lower()
-        return subprocess.run(["pgrep", "-x", "git"], capture_output=True, timeout=10).returncode == 0
+            )
+            return proc.returncode != 0 or "git.exe" in proc.stdout.lower()
+        # pgrep: 0 = found, 1 = none found, anything else = could not tell.
+        return subprocess.run(["pgrep", "-x", "git"], capture_output=True,
+                              timeout=10).returncode != 1
     except (OSError, subprocess.SubprocessError):
         return True
 
 
-def stale_locks(cwd: Path, now: float | None = None) -> list[Path]:
+def pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        import psutil  # optional
+
+        return bool(psutil.pid_exists(pid))
+    except ImportError:
+        pass
+    if os.name == "nt":
+        # Not os.kill(pid, 0): on Windows signal 0 is CTRL_C_EVENT.
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED: it exists
+        try:
+            code = wintypes.DWORD()
+            if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            k32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def acquire_run_lock(cwd: Path) -> str | None:
+    """Take the one-backup-at-a-time lock. Returns its token, or None if busy."""
+    path = cwd / ".git" / RUN_LOCK_NAME
+    token = f"{os.getpid()} {uuid.uuid4().hex}"
+    for _ in range(2):
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if not _break_dead_run_lock(path):
+                return None
+            continue
+        with os.fdopen(fd, "w", encoding="ascii") as f:
+            f.write(token)
+        return token
+    return None
+
+
+def _break_dead_run_lock(path: Path) -> bool:
+    try:
+        held = path.read_text(encoding="ascii")
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return True  # vanished in between: just retry
+    first = held.split()[0] if held.split() else ""
+    if pid_alive(int(first) if first.isdigit() else 0) and age < RUN_LOCK_MAX_AGE_S:
+        return False
+    try:
+        if path.read_text(encoding="ascii") == held:  # still the lock we judged dead
+            path.unlink()
+    except OSError:
+        pass
+    return True
+
+
+def release_run_lock(cwd: Path, token: str) -> None:
+    path = cwd / ".git" / RUN_LOCK_NAME
+    try:
+        if path.read_text(encoding="ascii") == token:  # only ever our own
+            path.unlink()
+    except OSError:
+        pass
+
+
+def _identity(path: Path) -> tuple[int, int, int]:
+    st = path.stat()
+    return st.st_ino, st.st_mtime_ns, st.st_size
+
+
+def stale_locks(cwd: Path, now: float | None = None) -> list[tuple[Path, tuple[int, int, int]]]:
+    """Git lock files older than LOCK_STALE_S, each with the identity it had when seen."""
     git = cwd / ".git"
     now = time.time() if now is None else now
     candidates = [git / "index.lock", git / "HEAD.lock", git / "packed-refs.lock",
                   git / "config.lock", git / "objects" / "maintenance.lock"]
     if (git / "refs").is_dir():
         candidates += sorted((git / "refs").rglob("*.lock"))
-    return [p for p in candidates if p.is_file() and now - p.stat().st_mtime > LOCK_STALE_S]
+    found = []
+    for p in candidates:
+        try:
+            if p.is_file() and now - p.stat().st_mtime > LOCK_STALE_S:
+                found.append((p, _identity(p)))
+        except OSError:
+            pass
+    return found
 
 
 def clear_stale_locks(cwd: Path) -> None:
+    """Remove stale git locks. Callers hold the backup run lock."""
     stale = stale_locks(cwd)
     if not stale:
         return
-    names = [p.relative_to(cwd).as_posix() for p in stale]
+    names = [p.relative_to(cwd).as_posix() for p, _ in stale]
     if git_running():
         log_event(cwd, event="stale_lock_kept", locks=names, reason="git process running")
         return
     removed = []
-    for p in stale:
+    for p, seen in stale:
         try:
-            p.unlink()
-            removed.append(p.relative_to(cwd).as_posix())
+            if _identity(p) == seen:  # a fresh lock in its place belongs to a live git
+                p.unlink()
+                removed.append(p.relative_to(cwd).as_posix())
         except OSError:
             pass
     log_event(cwd, event="stale_lock_cleared", locks=removed)
@@ -164,20 +266,27 @@ def main() -> int:
             print(f"[backup] no git repo at {cwd}", file=sys.stderr)
         return 0
 
-    clear_stale_locks(cwd)
-    committed = do_commit(cwd, args.tag)
-    if args.verbose:
-        msg = "created" if committed else "nothing to commit"
-        print(f"[backup] commit: {msg}", file=sys.stderr)
-
-    if args.push:
-        ok, out = do_push(cwd)
+    token = acquire_run_lock(cwd)
+    if token is None:
+        log_event(cwd, event="skipped", tag=args.tag, reason="another backup is running")
+        return 0
+    try:
+        clear_stale_locks(cwd)
+        committed = do_commit(cwd, args.tag)
         if args.verbose:
-            if ok:
-                print("[backup] push: ok", file=sys.stderr)
-            else:
-                print(f"[backup] push failed (will retry next trigger): {out}", file=sys.stderr)
+            msg = "created" if committed else "nothing to commit"
+            print(f"[backup] commit: {msg}", file=sys.stderr)
 
+        if args.push:
+            ok, out = do_push(cwd)
+            if args.verbose:
+                if ok:
+                    print("[backup] push: ok", file=sys.stderr)
+                else:
+                    print(f"[backup] push failed (will retry next trigger): {out}",
+                          file=sys.stderr)
+    finally:
+        release_run_lock(cwd, token)
     return 0
 
 
