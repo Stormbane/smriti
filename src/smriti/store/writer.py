@@ -76,6 +76,25 @@ def _flat_path(root: Path, branch: str, now: datetime) -> Path:
     return entry_dir / f"{mmdd_str}.md"
 
 
+def _checked_branch(root: Path, branch: str) -> str:
+    """Return *branch* normalised, or raise if it would leave *root*.
+
+    ``branch`` reaches here straight from the MCP ``smriti_write`` tool, so
+    ``..`` segments, absolute or drive paths, and paths that resolve outside
+    the tree through a junction or symlink (e.g. ``mirrors/``) are rejected.
+    """
+    raw = branch.replace("\\", "/").strip()
+    norm = raw.rstrip("/")
+    parts = norm.split("/")
+    if (not norm or raw.startswith("/") or ":" in norm or norm.startswith("~")
+            or any(p in ("", ".", "..") for p in parts)):
+        raise ValueError(f"invalid branch {branch!r}: use a relative path inside the memory tree")
+    base = root.resolve()
+    if not (base / norm).resolve().is_relative_to(base):
+        raise ValueError(f"invalid branch {branch!r}: resolves outside the memory tree")
+    return norm
+
+
 def write_entry(
     content: str,
     *,
@@ -114,6 +133,7 @@ def write_entry(
 
     if root is None:
         root = tree_root()
+    branch = _checked_branch(root, branch)
 
     # Use local time for file paths and dates (journal entries are human-facing).
     # Store UTC in frontmatter for precision.
