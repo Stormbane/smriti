@@ -91,7 +91,7 @@ def _claude_line(**over: object) -> bytes:
         "type": "user",
         "timestamp": "2026-09-04T11:00:00.000Z",
         "sessionId": "a1b2c3d4",
-        "cwd": "C:\\Users\\admin\\.narada\\chat-sessions\\1000000001",
+        "cwd": "C:\\Users\\tester\\.narada\\chat-sessions\\1000000001",
         "message": {"content": "Is the voice still working?"},
     }
     rec.update(over)

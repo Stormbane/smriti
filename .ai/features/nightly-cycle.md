@@ -68,7 +68,7 @@ log needs only a collector, not new instrumentation.
   backfill take the same lock per write burst. Never assumed, always held
   for the duration of a write, never longer.
 - **Event time owns placement.** A turn belongs to the day-file of its parsed
-  event timestamp in a fixed UTC+10 offset (no DST, fixed +10:00), regardless of
+  event timestamp in a fixed UTC+10:00 offset (no DST), regardless of
   when it was captured. Late arrivals land in the correct historical file and
   invalidate downstream derived artifacts (see Design 4).
 - **The daemon recovers on its own.** Supervised with auto-restart; per-source
@@ -113,7 +113,7 @@ log needs only a collector, not new instrumentation.
 `~/.narada/log/YYYY/MM/DD.jsonl` — one line per conversational turn:
 
 ```json
-{"id": "tg:a1b2c3d4:42", "ts": "2026-09-04T11:00:00.000Z", "channel": "telegram", "who": "suti", "text": "Is the voice still working?", "session": "a1b2c3d4"}
+{"id": "tg:a1b2c3d4:42", "ts": "2026-09-04T11:00:00.000Z", "channel": "telegram", "who": "suti", "text": "Is the speaker working?", "session": "a1b2c3d4"}
 ```
 
 - `id` — stable turn identity: `<channel-tag>:<session>:<per-session turn
@@ -124,7 +124,7 @@ log needs only a collector, not new instrumentation.
   injected system reminders) are dropped by the source adapters.
 - Ordering within a file is by `ts` at render time; the JSONL itself is
   append-order and may interleave — readers sort, writers never rewrite.
-- Day boundaries: a fixed UTC+10 offset from event `ts`.
+- Day boundaries: fixed UTC+10 from event `ts`.
 - Autonomous sessions (zero human turns) are **not** marked at capture —
   capture is append-only and a human turn may still arrive. The render step
   derives the `[autonomous: …]` marker per session per day; markers are a
@@ -165,14 +165,14 @@ modules**, appends to the day-log within seconds.
 A deterministic tail-read of today's log exposed to live sessions via the
 existing hook surface (recall PostToolUse / UserPromptSubmit): if another
 channel was active in the last ~15 minutes, inject one line — e.g.
-`Suti was on Telegram 3 min ago (last: "Is the voice still working?")`.
+`Suti was on Telegram 3 min ago (last: "Is the speaker working?")`.
 String formatting only, preview truncated, silent on any failure.
 
 ### 4. Sleep task — `smriti nightly` (~03:00)
 
 Takes the writer lock (waits briefly, then proceeds only if acquired —
 overlapping runs are impossible by construction). Target date: the just-closed
-UTC+10 day; 03:00 is the cutoff for that day's digest.
+local (UTC+10) day; 03:00 is the cutoff for that day's digest.
 
 1. **Reconcile sweep** — collector logic over the same per-source state and
    dedup rules; backstop for daemon gaps. May land turns in any historical
@@ -309,8 +309,8 @@ Codex diff review, recheck, tests.
 ## Future (explicitly out of scope now)
 
 - **Presence-routing comms tool** ("reach Suti"): Narada expresses intent to
-  communicate; the tool resolves where Suti is (a home speaker, a desk device,
-  or the phone app/Telegram) and escalates channels on
+  communicate; the tool resolves which device reaches him (a home speaker,
+  a desk device, or the phone app/Telegram) and escalates channels on
   no-response. Natural home: Hermes (it already holds `channel_directory.json`
   and the gateway), with prana devices as channels. The `notify_suti` shim in
   the morning task is designed as this tool's first call site.
