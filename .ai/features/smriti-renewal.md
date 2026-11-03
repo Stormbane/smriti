@@ -44,6 +44,31 @@ They follow the nightly audit of 2026-11-03. This plan orders the work. The repo
 - **Disabled the qmd recall hook** in Claude Code (removed the PostToolUse entry from `~/.claude/settings.json`) and in Codex (`enabled = false`). Both configs are backed up as `*.bak-2026-11-04-qmdhook`.
 - Added `docs/audits/` to `.gitignore`.
 
+## Progress (2026-11-04)
+
+Each commit was diff-reviewed by Codex, its findings fixed, and the result rechecked once. Full suite: 442 passed, plus 1 failure that `master` already had (the `test_mcp` isolation defect, 0.9).
+
+- **0.1 done:** the qmd hook is off and the nightly qmd step is dropped (`cafb9d5`).
+- **0.2 done:**
+  - `backup.py` never kills git, serialises its runs, re-checks locks before deleting them, publishes its lock token atomically, supports linked worktrees and logs to `.git/smriti-backup.jsonl` (`75b6e0c`, `0598195`, `f0d1f85`);
+  - it's deployed to the memory tree, and its first live run cleared a fourth stale `index.lock`.
+- **0.5 done:** writes no longer feed the parked queue (`f78b37e`).
+- **0.8 part 1 done:** branch paths are validated (`371e047`). Still open: the `private/` key and the index purge.
+- **0.10 done:** the rollup input budget is shared across inputs (`e72eaa2`).
+- **6.0 partly done:**
+  - the unpushed health fixture rewritten (tip `e611e0d`);
+  - synthetic IDs, and the city and device map removed (`95de3cd`);
+  - the homepage link fixed (`dc17bee`);
+  - the memory-derived actionables removed (`854f55c`).
+  - Still open: the eval cases, the private-store README pledge, and the local denylist hook.
+- **5.1-5.2 partly done:** the manifest and an idempotent executor are in `docs/audits/2026-11-04/`. Six tracked rubbish groups are deleted, one commit each and all recoverable from git (`3bc8ad1`..`9056161`, 26.5 MB): the LiveKit zip, host config backups, the archived queue, legacy `.smriti` files, `.bak` files and the `test/` stub. 152 MB of git garbage (`tmp_obj_*`) is gone too. Pushed.
+- **Held for Suti, because they're memory content rather than technical rubbish:**
+  - `heartbeat-dead` (5,119 old heartbeat notes, 34% of the index);
+  - `semantic-wiki` (187 April concept pages);
+  - `sacred-txt-tracked` (9 source texts).
+  All three are tracked and pushed, and their approval digests are in the manifest.
+- **Not backed up in git:** 1.47 GB has verified copies on D: or in svapna (the LoRA backup, the PDFs, `sources/`). 55 MB has no copy anywhere (`voice-audition/`, `esp32/`, wakeword logs, the bridge log). Both need an explicit OK.
+
 ## Decisions
 
 **Settled by Suti on 2026-11-04:**
@@ -54,7 +79,7 @@ They follow the nightly audit of 2026-11-03. This plan orders the work. The repo
 
 **Open:**
 1. Untrack runtime files in the memory repo now (`recall.jsonl`, `*.db-wal`, `log/.state.json`)? (Recommended) Reclaiming the 4+ GB with a history rewrite and force-push is a separate yes, later.
-2. Restore the 4 tree files that `smriti eval` overwrote with test strings, from git? (Recommended)
+2. ~~Restore the 4 tree files that `smriti eval` overwrote, from git.~~ **Not possible.** They were clobbered on 04-13, before the memory repo's first commit (04-21), so git holds only the test strings. `sources/2026/04-20.md` is lost the same way, and the D: rescue copy postdates the overwrite. The 4 files go with the `semantic-wiki` decision (Phase 5).
 3. Index scope: exclude `heartbeat/` and `mirrors/` from the index, keeping the files on disk? (Recommended)
 4. Regenerate the bad digests and rollups once 3.4-3.5 land? (Recommended)
 5. Licence: MIT or Apache-2.0.
@@ -127,6 +152,7 @@ Effort is S (hours), M (a day or two) or L (several days). Report names refer to
 | 0.6 | Make `smriti eval` write only to a temp tree; restore the overwritten files (Open 2) | S | retrieval #5 |
 | 0.7 | Index: purge chunks of deleted files; exclude raw `DD.md` renders (MCP hit@5 0.67 → 0.78) | S | retrieval §2 |
 | 0.8 | Security (public repo): validate resolved write paths in `writer.py`; move the Fernet key out of `README.md`. **One exclusion policy shared by `index_tree` and `index_file`** that also **purges already-indexed excluded sources** from chunks, FTS and vectors. Regression tests include upgrading a populated index that holds a synthetic key (R1-7) | M | oss §5 |
+| 0.11 | `daylog/lock.py` `_pid_alive` without psutil on Windows calls `os.kill(pid, 0)`. There, signal 0 is `CTRL_C_EVENT`: it sends Ctrl+C to the target's console group instead of probing it. Use OpenProcess/GetExitCodeProcess, as `backup.py` now does | S | found 2026-11-04 |
 | 0.10 | **Year rollup:** fix the 80k input cap now, separately from the 3.7 rewrite, so the 2027-01-02 run is safe whatever else slips. Test on a synthetic 12-month input | S | rollup report |
 | 0.9 | Tests: temp HOME and root, reset singletons. This stops pytest polluting the live `metrics.jsonl` | M | oss §6 |
 
