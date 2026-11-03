@@ -56,7 +56,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Stormbane/narada"
+Homepage = "https://github.com/Stormbane/smriti"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/smriti"]
