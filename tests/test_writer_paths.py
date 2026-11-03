@@ -35,6 +35,24 @@ def test_normal_branches_still_write_inside_the_tree(tmp_path: Path, branch: str
     assert f"branch: {expect}" in path.read_text(encoding="utf-8")
 
 
+def test_writes_no_longer_feed_the_parked_queue(tmp_path: Path,
+                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SMRITI_LEGACY_QUEUE", raising=False)
+    root = tmp_path / "tree"
+    root.mkdir()
+    write_entry("a journal entry", branch="journal", root=root, reindex=False)
+    queue = root / ".smriti" / "queue.json"
+    assert not queue.exists() or '"pending"' not in queue.read_text(encoding="utf-8")
+
+
+def test_legacy_queue_can_be_re_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMRITI_LEGACY_QUEUE", "1")
+    root = tmp_path / "tree"
+    root.mkdir()
+    write_entry("a journal entry", branch="journal", root=root, reindex=False)
+    assert (root / ".smriti" / "queue.json").exists()
+
+
 def test_branch_through_a_link_out_of_the_tree_is_rejected(tmp_path: Path) -> None:
     root = tmp_path / "tree"
     outside = tmp_path / "other-repo"

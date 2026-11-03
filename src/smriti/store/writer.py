@@ -185,23 +185,34 @@ def write_entry(
     # cognitive_cascade for any updated index files).
     _structural_cascade(entry_path, root)
 
-    # Route through the central classifier for all async pipelines
-    # (summarize, ingest/route, journal_rollup, wake_summary). Reindex
-    # tasks from the classifier are skipped because we ran it synchronously
-    # above.
-    try:
-        from smriti.store.queue import enqueue
-        from smriti.store.watch_router import classify_write
+    # Route through the central classifier for the parked async pipelines
+    # (summarize, ingest/route, journal_rollup, wake_summary). Nothing drains
+    # that queue any more, so this only runs when re-enabled explicitly.
+    # Reindex tasks are skipped because we ran it synchronously above.
+    if _legacy_queue_enabled():
+        try:
+            from smriti.store.queue import enqueue
+            from smriti.store.watch_router import classify_write
 
-        tasks = classify_write(entry_path, root, event_type="created")
-        for task in tasks:
-            if task.type == "reindex":
-                continue
-            enqueue(task, root=root)
-    except Exception as exc:
-        log.warning("classify_write after write failed: %s", exc)
+            tasks = classify_write(entry_path, root, event_type="created")
+            for task in tasks:
+                if task.type == "reindex":
+                    continue
+                enqueue(task, root=root)
+        except Exception as exc:
+            log.warning("classify_write after write failed: %s", exc)
 
     return entry_path
+
+
+def _legacy_queue_enabled() -> bool:
+    """Whether writes feed the parked deep pipeline's task queue.
+
+    Off by default since 2026-11-04: nothing drains the queue (it had
+    regrown to 145 tasks), and draining it would run unchecked rewrites over
+    project and people notes. Set ``SMRITI_LEGACY_QUEUE=1`` to re-enable.
+    """
+    return os.environ.get("SMRITI_LEGACY_QUEUE", "") == "1"
 
 
 def _append_entry(path: Path, entry_block: str) -> None:
@@ -253,6 +264,7 @@ def _structural_cascade(path: Path, root: Path) -> None:
         updated = structural_cascade(path, root)
         if updated:
             log.info("Structural cascade updated %d index files", len(updated))
+        if updated and _legacy_queue_enabled():
             all_changed = [path] + updated
             queued = queue_cognitive_cascade(all_changed, root)
             if queued:
