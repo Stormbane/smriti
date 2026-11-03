@@ -4,6 +4,7 @@ Implements the MCP JSON-RPC protocol directly over stdio. Exposes two tools:
 - smriti_read — hybrid search over the narada memory tree
 - smriti_status — index statistics
 - smriti_write — write to narada memory
+- tell_suti — message Suti now (Telegram + app, via notify_suti.py)
 
 Run via stdio::
 
@@ -96,6 +97,35 @@ TOOLS = [
                 },
             },
             "required": ["content"],
+        },
+    },
+    {
+        "name": "tell_suti",
+        "description": (
+            "Send Suti a message now. It goes out through notify_suti.py, which "
+            "fans out to Telegram and the phone app (feed and push), and the "
+            "result names the channels that delivered. Use it whenever he asks "
+            "you to message him, or when something needs his attention away "
+            "from the keyboard. level: 'message' (default, conversation), "
+            "'error' or 'emergency' for faults, 'log'/'warn' for the app feed "
+            "only. For a question that can wait for his next session, use "
+            "smriti_ask_suti instead."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "The message, plain text, at most 4,000 characters.",
+                },
+                "level": {
+                    "type": "string",
+                    "enum": ["message", "error", "emergency", "warn", "log"],
+                    "description": "Routing level (default: message).",
+                    "default": "message",
+                },
+            },
+            "required": ["text"],
         },
     },
     {
@@ -507,6 +537,43 @@ def handle_write(arguments: dict) -> str:
         reindex=True,
     )
     return f"Written: {path}"
+
+
+# Tests replace this (or pass ``sender=``) so no real message is sent.
+# None means: the real sender, notify_suti.py via daylog's notify_cmd.
+TELL_SUTI_SENDER = None
+
+
+def _default_tell_suti_sender(text: str, level: str):
+    from smriti.daylog.config import load_config
+    from smriti.daylog.notify import send
+
+    return send(load_config(), text, level=level, source="tell_suti")
+
+
+def handle_tell_suti(arguments: dict, sender=None) -> str:
+    """Message Suti through every channel notify_suti.py fans out to.
+
+    Raises on any failure so the caller sees ``isError`` rather than a
+    message that silently went nowhere.
+    """
+    from smriti.daylog.notify import LEVELS, MAX_MESSAGE_CHARS
+
+    text = str(arguments.get("text") or "").strip()
+    level = str(arguments.get("level") or "message").strip().lower()
+    if not text:
+        raise ValueError("text is empty; nothing sent")
+    if len(text) > MAX_MESSAGE_CHARS:
+        raise ValueError(
+            f"text is {len(text)} chars; the limit is {MAX_MESSAGE_CHARS}. Split it."
+        )
+    if level not in LEVELS:
+        raise ValueError(f"unknown level {level!r}; use one of {', '.join(LEVELS)}")
+    send = sender or TELL_SUTI_SENDER or _default_tell_suti_sender
+    delivery = send(text, level)
+    if not delivery.ok:
+        raise RuntimeError(f"not delivered: {delivery.detail or 'no channel took it'}")
+    return f"Delivered via {', '.join(delivery.channels)} (level={level})."
 
 
 def handle_ask_suti(arguments: dict) -> str:
@@ -1210,6 +1277,8 @@ def handle_message(msg: dict) -> dict | None:
                 text = handle_write(arguments)
             elif name == "smriti_status":
                 text = handle_status()
+            elif name == "tell_suti":
+                text = handle_tell_suti(arguments)
             elif name == "smriti_ask_suti":
                 text = handle_ask_suti(arguments)
             elif name == "smriti_add_todo":
