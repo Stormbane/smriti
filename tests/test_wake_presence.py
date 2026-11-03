@@ -460,29 +460,50 @@ class TestLastExchange:
         turns = [("user", "a"), ("assistant", "old"), ("user", "b"), ("assistant", "new")]
         assert presence._last_exchange(turns, "user", "assistant") == ("b", "new")
 
+    def test_latest_of_several_replies(self) -> None:
+        turns = [("user", "cancel meeting"), ("assistant", "Checking calendar"),
+                 ("assistant", "Cancelled")]
+        assert presence._last_exchange(turns, "user", "assistant") == (
+            "cancel meeting", "Cancelled")
+
     def test_narada_initiated_only(self) -> None:
         turns = [("narada", "good morning")]
         assert presence._last_exchange(turns, "suti", "narada") == ("", "good morning")
 
 
 class TestEntryOrderAcrossUtcMidnight:
-    def test_local_morning_entries_sort_by_real_time(
+    """write_entry() stamps the machine-local date with a UTC clock."""
+
+    @staticmethod
+    def _machine_tz(monkeypatch: pytest.MonkeyPatch, hours: int) -> None:
+        tz = timezone(timedelta(hours=hours))
+        monkeypatch.setattr(presence, "_writer_local", lambda ts: ts.astimezone(tz))
+        monkeypatch.setattr(presence, "_writer_midnight",
+                            lambda day: day.replace(tzinfo=tz).astimezone(timezone.utc))
+
+    def test_utc_plus_10_morning_entries_sort_by_real_time(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import smriti.daylog.model as model
-
-        monkeypatch.setattr(model, "day_tz", lambda: timezone(timedelta(hours=10)))
+        self._machine_tz(monkeypatch, 10)
         nine_am = presence._Entry("2026-11-03", "23:00:00 UTC", "people", "9am", "")
         eleven_am = presence._Entry("2026-11-03", "01:00:00 UTC", "people", "11am", "")
         ordered = sorted([nine_am, eleven_am], key=presence._entry_instant, reverse=True)
         assert [e.title for e in ordered] == ["11am", "9am"]
         assert presence._entry_instant(nine_am) == datetime(2026, 11, 2, 23, tzinfo=timezone.utc)
 
-    def test_missing_time_sorts_at_local_midnight(
+    def test_utc_machine_uses_its_own_convention_not_day_tz(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        import smriti.daylog.model as model
+        self._machine_tz(monkeypatch, 0)
+        one_pm = presence._Entry("2026-11-03", "13:00:00 UTC", "people", "1pm", "")
+        three_pm = presence._Entry("2026-11-03", "15:00:00 UTC", "people", "3pm", "")
+        ordered = sorted([one_pm, three_pm], key=presence._entry_instant, reverse=True)
+        assert [e.title for e in ordered] == ["3pm", "1pm"]
+        assert presence._entry_instant(three_pm) == datetime(2026, 11, 3, 15, tzinfo=timezone.utc)
 
-        monkeypatch.setattr(model, "day_tz", lambda: timezone(timedelta(hours=10)))
+    def test_missing_time_sorts_at_writer_midnight(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._machine_tz(monkeypatch, 10)
         e = presence._Entry("2026-11-03", "", "people", "t", "")
         assert presence._entry_instant(e) == datetime(2026, 11, 2, 14, tzinfo=timezone.utc)

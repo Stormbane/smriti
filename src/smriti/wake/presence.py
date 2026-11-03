@@ -428,28 +428,37 @@ def _parse_entries(text: str, fallback_date: str, branch: str) -> list[_Entry]:
 def _entry_instant(e: _Entry) -> datetime:
     """When an entry was written, as an aware UTC datetime.
 
-    write_entry() stamps a *local* calendar date with a *UTC* clock
-    ("date: 2026-11-03", "time: 23:00:00 UTC"), so the strings don't sort
-    together across UTC midnight. Find the UTC instant whose local date
-    is the stamped date. Entries without a usable time sort at local
-    midnight of their date.
+    write_entry() stamps the *machine-local* calendar date with a *UTC*
+    clock ("date: 2026-11-03", "time: 23:00:00 UTC"), so the strings don't
+    sort together across UTC midnight. Find the UTC instant whose
+    machine-local date is the stamped date, using the writer's own
+    convention (``datetime.astimezone()``), not the day-log offset.
+    Entries without a usable time sort at local midnight of their date.
     """
-    from smriti.daylog.model import day_tz
-
     try:
         day = datetime.strptime(e.date, "%Y-%m-%d")
     except ValueError:
         return datetime.min.replace(tzinfo=timezone.utc)
     m = re.match(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", e.time or "")
     if not m:
-        return day.replace(tzinfo=day_tz()).astimezone(timezone.utc)
+        return _writer_midnight(day)
     clock = day.replace(hour=int(m.group(1)), minute=int(m.group(2)),
                         second=int(m.group(3) or 0), tzinfo=timezone.utc)
     for shift in (0, -1, 1):
         candidate = clock + timedelta(days=shift)
-        if candidate.astimezone(day_tz()).date() == day.date():
+        if _writer_local(candidate).date() == day.date():
             return candidate
     return clock
+
+
+def _writer_local(ts: datetime) -> datetime:
+    """An instant in the timezone write_entry() used (the machine's)."""
+    return ts.astimezone()
+
+
+def _writer_midnight(day: datetime) -> datetime:
+    """Midnight of a naive calendar day in the writer's timezone, as UTC."""
+    return day.astimezone(timezone.utc)  # a naive datetime is machine-local
 
 
 def _latest_people(root: Path, n: int) -> list[_Entry]:
@@ -633,15 +642,16 @@ def _last_exchange(
 ) -> tuple[str, str | None]:
     """Suti's latest message and the reply that came *after* it.
 
-    The reply is None when that message is still unanswered. Picking the
-    last of each independently would pin an earlier reply onto a newer,
-    unanswered request. With no message from Suti at all, the latest
-    Narada-initiated line is the reply.
+    The reply is the *latest* Narada message after it ("Checking
+    calendar" then "Cancelled" reports "Cancelled"), or None when that
+    message is still unanswered. Picking the last of each independently
+    would pin an earlier reply onto a newer, unanswered request. With no
+    message from Suti at all, the latest Narada-initiated line is the reply.
     """
     idx = next((i for i in range(len(turns) - 1, -1, -1) if turns[i][0] == user), None)
     if idx is None:
         return "", next((t for w, t in reversed(turns) if w == assistant), None)
-    reply = next((t for w, t in turns[idx + 1:] if w == assistant), None)
+    reply = next((t for w, t in reversed(turns[idx + 1:]) if w == assistant), None)
     return turns[idx][1], reply
 
 
