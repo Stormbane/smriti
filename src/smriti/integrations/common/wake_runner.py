@@ -112,7 +112,11 @@ def run(
         return 0
 
     audience = os.environ.get("SMRITI_WAKE_AUDIENCE", "coding").strip() or "coding"
-    payload = briefing(memory_root=entity_root, cwd=Path(os.getcwd()), audience=audience)
+    # The Hands section reads the calling harness's MCP config.
+    harness = "codex" if framing == "codex-json" else "claude"
+    payload = briefing(
+        memory_root=entity_root, cwd=Path(os.getcwd()), audience=audience, harness=harness,
+    )
     sys.stdout.write(_frame(payload, framing))
     return 0
 
