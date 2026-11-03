@@ -295,3 +295,6 @@ Note: the dreaming cycle (synthetic training data, LoRA updates) lives in
 
 ## Active
 
+Memory-derived actionables that used to sit here (extracted by the parked deep
+pipeline from private memory threads) were moved out of the public repo on
+2026-11-04. Current work: `.ai/features/smriti-renewal.md`.
