@@ -115,14 +115,31 @@ def enumerate_stale_periods(cfg: DaylogConfig, today: date) -> list[Period]:
     return [p for p in periods if _current_manifest(p.out_path) != p.manifest_hash()]
 
 
+# Total input budget per rollup kind, in chars. Each input gets an equal share
+# (capped at _PER_INPUT_MAX), so a long period never silently drops its tail.
+# A flat 80k cut on the joined body meant a year saw only its first ~5 months
+# and a long week lost its last days.
+_BUDGET = {"week": 80_000, "month": 100_000, "year": 240_000}
+_PER_INPUT_MAX = 20_000
+_TRUNCATED = "\n\n[... truncated for length]"
+
+
+def rollup_body(period: Period) -> str:
+    inputs = sorted(period.inputs)
+    share = min(_PER_INPUT_MAX, _BUDGET.get(period.kind, 80_000) // max(1, len(inputs)))
+    parts = []
+    for p in inputs:
+        text = p.read_text(encoding="utf-8", errors="replace")
+        if len(text) > share:
+            text = text[: share - len(_TRUNCATED)] + _TRUNCATED
+        parts.append(f"### {p.name}\n\n{text}")
+    return "\n\n---\n\n".join(parts)
+
+
 def build_rollup(period: Period, attempts_log: list[dict[str, str]]) -> Path:
-    body = "\n\n---\n\n".join(
-        f"### {p.name}\n\n" + p.read_text(encoding="utf-8", errors="replace")[:20_000]
-        for p in sorted(period.inputs)
-    )
     text = compose(
         _SYSTEM.format(unit=period.kind),
-        f"Digests for this {period.kind}:\n\n{body[:80_000]}",
+        f"Digests for this {period.kind}:\n\n{rollup_body(period)}",
         attempts_log,
     )
     header = "\n".join(

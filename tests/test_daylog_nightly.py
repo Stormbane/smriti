@@ -163,6 +163,37 @@ def test_rollup_scan_finds_closed_weeks_and_repairs_stale(
     assert [p.out_path.name for p in enumerate_stale_periods(cfg, today)] == ["week1.md"]
 
 
+def test_rollup_body_keeps_every_input_of_a_long_year(tmp_path: Path) -> None:
+    from smriti.daylog.rollup import _BUDGET, Period, rollup_body
+
+    months = []
+    for m in range(1, 13):
+        path = tmp_path / "2026" / f"{m:02d}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# Month {m:02d}\n" + "x" * 30_000 + f"\nEND-{m:02d}\n", encoding="utf-8")
+        months.append(path)
+    body = rollup_body(Period("year", tmp_path / "2026.md", months))
+    # Every month is represented (a flat cut used to drop July onwards) ...
+    for m in range(1, 13):
+        assert f"# Month {m:02d}" in body
+    # ... each long input is marked as truncated, and the total stays in budget.
+    assert body.count("[... truncated for length]") == 12
+    assert len(body) <= _BUDGET["year"] + 12 * 40
+
+
+def test_rollup_body_leaves_short_inputs_whole(tmp_path: Path) -> None:
+    from smriti.daylog.rollup import Period, rollup_body
+
+    days = []
+    for d in (1, 2, 3):
+        path = tmp_path / f"0{d}-digest.md"
+        path.write_text(f"day {d} complete\n", encoding="utf-8")
+        days.append(path)
+    body = rollup_body(Period("week", tmp_path / "week1.md", days))
+    assert "truncated" not in body
+    assert all(f"day {d} complete" in body for d in (1, 2, 3))
+
+
 # ---------------------------------------------------------------- nightly
 
 
