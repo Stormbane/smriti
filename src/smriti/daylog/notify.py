@@ -30,6 +30,12 @@ log = logging.getLogger(__name__)
 # Levels the brain's feed understands (prana.brain.push.LEVELS).
 # message/error/emergency also go to Telegram; log/warn are feed-only.
 LEVELS: tuple[str, ...] = ("log", "warn", "message", "error", "emergency")
+FEED_ONLY_LEVELS: tuple[str, ...] = ("log", "warn")
+
+# Senders that honour NOTIFY_LEVEL. A legacy command such as
+# notify_telegram.py ignores it and would put feed-only levels on Telegram,
+# so feed-only levels are refused unless one of these is the command.
+LEVEL_AWARE_SENDERS: frozenset[str] = frozenset({"notify_suti.py"})
 
 # The fan-out sender, relative to the tree root. Used when daylog.json
 # names no notify_cmd.
@@ -131,6 +137,14 @@ def send(
     if not cmd:
         raise NotifyError(
             f"no notify_cmd in .smriti/daylog.json and no {cfg.root / NOTIFY_SCRIPT}"
+        )
+    if level in FEED_ONLY_LEVELS and not any(
+        Path(part).name in LEVEL_AWARE_SENDERS for part in cmd
+    ):
+        raise NotifyError(
+            f"level {level!r} is feed-only, but the notify command "
+            f"({Path(cmd[-1]).name}) ignores levels and would send it to Telegram. "
+            "Use level='message', or point notify_cmd at notify_suti.py."
         )
     env = {
         **os.environ,

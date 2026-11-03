@@ -425,6 +425,33 @@ def _parse_entries(text: str, fallback_date: str, branch: str) -> list[_Entry]:
     return entries
 
 
+def _entry_instant(e: _Entry) -> datetime:
+    """When an entry was written, as an aware UTC datetime.
+
+    write_entry() stamps a *local* calendar date with a *UTC* clock
+    ("date: 2026-11-03", "time: 23:00:00 UTC"), so the strings don't sort
+    together across UTC midnight. Find the UTC instant whose local date
+    is the stamped date. Entries without a usable time sort at local
+    midnight of their date.
+    """
+    from smriti.daylog.model import day_tz
+
+    try:
+        day = datetime.strptime(e.date, "%Y-%m-%d")
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    m = re.match(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", e.time or "")
+    if not m:
+        return day.replace(tzinfo=day_tz()).astimezone(timezone.utc)
+    clock = day.replace(hour=int(m.group(1)), minute=int(m.group(2)),
+                        second=int(m.group(3) or 0), tzinfo=timezone.utc)
+    for shift in (0, -1, 1):
+        candidate = clock + timedelta(days=shift)
+        if candidate.astimezone(day_tz()).date() == day.date():
+            return candidate
+    return clock
+
+
 def _latest_people(root: Path, n: int) -> list[_Entry]:
     people = root / "people"
     files: list[tuple[str, Path]] = []
@@ -443,7 +470,7 @@ def _latest_people(root: Path, n: int) -> list[_Entry]:
             continue
         branch = path.parent.parent.relative_to(root).as_posix()
         entries.extend(_parse_entries(text, day, branch))
-        entries.sort(key=lambda e: (e.date, e.time), reverse=True)
+        entries.sort(key=_entry_instant, reverse=True)
         if i > 50:
             break
     return entries[:n]
@@ -601,6 +628,27 @@ def _telegram(src: WakeSources) -> _Group:
     return group
 
 
+def _last_exchange(
+    turns: list[tuple[str | None, str]], user: str, assistant: str,
+) -> tuple[str, str | None]:
+    """Suti's latest message and the reply that came *after* it.
+
+    The reply is None when that message is still unanswered. Picking the
+    last of each independently would pin an earlier reply onto a newer,
+    unanswered request. With no message from Suti at all, the latest
+    Narada-initiated line is the reply.
+    """
+    idx = next((i for i in range(len(turns) - 1, -1, -1) if turns[i][0] == user), None)
+    if idx is None:
+        return "", next((t for w, t in reversed(turns) if w == assistant), None)
+    reply = next((t for w, t in turns[idx + 1:] if w == assistant), None)
+    return turns[idx][1], reply
+
+
+def _reply_text(reply: str | None) -> str:
+    return "(no reply yet)" if reply is None else _clip(reply, 120)
+
+
 def _app_chats(src: WakeSources) -> _Group:
     group = _Group("App chat")
     last: datetime | None = None
@@ -619,12 +667,12 @@ def _app_chats(src: WakeSources) -> _Group:
         if ts < src.since:
             continue
         msgs = [m for m in doc.get("messages") or [] if isinstance(m, dict)]
-        said = next((m.get("text") for m in reversed(msgs) if m.get("role") == "user"), "")
-        reply = next((m.get("text") for m in reversed(msgs) if m.get("role") == "assistant"), "")
+        said, reply = _last_exchange(
+            [(m.get("role"), m.get("text") or "") for m in msgs], "user", "assistant")
         title = _clip(doc.get("title") or "untitled", 40)
         group.items.append(_Item(ts, (
-            f"'{title}' ({len(msgs)} msgs): Suti: {_clip(said or '', 160)} -> "
-            f"Narada: {_clip(reply or '', 120)}")))
+            f"'{title}' ({len(msgs)} msgs): Suti: {_clip(said, 160)} -> "
+            f"Narada: {_reply_text(reply)}")))
     if not group.items:
         group.note = _none_since(last)
     return group
@@ -648,12 +696,11 @@ def _voice(src: WakeSources) -> _Group:
         turns = [t for t in turns if t.ts >= src.since]
         if not turns:
             continue
-        said = next((t.text for t in reversed(turns) if t.who == "suti"), "")
-        reply = next((t.text for t in reversed(turns) if t.who == "narada"), "")
+        said, reply = _last_exchange([(t.who, t.text) for t in turns], "suti", "narada")
         room = path.stem[16:] or path.stem
         group.items.append(_Item(turns[-1].ts, (
             f"{room} ({len(turns)} turns): Suti: {_clip(said, 160)} -> "
-            f"Narada: {_clip(reply, 120)}")))
+            f"Narada: {_reply_text(reply)}")))
     if not group.items:
         group.note = _none_since(last)
     return group

@@ -444,3 +444,45 @@ def test_shrink_order_is_journal_first() -> None:
     assert briefing_mod._SHRINK_ORDER[0] == "journal"
     assert "hands" not in briefing_mod._SHRINK_ORDER
     assert "suti" not in briefing_mod._SHRINK_ORDER
+
+
+# ── Cross-review fixes (Codex, 2026-11-03) ──────────────────────────────
+
+
+class TestLastExchange:
+    def test_unanswered_request_is_not_paired_with_an_older_reply(self) -> None:
+        turns = [("user", "log a note"), ("assistant", "logged a note"),
+                 ("user", "cancel meeting")]
+        assert presence._last_exchange(turns, "user", "assistant") == ("cancel meeting", None)
+        assert presence._reply_text(None) == "(no reply yet)"
+
+    def test_reply_after_the_latest_request(self) -> None:
+        turns = [("user", "a"), ("assistant", "old"), ("user", "b"), ("assistant", "new")]
+        assert presence._last_exchange(turns, "user", "assistant") == ("b", "new")
+
+    def test_narada_initiated_only(self) -> None:
+        turns = [("narada", "good morning")]
+        assert presence._last_exchange(turns, "suti", "narada") == ("", "good morning")
+
+
+class TestEntryOrderAcrossUtcMidnight:
+    def test_local_morning_entries_sort_by_real_time(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import smriti.daylog.model as model
+
+        monkeypatch.setattr(model, "day_tz", lambda: timezone(timedelta(hours=10)))
+        nine_am = presence._Entry("2026-11-03", "23:00:00 UTC", "people", "9am", "")
+        eleven_am = presence._Entry("2026-11-03", "01:00:00 UTC", "people", "11am", "")
+        ordered = sorted([nine_am, eleven_am], key=presence._entry_instant, reverse=True)
+        assert [e.title for e in ordered] == ["11am", "9am"]
+        assert presence._entry_instant(nine_am) == datetime(2026, 11, 2, 23, tzinfo=timezone.utc)
+
+    def test_missing_time_sorts_at_local_midnight(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import smriti.daylog.model as model
+
+        monkeypatch.setattr(model, "day_tz", lambda: timezone(timedelta(hours=10)))
+        e = presence._Entry("2026-11-03", "", "people", "t", "")
+        assert presence._entry_instant(e) == datetime(2026, 11, 2, 14, tzinfo=timezone.utc)

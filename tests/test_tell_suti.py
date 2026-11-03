@@ -139,6 +139,26 @@ class TestSend:
         with pytest.raises(NotifyError, match="exit 1"):
             send(cfg, "hi")
 
+    @pytest.mark.parametrize("level", ["log", "warn"])
+    def test_feed_only_level_refused_by_level_blind_command(
+        self, tmp_path: Path, level: str,
+    ) -> None:
+        script = tmp_path / "notify_telegram.py"
+        script.write_text(_FAKE_SENDER, encoding="utf-8")
+        seen = tmp_path / "seen.json"
+        cfg = DaylogConfig(root=tmp_path, notify_cmd=[sys.executable, str(script), str(seen)])
+        with pytest.raises(NotifyError, match="feed-only"):
+            send(cfg, "quiet note", level=level)
+        assert not seen.exists()  # refused before the command ran
+
+    def test_feed_only_level_passes_to_level_aware_sender(self, tmp_path: Path) -> None:
+        script = tmp_path / "notify_suti.py"
+        script.write_text(_FAKE_SENDER, encoding="utf-8")
+        seen = tmp_path / "seen.json"
+        cfg = DaylogConfig(root=tmp_path, notify_cmd=[sys.executable, str(script), str(seen)])
+        send(cfg, "quiet note", level="log")
+        assert json.loads(seen.read_text(encoding="utf-8"))["level"] == "log"
+
     def test_legacy_command_without_report_counts_as_delivered(
         self, fake_cfg, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
