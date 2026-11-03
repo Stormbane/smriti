@@ -69,3 +69,6 @@ memory/
 
 # Added by smriti setup
 .claude/
+
+# Private audit reports (contain personal memory content)
+docs/audits/
