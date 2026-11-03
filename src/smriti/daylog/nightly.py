@@ -153,18 +153,12 @@ def run_nightly(
     except Exception as exc:  # noqa: BLE001
         steps["rollups"] = {"ok": False, "error": str(exc)[:300]}
 
-    # 6. Reindex (smriti index incremental + qmd refresh, best-effort).
+    # 6. Reindex (smriti index, incremental). The qmd refresh that used to
+    # follow was dropped on 2026-11-04: qmd's index had been frozen since
+    # 09-06, `qmd embed` crashed silently on 7 nights, and its only consumer,
+    # the ambient-recall hook, is disabled (plan item 0.1).
     if reindex:
         steps["index"] = _index_with_retries(cfg)
-        try:
-            from smriti.metrics import get_logger
-
-            from smriti.cli import _refresh_recall_index
-
-            _refresh_recall_index(get_logger())
-            steps["recall_refresh"] = {"ok": True}
-        except Exception as exc:  # noqa: BLE001
-            steps["recall_refresh"] = {"ok": False, "error": str(exc)[:300]}
 
     # 7. Witness: commit the tree and timestamp its HEAD, so a rewritten
     # history can't pass unnoticed.
