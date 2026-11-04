@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -48,10 +49,30 @@ def llm_workdir() -> Path:
         tmp = settings.with_name(f"settings.json.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         tmp.write_text(wanted, encoding="utf-8")
         try:
-            tmp.replace(settings)
-        except OSError:
-            # Losing the race is fine if a concurrent call wrote the same file.
+            _replace_with_retry(tmp, settings, wanted)
+        finally:
             tmp.unlink(missing_ok=True)
-            if settings.read_text(encoding="utf-8") != wanted:
-                raise
     return path
+
+
+def _replace_with_retry(tmp: Path, target: Path, wanted: str, attempts: int = 20) -> None:
+    """Atomically install *tmp* as *target*, tolerating concurrent writers.
+
+    On Windows a replace onto a file another thread is replacing or reading
+    fails with "access denied", and so can a read in that instant. Losing
+    the race is success as soon as the target holds the wanted content.
+    """
+    last: OSError | None = None
+    for attempt in range(attempts):
+        try:
+            tmp.replace(target)
+            return
+        except OSError as exc:
+            last = exc
+        try:
+            if target.read_text(encoding="utf-8") == wanted:
+                return
+        except OSError:
+            pass
+        time.sleep(0.01 * (attempt + 1))
+    raise OSError(f"could not install {target}") from last
