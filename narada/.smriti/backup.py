@@ -315,14 +315,16 @@ def spawn_detached(argv: list[str]) -> bool:
     kwargs: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
                     "stderr": subprocess.DEVNULL, "close_fds": True}
     if os.name == "nt":
+        # Breakaway is what escapes a kill-on-close job; DETACHED_PROCESS and a
+        # new process group don't change job membership. If the job forbids
+        # breakaway, report failure so the caller runs in the foreground.
+        # (Outside any job the breakaway flag is simply ignored.)
         detached, new_group, breakaway = 0x00000008, 0x00000200, 0x01000000
-        for flags in (detached | new_group | breakaway, detached | new_group):
-            try:
-                subprocess.Popen(cmd, creationflags=flags, **kwargs)
-                return True
-            except OSError:  # the job may forbid breakaway; try without it
-                continue
-        return False
+        try:
+            subprocess.Popen(cmd, creationflags=detached | new_group | breakaway, **kwargs)
+            return True
+        except OSError:
+            return False
     try:
         subprocess.Popen(cmd, start_new_session=True, **kwargs)
         return True
