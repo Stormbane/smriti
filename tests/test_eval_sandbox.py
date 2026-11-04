@@ -137,7 +137,7 @@ def test_fixture_is_synthetic() -> None:
     assert 15 <= len(files) <= 25
     corpus = "\n".join(p.read_text(encoding="utf-8") for p in files)
     corpus += Path(case_module.__file__).read_text(encoding="utf-8")
-    for forbidden in ("Narada", "Suti", "UTC+10", "bija", "viveka"):
+    for forbidden in ("Narada", "Suti", "bija", "viveka"):
         assert forbidden.lower() not in corpus.lower()
     assert "Ari" in corpus and "Sam" in corpus
     assert len(SEARCH_CASES) >= 12

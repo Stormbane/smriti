@@ -525,3 +525,21 @@ def test_morning_status_scrubs_quoted_and_trailing_secrets(tmp_path: Path, monke
     status = json.loads(status_text)  # still valid JSON
     assert "EXAMPLE1234567890SECRET" not in status_text
     assert [a["provider"] for a in status["llm_attempts"]] == ["claude_cli", "codex_cli"]
+
+
+def test_morning_location_comes_from_private_config(tmp_path: Path) -> None:
+    import importlib
+    import json
+
+    from smriti.daylog.config import load_config
+
+    morning = importlib.import_module("smriti.daylog.morning")
+    assert load_config(tmp_path).location == ""
+    assert "{" not in morning._system_prompt("")
+    (tmp_path / ".smriti").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".smriti" / "daylog.json").write_text(
+        json.dumps({"location": "  Lisbon, Portugal "}), encoding="utf-8")
+    cfg = load_config(tmp_path)
+    assert cfg.location == "Lisbon, Portugal"
+    prompt = morning._system_prompt(cfg.location)
+    assert "(in Lisbon, Portugal)" in prompt and "tech/AI, Lisbon, Portugal" in prompt

@@ -33,6 +33,9 @@ class DaylogConfig:
     root: Path
     sources: list[SourceSpec] = field(default_factory=list)
     notify_cmd: list[str] = field(default_factory=list)
+    # Where the user lives, for the morning message's local news (e.g.
+    # "Lisbon, Portugal"). Set in the private .smriti/daylog.json, never in code.
+    location: str = ""
 
     @property
     def log_dir(self) -> Path:
@@ -115,4 +118,7 @@ def load_config(root: Path | None = None) -> DaylogConfig:
     notify = raw.get("notify_cmd")
     if isinstance(notify, list) and all(isinstance(x, str) for x in notify):
         cfg.notify_cmd = notify
+    location = raw.get("location")
+    if isinstance(location, str):
+        cfg.location = location.strip()
     return cfg

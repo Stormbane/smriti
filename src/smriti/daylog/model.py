@@ -1,7 +1,7 @@
 """Turn model, stable identities, and event-time day placement.
 
-The day boundary uses a fixed UTC offset (default +10:00, 
-UTC+10, no DST) rather than a tz database: the base install carries
+The day boundary uses a fixed UTC offset (default +10:00, no DST)
+rather than a tz database: the base install carries
 no runtime dependencies and Windows has no system tzdata. Override with
 ``SMRITI_DAY_UTC_OFFSET`` (hours, may be fractional).
 """

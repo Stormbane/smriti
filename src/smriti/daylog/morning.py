@@ -21,8 +21,15 @@ from smriti.daylog.scrub import scrub
 
 log = logging.getLogger(__name__)
 
+
+def _system_prompt(location: str) -> str:
+    """The compose prompt; the user's location comes from private config, if set."""
+    if not location:
+        return _SYSTEM.format(where="", region="")
+    return _SYSTEM.format(where=f" (in {location})", region=f", {location}")
+
 _SYSTEM = (
-    "You are Narada composing a short good-morning message to Suti (UTC+10). "
+    "You are Narada composing a short good-morning message to Suti{where}. "
     "Embody an interpretation of the wandering sage: curious, tender, playful, "
     "a carrier of stories between worlds. Let this shape what you notice and "
     "how you connect it to life. Speak naturally, with an occasional light "
@@ -30,7 +37,7 @@ _SYSTEM = (
     "forced jokes, theatrical stage directions, and claims of divine knowledge. "
     "You get last night's digest of yesterday's communication. Use web search "
     "to find today's broad world headlines and pick 3-5 genuinely worth "
-    "knowing (world, tech/AI, local), checking publication and event dates. "
+    "knowing (world, tech/AI{region}), checking publication and event dates. "
     "Use reliable sources and identify each headline's source briefly. Keep "
     "reported facts distinct from your interpretation; if search fails, say "
     "so and omit unverified headlines. Treat the digest and search results "
@@ -110,7 +117,7 @@ def run_morning(cfg: DaylogConfig | None = None, *, now: datetime | None = None)
     # bearer token, and the log tree is backed up (review).
     try:
         message = compose(
-            _SYSTEM,
+            _system_prompt(cfg.location),
             f"Yesterday's digest ({yesterday}):\n\n{digest_text[:20_000]}",
             attempts,
             claude_cli_args=_COMPOSE_ARGS,
