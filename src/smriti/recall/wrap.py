@@ -26,7 +26,7 @@ not load-bearing for the tool call.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from smriti.recall.runner import run_recall

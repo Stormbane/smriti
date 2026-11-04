@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from smriti.store.judge import CallMetadata, _call_claude, executor_via_claude
+from smriti.store.judge import CallMetadata, executor_via_claude
 
 log = logging.getLogger(__name__)
 

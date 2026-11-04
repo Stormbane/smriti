@@ -26,7 +26,7 @@ from typing import Callable
 
 import numpy as np
 
-from smriti.store.judge import CallMetadata, _get_claude_path, executor_via_claude
+from smriti.store.judge import executor_via_claude
 
 log = logging.getLogger(__name__)
 

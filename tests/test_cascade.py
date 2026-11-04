@@ -9,7 +9,6 @@ import pytest
 from smriti.store.cascade import (
     cognitive_cascade,
     find_upstream_references,
-    queue_cognitive_cascade,
     structural_cascade,
 )
 from smriti.store.judge import (

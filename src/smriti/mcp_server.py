@@ -687,7 +687,7 @@ def handle_propose_goal_shift(arguments: dict) -> str:
     Lives in outbox/ (not inbox/) so consolidate never ingests Narada's
     own proposals as if they were external research.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from smriti.core.tree import tree_root
 
@@ -735,7 +735,7 @@ def handle_write_handoff(arguments: dict) -> str:
     """
     import os
     import time
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from smriti.core.tree import tree_root
 
@@ -931,7 +931,7 @@ def _known_projects() -> list[str]:
 
 def handle_record_finding(arguments: dict) -> str:
     """Write {date}-{slug}.md under mirrors/{project}/findings/."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     project = arguments.get("project", "").strip()
     title = arguments.get("title", "").strip()
@@ -960,7 +960,7 @@ def handle_record_finding(arguments: dict) -> str:
 
     fm_lines = [
         "---",
-        f"type: finding",
+        "type: finding",
         f"project: {project}",
         f"date: {date_str}",
     ]
@@ -1037,7 +1037,7 @@ def handle_record_finding(arguments: dict) -> str:
 
 def handle_record_decision(arguments: dict) -> str:
     """Write {date}-{slug}.md under mirrors/{project}/decisions/."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     project = arguments.get("project", "").strip()
     title = arguments.get("title", "").strip()
@@ -1087,7 +1087,7 @@ def handle_record_decision(arguments: dict) -> str:
 
 def handle_record_feature(arguments: dict) -> str:
     """Open a feature spec at {project}/.ai/features/active/{slug}.md."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     project = arguments.get("project", "").strip()
     slug = arguments.get("slug", "").strip()
@@ -1152,7 +1152,7 @@ def handle_record_feature(arguments: dict) -> str:
 
 def handle_update_feature_status(arguments: dict) -> str:
     """Move a feature between active/shipped/abandoned and update frontmatter."""
-    from datetime import datetime, timezone
+    from datetime import datetime
     import re as _re
 
     project = arguments.get("project", "").strip()

@@ -19,6 +19,7 @@ MEMORY.md is flagged for human review (trunk-level, never auto-applied).
 
 from __future__ import annotations
 
+import os as _os
 import logging
 import re
 from pathlib import Path
@@ -33,7 +34,6 @@ log = logging.getLogger(__name__)
 # Files that require human review — cascade PROMOTEs, never REVISEs.
 # The heartbeat and smriti's auto-cascade must not write to these.
 # Override via the NARADA_PROTECTED_FILES env var (comma-separated filenames).
-import os as _os
 
 _DEFAULT_PROTECTED_FILES = frozenset({
     "MEMORY.md", "identity.md", "manifest.md", "mind.md", "suti.md",

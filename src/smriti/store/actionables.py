@@ -27,11 +27,10 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from smriti.core.tree import tree_root
 from smriti.store.judge import summarize_via_claude
 
 log = logging.getLogger(__name__)
@@ -663,10 +662,10 @@ def _run_stage_c(
         pass
     if not line:
         # Fall back to first non-empty line
-        for l in raw.strip().splitlines():
-            l = l.strip()
-            if l and not l.startswith("{") and not l.startswith("}"):
-                line = l
+        for candidate in raw.strip().splitlines():
+            candidate = candidate.strip()
+            if candidate and not candidate.startswith(("{", "}")):
+                line = candidate
                 break
     if not line:
         return None, exec_meta
@@ -747,7 +746,7 @@ def _append_proposal(proposals_path: Path, actionable: Actionable, source_rel: s
         f"Source: [[{source_rel}]]  ",
         f"Kind: {actionable.kind}\n",
         f"\n{actionable.rationale}\n",
-        f"\nProposed action:",
+        "\nProposed action:",
         f"\n> {actionable.todo_line}\n",
     ]
     proposals_path.parent.mkdir(parents=True, exist_ok=True)

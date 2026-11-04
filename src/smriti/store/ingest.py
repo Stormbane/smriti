@@ -16,12 +16,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from smriti.store.judge import CallMetadata, executor_via_claude
+from smriti.store.judge import executor_via_claude
 from smriti.store.router import (
     RoutingResult,
     execute_routing_actions,
     route,
-    routing_judge_via_claude,
 )
 
 log = logging.getLogger(__name__)

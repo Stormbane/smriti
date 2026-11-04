@@ -161,8 +161,8 @@ def _delete_source(conn: sqlite3.Connection, source: str) -> None:
             )
         # FTS triggers handle deletion automatically via AFTER DELETE trigger
         conn.execute(
-            f"DELETE FROM chunks WHERE rowid IN ("
-            f"SELECT rowid FROM chunks WHERE source = ?)",
+            "DELETE FROM chunks WHERE rowid IN ("
+            "SELECT rowid FROM chunks WHERE source = ?)",
             (source,),
         )
 

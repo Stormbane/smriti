@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -176,7 +175,7 @@ class TestMCPServerProtocol:
             env={**__import__("os").environ, **env},
             timeout=30,
         )
-        lines = [l for l in result.stdout.strip().splitlines() if l.strip()]
+        lines = [ln for ln in result.stdout.strip().splitlines() if ln.strip()]
         for line in lines:
             try:
                 parsed = json.loads(line)

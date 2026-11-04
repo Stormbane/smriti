@@ -62,7 +62,7 @@ def test_read_source_empty_directory(tmp_path: Path):
 
 def _stub_executor(parent: str, direction: str, child: str, prompt_path=None) -> str:
     """Test executor that returns a simple summary."""
-    return f"# Summary\n\nThis is a summary of the source material.\n"
+    return "# Summary\n\nThis is a summary of the source material.\n"
 
 
 def _stub_routing_judge_with_link(content, candidates, prompt_path=None):
@@ -127,7 +127,7 @@ def test_ingest_dry_run_does_not_execute(tmp_path: Path):
             )])
         return RoutingResult()
 
-    result = ingest(
+    ingest(
         str(source),
         root=tree_root,
         dry_run=True,

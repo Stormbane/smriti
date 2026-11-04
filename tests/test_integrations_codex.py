@@ -21,7 +21,6 @@ from smriti.integrations.common.hook_model import (
     parse_wake_command,
 )
 from smriti.integrations.common.managed_doc import (
-    MANAGED_BEGIN,
     classify_doc,
 )
 

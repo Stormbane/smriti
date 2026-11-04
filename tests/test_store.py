@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -11,7 +9,7 @@ import pytest
 from smriti.core.tree import trunk_distance
 from smriti.store.indexer import index_tree
 from smriti.store.schema import ensure_schema
-from smriti.store.search import SearchResult, search
+from smriti.store.search import search
 
 
 @pytest.fixture()

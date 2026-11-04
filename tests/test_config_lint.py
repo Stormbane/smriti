@@ -44,7 +44,7 @@ class TestNoDeprecatedMemoryPaths:
     def test_claude_md_clean(self) -> None:
         path = CLAUDE_DIR / "CLAUDE.md"
         hits = _scan_file(path)
-        assert not hits, f"~/.claude/CLAUDE.md references deprecated paths:\n" + "\n".join(
+        assert not hits, "~/.claude/CLAUDE.md references deprecated paths:\n" + "\n".join(
             f"  L{n}: {line}" for n, line in hits
         )
 
@@ -53,7 +53,7 @@ class TestNoDeprecatedMemoryPaths:
         if not path.exists():
             pytest.skip("settings.json not found")
         hits = _scan_file(path)
-        assert not hits, f"settings.json references deprecated paths:\n" + "\n".join(
+        assert not hits, "settings.json references deprecated paths:\n" + "\n".join(
             f"  L{n}: {line}" for n, line in hits
         )
 
@@ -75,7 +75,7 @@ class TestNoDeprecatedMemoryPaths:
     def test_reflect_skill_clean(self) -> None:
         path = CLAUDE_DIR / "skills" / "reflect" / "SKILL.md"
         hits = _scan_file(path)
-        assert not hits, f"reflect SKILL.md references deprecated paths:\n" + "\n".join(
+        assert not hits, "reflect SKILL.md references deprecated paths:\n" + "\n".join(
             f"  L{n}: {line}" for n, line in hits
         )
 

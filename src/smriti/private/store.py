@@ -228,14 +228,13 @@ class PrivateStore:
             )
 
         try:
-            from cryptography.fernet import InvalidToken
 
             fernet = self._load_fernet()
             ciphertext = path.read_bytes()
             plaintext = fernet.decrypt(ciphertext)
             return plaintext.decode("utf-8")
         except Exception as e:  # pragma: no cover
-            # noqa: catches InvalidToken + FileNotFoundError + others
+            # Catches InvalidToken, FileNotFoundError and anything else.
             self.audit.log_failure(
                 operation="read",
                 path=path,
