@@ -227,6 +227,53 @@ def _journal_block(memory_root: Path, n_entries: int) -> _Block | None:
     return _Block("journal", full, render_fn=render)
 
 
+HANDOFF_FILE = "handoff-pending.md"
+HANDOFF_CAP = 2000
+
+
+def pending_handoff(memory_root: Path) -> tuple[Path, str] | None:
+    """The letter the last session left with ``smriti_write_handoff``, if any."""
+    path = memory_root / ".smriti" / HANDOFF_FILE
+    text = _read(path)
+    return (path, text) if text and text.strip() else None
+
+
+def consume_handoff(memory_root: Path, shown: str) -> Path | None:
+    """Archive the pending handoff once it has been shown, so it's shown once.
+
+    Only the real session-start path calls this (``wake_runner.run``):
+    previews and tests render the briefing without consuming. ``shown`` is
+    the text that was rendered; a letter rewritten since then is left for
+    the next session instead of being archived unseen. Returns the archive
+    path, or None if there was nothing (or nothing unchanged) to archive.
+    """
+    pending = pending_handoff(memory_root)
+    if pending is None or pending[1] != shown:
+        return None
+    path = pending[0]
+    archive = memory_root / ".smriti" / "handoff-consumed"
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+    target = archive / f"{stamp}.md"
+    try:
+        archive.mkdir(parents=True, exist_ok=True)
+        os.replace(path, target)
+    except OSError:
+        return None  # another session's wake got there first
+    return target
+
+
+def _handoff_block(memory_root: Path) -> _Block | None:
+    pending = pending_handoff(memory_root)
+    if pending is None:
+        return None
+    path, text = pending
+    body = text.strip()
+    if len(body) > HANDOFF_CAP:
+        body = _cut(body, HANDOFF_CAP) + f"\n(full letter: {path})"
+    head = "--- HANDOFF from your last session (shown once, then archived) ---\n"
+    return _Block("handoff", head + body + "\n", pinned=True)
+
+
 def _nightly_line(memory_root: Path) -> str:
     """One 'while you slept' line from the last nightly run.
 
@@ -417,6 +464,9 @@ def briefing(
         head = f"--- SESSION: {cwd_path} (no project mirror) ---\n"
 
     blocks: list[_Block] = [_Block("header", head, pinned=True)]
+    handoff = _handoff_block(memory_root)
+    if handoff is not None:
+        blocks.append(handoff)
     blocks += _context_blocks(memory_root, audience)
     nightly = _nightly_line(memory_root)
     if nightly:

@@ -107,6 +107,7 @@ def run(
 
     try:
         from smriti.wake import briefing
+        from smriti.wake.briefing import consume_handoff, pending_handoff
     except ImportError:
         # smriti not on path; fail silent so we never block the session.
         return 0
@@ -114,10 +115,16 @@ def run(
     audience = os.environ.get("SMRITI_WAKE_AUDIENCE", "coding").strip() or "coding"
     # The Hands section reads the calling harness's MCP config.
     harness = "codex" if framing == "codex-json" else "claude"
+    handoff = pending_handoff(entity_root)
     payload = briefing(
         memory_root=entity_root, cwd=Path(os.getcwd()), audience=audience, harness=harness,
     )
     sys.stdout.write(_frame(payload, framing))
+    sys.stdout.flush()
+    # The handoff letter is shown once: archive it only after the briefing
+    # carrying it has been written out (and only if it wasn't rewritten).
+    if handoff is not None and "--- HANDOFF from your last session" in payload:
+        consume_handoff(entity_root, handoff[1])
     return 0
 
 

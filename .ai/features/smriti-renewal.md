@@ -103,7 +103,7 @@ Each commit was diff-reviewed by the other model (Codex for Claude's work, Claud
 - the working self `wake-context.md` got a date stamp and a "Now" section, and is tracked in git for the first time.
 
 **Gaps found by the docs pass (open):**
-- nothing reads `.smriti/handoff-pending.md`;
+- ~~nothing reads `.smriti/handoff-pending.md`~~ fixed: the wake shows it once, then archives it;
 - `wake-context.md` is still rebuilt only by the parked pipeline;
 - MCP registration doesn't carry the memory root;
 - `wake.md` is obsolete.
