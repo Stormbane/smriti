@@ -1,5 +1,9 @@
 # smriti Architecture
 
+> **This is the April 2026 design, and much of it is parked.** The six-step pipeline (EXTRACT → JUDGE → CROSSLINK), the cognitive cascade, ingest, consolidation, the semantic wiki and the task queue don't run; they are reachable only through `smriti sleep --deep` and the other parked commands (`ingest`, `queue`, `daemon`, `watch`, `merge-concepts`), and are slated for removal. The "Implementation status (2026-04-15)" list below is out of date, and the working spec is now the renewal plan, not svapna.
+>
+> For what runs today, read [What runs today](../README.md#what-runs-today) in the README. For the wake briefing, the self files and how the self changes, read [SELF.md](SELF.md). The current state and plan are in [`.ai/features/smriti-renewal.md`](../.ai/features/smriti-renewal.md). The rest of this document is unchanged and kept for its reasoning.
+
 **Status**: Design document, synchronized from the svapna reference
 implementation at `svapna/.ai/knowledge/memory-architecture.md`. When the
 two drift, svapna is the working spec and this document follows. Once smriti
