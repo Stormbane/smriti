@@ -86,26 +86,36 @@ def test_session_start_consumes_after_printing(tmp_path: Path, monkeypatch: pyte
     assert len(list((root / ".smriti" / "handoff-consumed").glob("*.md"))) == 1
 
 
-def test_a_busy_lock_leaves_the_letter_for_the_next_wake(tmp_path: Path) -> None:
+def test_a_held_lock_leaves_the_letter_for_the_next_wake(tmp_path: Path) -> None:
+    from smriti.wake.briefing import handoff_lock
+
     root = _root(tmp_path)
     _write(root)
-    (root / ".smriti" / ".handoff.lock").write_text("123", encoding="ascii")
     shown = pending_handoff(root)
     assert shown is not None
-    assert consume_handoff(root, shown[1]) is None
+    with handoff_lock(root) as held:
+        assert held
+        assert consume_handoff(root, shown[1]) is None  # waits, then gives up
     assert pending_handoff(root) is not None
+    assert consume_handoff(root, shown[1]) is not None  # free again
 
 
-def test_a_stale_lock_is_broken(tmp_path: Path) -> None:
-    import os
-    import time
+def test_a_crashed_holder_cannot_leave_the_lock_stuck(tmp_path: Path) -> None:
+    """The OS releases the lock when its owner exits, however it exits."""
+    import subprocess
+    import sys
 
     root = _root(tmp_path)
     _write(root)
-    lock = root / ".smriti" / ".handoff.lock"
-    lock.write_text("123", encoding="ascii")
-    old = time.time() - 120
-    os.utime(lock, (old, old))
+    code = "\n".join([
+        "import importlib, os, sys",
+        "from pathlib import Path",
+        "b = importlib.import_module('smriti.wake.briefing')",
+        "with b.handoff_lock(Path(sys.argv[1])) as held:",
+        "    assert held",
+        "    os._exit(0)  # die holding it, no cleanup",
+    ])
+    subprocess.run([sys.executable, "-c", code, str(root)], check=True, timeout=60)
     shown = pending_handoff(root)
     assert shown is not None and consume_handoff(root, shown[1]) is not None
 

@@ -763,11 +763,12 @@ def handle_write_handoff(arguments: dict) -> str:
 
     body = "# Handoff to next session\n\n" + content.rstrip() + "\n"
     # Under the handoff lock the wake shares, and atomically, so a wake never
-    # archives a letter it didn't show or reads a half-written one. A busy
-    # lock doesn't stop the write: losing the letter would be worse.
+    # archives a letter it didn't show or reads a half-written one.
     from smriti.wake.briefing import handoff_lock
 
-    with handoff_lock(root, wait_s=5.0):
+    with handoff_lock(root, wait_s=5.0) as held:
+        if not held:
+            return "Error: a session is reading the handoff right now; nothing was written. Try again."
         tmp = path.with_name(f".handoff-write-{os.getpid()}.tmp")
         tmp.write_text(fm + body, encoding="utf-8")
         # On Windows a replace fails while a wake is reading the old letter;

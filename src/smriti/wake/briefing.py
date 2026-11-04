@@ -29,7 +29,6 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -241,8 +240,6 @@ def pending_handoff(memory_root: Path) -> tuple[Path, str] | None:
     return (path, text) if text and text.strip() else None
 
 
-HANDOFF_LOCK = ".handoff.lock"
-HANDOFF_LOCK_STALE_S = 30  # held for milliseconds; older than this, its owner is gone
 _WRITTEN_RE = re.compile(r"^written:\s*(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})", re.MULTILINE)
 
 
@@ -250,38 +247,14 @@ _WRITTEN_RE = re.compile(r"^written:\s*(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(
 def handoff_lock(memory_root: Path, wait_s: float = 2.0) -> Iterator[bool]:
     """Serialise handoff writers (smriti_write_handoff) and consumers (the wake).
 
-    Yields True when the lock is held. If it can't be taken within
-    ``wait_s``, yields False: the caller decides (the wake then leaves the
-    letter for next time; the writer writes anyway rather than lose it).
+    An OS-level lock (``smriti.core.oslock``), so a crashed holder can't leave
+    it stuck. Yields True when held; callers must honour False: the wake then
+    leaves the letter for next time, and the writer reports it couldn't write.
     """
-    lock = memory_root / ".smriti" / HANDOFF_LOCK
-    deadline = time.monotonic() + wait_s
-    held = False
-    while True:
-        try:
-            lock.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode("ascii"))
-            os.close(fd)
-            held = True
-            break
-        except FileExistsError:
-            try:
-                if time.time() - lock.stat().st_mtime > HANDOFF_LOCK_STALE_S:
-                    lock.unlink(missing_ok=True)
-                    continue
-            except OSError:
-                continue
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(0.05)
-        except OSError:
-            break
-    try:
+    from smriti.core.oslock import exclusive_lock, lock_path
+
+    with exclusive_lock(lock_path("handoff", str(memory_root.resolve())), wait_s) as held:
         yield held
-    finally:
-        if held:
-            lock.unlink(missing_ok=True)
 
 
 def handoff_archive_path(memory_root: Path, text: str) -> Path:
