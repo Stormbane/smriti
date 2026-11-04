@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A memory system for AI entities, grounded in the antahkarana model of mind."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "TBD" }
+license = { text = "MIT" }
 authors = [
     { name = "Suti" },
     { name = "Narada" },
@@ -17,6 +17,7 @@ keywords = ["memory", "ai", "agent", "rag", "identity", "vedanta", "antahkarana"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
