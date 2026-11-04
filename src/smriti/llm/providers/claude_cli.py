@@ -14,6 +14,8 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
+from pathlib import Path
 
 from smriti.llm.types import LLMError, LLMRequest, LLMResponse, RateLimitExceeded
 
@@ -63,10 +65,7 @@ class ClaudeCliProvider:
                 lines.append(f"{tag}: {m.content}")
             lines.append("Assistant:")
             user_block = "\n\n".join(lines)
-        prompt = (
-            f"{request.system}\n\n{user_block}"
-            if request.system else user_block
-        )
+        prompt = user_block
         timeout = request.timeout_s or int(
             os.environ.get("NARADA_CLAUDE_TIMEOUT", "300")
         )
@@ -108,6 +107,27 @@ class ClaudeCliProvider:
         except OSError as exc:
             raise LLMError(f"cannot create isolated LLM workdir: {exc}") from exc
 
+        # Isolation (renewal plan 0.4). The nightly audit found every internal
+        # call carrying the user's global CLAUDE.md and its hooks (a "SESSION
+        # ENDING ... MUST smriti_write" prompt hook, a Stop hook), which made
+        # digests open with preambles instead of content. --setting-sources
+        # drops user settings and their hooks; the workdir's own settings file
+        # (llm_workdir) excludes every CLAUDE.md; and smriti's instructions
+        # become the actual system prompt instead of riding in the user turn
+        # under Claude Code's agentic one. The file form is needed because
+        # cmd.exe would cut a multi-line argv value at its first newline.
+        cmd.extend(["--setting-sources", "project,local"])
+        if "--strict-mcp-config" not in cmd:  # user-scope MCP servers load regardless of settings
+            cmd.append("--strict-mcp-config")
+        sys_file: Path | None = None
+        if request.system:
+            sys_file = Path(workdir) / f".system-{uuid.uuid4().hex}.txt"
+            try:
+                sys_file.write_text(request.system, encoding="utf-8")
+            except OSError as exc:
+                raise LLMError(f"cannot write the system prompt file: {exc}") from exc
+            cmd.extend(["--system-prompt-file", str(sys_file)])
+
         def _spawn() -> subprocess.CompletedProcess:
             return subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout,
@@ -129,6 +149,9 @@ class ClaudeCliProvider:
                     )
         except subprocess.TimeoutExpired as exc:
             raise LLMError(f"claude -p timed out after {timeout}s") from exc
+        finally:
+            if sys_file is not None:
+                sys_file.unlink(missing_ok=True)
 
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 

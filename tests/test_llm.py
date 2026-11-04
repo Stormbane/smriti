@@ -9,6 +9,7 @@ those need integration tests with VCR or live keys.
 
 from __future__ import annotations
 
+import os
 import pytest
 
 from smriti.llm import (
@@ -243,6 +244,10 @@ def test_claude_cli_pipes_prompt_via_stdin_never_argv(monkeypatch, tmp_path):
     def fake_run(cmd, **kw):
         seen["cmd"] = cmd
         seen["input"] = kw.get("input")
+        if "--system-prompt-file" in cmd:
+            path = cmd[cmd.index("--system-prompt-file") + 1]
+            with open(path, encoding="utf-8") as f:
+                seen["system"] = f.read()
         return subprocess.CompletedProcess(
             cmd, 0, stdout=_json.dumps({"result": "ok"}), stderr="")
 
@@ -259,5 +264,53 @@ def test_claude_cli_pipes_prompt_via_stdin_never_argv(monkeypatch, tmp_path):
     cmd = seen["cmd"]
     assert cmd[:4] == ["claude.cmd", "-p", "--output-format", "json"]
     assert not any("\n" in part for part in cmd), "prompt leaked into argv"
-    assert cmd[-3:] == ["--strict-mcp-config", "--allowedTools", "WebSearch"]
-    assert seen["input"] == "Sys line\n\nshort\nmulti-line\nprompt"
+    i = cmd.index("--strict-mcp-config")
+    assert cmd[i:i + 3] == ["--strict-mcp-config", "--allowedTools", "WebSearch"]
+    assert seen["input"] == "short\nmulti-line\nprompt"
+
+
+def test_claude_cli_isolates_internal_calls(monkeypatch, tmp_path):
+    """Internal calls read only the workdir's settings (no user CLAUDE.md or
+    hooks), and the system text is the real system prompt, given through a
+    file that is removed after the call."""
+    import json as _json
+    import subprocess
+
+    from smriti.llm.providers import claude_cli as mod
+    from smriti.llm.types import LLMRequest
+
+    seen: dict = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        path = cmd[cmd.index("--system-prompt-file") + 1]
+        with open(path, encoding="utf-8") as f:
+            seen["system"], seen["path"] = f.read(), path
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=_json.dumps({"result": "ok"}), stderr="")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "claude.cmd")
+    monkeypatch.setattr("smriti.llm.workdir.llm_workdir", lambda: tmp_path)
+
+    mod.ClaudeCliProvider().call(LLMRequest(system="Line one\nline two", user="hi"))
+
+    cmd = seen["cmd"]
+    s = cmd.index("--setting-sources")
+    assert cmd[s + 1] == "project,local"
+    assert cmd.count("--strict-mcp-config") == 1
+    assert seen["system"] == "Line one\nline two"
+    assert not os.path.exists(seen["path"]), "system prompt file left behind"
+
+
+def test_llm_workdir_carries_the_isolation_settings(tmp_path, monkeypatch):
+    import json as _json
+
+    from smriti.llm import workdir
+
+    monkeypatch.setattr(workdir, "tree_root", lambda: tmp_path)
+    path = workdir.llm_workdir()
+    settings = _json.loads((path / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    assert settings["claudeMdExcludes"] == ["**/CLAUDE.md"]
+    assert settings["disableAllHooks"] is True
+    assert settings["autoMemoryEnabled"] is False

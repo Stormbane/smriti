@@ -12,12 +12,37 @@ sandboxed fallbacks an empty view of the filesystem.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from smriti.core.tree import tree_root
+
+# Project settings for internal `claude -p` runs, which pass
+# `--setting-sources project,local` so this file is the only settings they
+# read. It keeps out every CLAUDE.md (including the user-global one, which
+# loads as user memory unless excluded by a glob), the harness's auto-memory
+# index (claudeMdExcludes doesn't cover it), and any hooks. Verified on
+# Claude Code 2.1.283: the run's transcript has no instruction, MCP or hook
+# records, and the system prompt is the one smriti passes.
+ISOLATION_SETTINGS = {
+    "claudeMdExcludes": ["**/CLAUDE.md"],
+    "autoMemoryEnabled": False,
+    "disableAllHooks": True,
+}
 
 
 def llm_workdir() -> Path:
     path = tree_root() / ".smriti" / "llm-workdir"
     path.mkdir(parents=True, exist_ok=True)
+    settings = path / ".claude" / "settings.json"
+    wanted = json.dumps(ISOLATION_SETTINGS, indent=2) + "\n"
+    try:
+        current = settings.read_text(encoding="utf-8")
+    except OSError:
+        current = None
+    if current != wanted:
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        tmp = settings.with_suffix(".json.tmp")
+        tmp.write_text(wanted, encoding="utf-8")
+        tmp.replace(settings)
     return path
