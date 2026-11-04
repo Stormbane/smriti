@@ -5,6 +5,34 @@
      the codebase. Session-level task tracking uses Claude Code's TaskCreate.
      Format: ## Milestone Name / - [ ] Task description / - [x] Completed task -->
 
+## Next up (chosen 2026-11-04; plan: .ai/features/smriti-renewal.md, Phase 7)
+
+Not started. The renewal plan's Phase 1.0 groundwork (run lock, generation
+publish, per-lens scheduling) comes before any new nightly lens.
+
+- [ ] **Intentions (prospective memory).** Promises, follow-ups and repairs
+      as typed cue → intention records (`intentions/events.jsonl`), written
+      with a `smriti_intend` tool and matched deterministically (time,
+      project, person, topic) in a pinned wake section. An intention shown
+      twice without being closed is marked lapsed and counted, never dropped.
+      Evidence: a typed intention store far outperforms model-held promises.
+- [ ] **A wake that recognises.** A "since you last woke" section built from
+      the agent's own commits, writes and changed self files, plus the age of
+      each self file with an alarm at 90 days unchanged. (Handoff letters
+      are already shown once, then archived: done 2026-11-04.)
+- [ ] **Living interests.** Interest records backed by episodes
+      (`mind/interests/events.jsonl`, a `smriti_interest` tool), with
+      activation, phases and dormancy, rendered in a wake section. Interests
+      without evidence show as "declared". Loves are a rendered view, never
+      a free-text claim.
+- [ ] **The self-change protocol** (plan 7.3: layers E0-E4, one
+      `smriti_self_change` tool, cold re-reads, reaffirmation, floors as well
+      as ceilings). Cross-review the spec with Codex before building it.
+- [ ] Move `backup.py`'s run lock to `smriti.core.oslock` (an OS-level lock,
+      released on crash), as the handoff lock already is.
+- [ ] Isolate the Codex fallback seat (dedicated `CODEX_HOME`, no AGENTS.md,
+      hooks, plugins or MCP), as the Claude seat already is (plan 0.4).
+
 ## Nightly cycle (spec: .ai/features/nightly-cycle.md) — top of stack
 
 - [x] Capture core: per-source adapters (claude_jsonl incl. Telegram,

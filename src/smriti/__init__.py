@@ -7,4 +7,4 @@ vector + keyword retrieval. Install with ``pip install -e ".[read]"`` for
 the full pipeline (sqlite-vec + onnxruntime).
 """
 
-__version__ = "0.1.0-dev"
+__version__ = "0.1.0"
