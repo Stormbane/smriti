@@ -17,7 +17,6 @@ import logging
 import sqlite3
 import struct
 from dataclasses import dataclass
-from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +58,58 @@ def _normalize(scores: list[float]) -> list[float]:
     if hi == lo:
         return [1.0] * len(scores)
     return [(s - lo) / (hi - lo) for s in scores]
+
+
+FTS_MAX_TERMS = 12
+
+_STOPWORDS = frozenset("""
+a an the and or but if then else of to in on at by for with from into onto is are was were be
+been being do does did have has had i you he she it we they me my your our their this that
+these those there here what which who whom how why when where can could would should will shall
+may might must not no yes so just also very please let lets ok okay im its dont youre about as
+up out over all any some more most than too now again get got make made want need like use using
+""".split())
+
+
+def fts_terms(conn: object, query: str, k: int = FTS_MAX_TERMS) -> list[str]:
+    """The query's keyword terms for FTS5: deduplicated, stopwords dropped, rarest *k* kept.
+
+    ORing every word of a long prompt made FTS5 rank most of the index: p90
+    13 s on real prompts, against 31 ms with the 12 rarest terms (retrieval
+    eval, 2026-11-04). Rarity comes from a temp-schema fts5vocab table, so a
+    read-only connection works and index.db is never modified. Each token
+    loses non-alphanumerics, because FTS5 chokes on ` ' . : ( ) *.
+    """
+    import re
+
+    raw = [re.sub(r"[^A-Za-z0-9_]", "", t) for t in query.strip().split()]
+    raw = [t for t in raw if t]
+    seen: set[str] = set()
+    content: list[str] = []
+    for t in raw:
+        tl = t.lower()
+        if len(tl) >= 3 and tl not in _STOPWORDS and tl not in seen:
+            seen.add(tl)
+            content.append(tl)
+    if not content:  # all stopwords or short tokens: still search, just bounded
+        return list(dict.fromkeys(t.lower() for t in raw))[:k]
+    if len(content) <= k:
+        return content
+    try:
+        conn.execute(  # type: ignore[attr-defined]
+            "CREATE VIRTUAL TABLE IF NOT EXISTS temp.chunks_fts_vocab "
+            "USING fts5vocab(main, chunks_fts, 'row')"
+        )
+        df = {}
+        for t in content:
+            row = conn.execute(  # type: ignore[attr-defined]
+                "SELECT doc FROM temp.chunks_fts_vocab WHERE term = ?", (t,)
+            ).fetchone()
+            df[t] = row[0] if row else 0
+    except sqlite3.Error:
+        return content[:k]
+    present = [t for t in content if df[t] > 0]  # absent terms can't match anything
+    return sorted(present, key=lambda t: (df[t], t))[:k] or content[:k]
 
 
 def search(
@@ -142,10 +193,7 @@ def search(
             # We strip every non-alphanumeric char from each token before
             # quoting so a query like "claude -p 120s syntax" or content
             # with `e.g.` / `it's` can't break the parser.
-            import re as _re
-            terms = query.strip().split()
-            sanitized = [_re.sub(r"[^A-Za-z0-9_]", "", t) for t in terms]
-            fts_query = " OR ".join(f'"{t}"' for t in sanitized if t)
+            fts_query = " OR ".join(f'"{t}"' for t in fts_terms(conn, query))
             if fts_query:
                 rows = conn.execute(
                     """SELECT rowid, rank
