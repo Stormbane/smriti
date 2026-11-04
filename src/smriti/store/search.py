@@ -263,11 +263,15 @@ def search(
 
     # ── Combined scoring ─────────────────────────────────────────────
     scored: list[tuple[int, float, dict]] = []
+    # Without a vector leg, keyword relevance takes the vector weight too, so
+    # scores stay on the same 0-1 scale and callers' thresholds still mean
+    # the same thing (otherwise nothing below the root could exceed 0.4).
+    fts_weight = FTS_WEIGHT if has_vec else FTS_WEIGHT + VEC_WEIGHT
     for rowid, cand in candidates.items():
         vs = vec_scores.get(rowid, 0.0)
         fs = fts_scores.get(rowid, 0.0)
         tb = _trunk_boost(cand["trunk_distance"])
-        combined = VEC_WEIGHT * vs + FTS_WEIGHT * fs + TRUNK_WEIGHT * tb
+        combined = VEC_WEIGHT * vs + fts_weight * fs + TRUNK_WEIGHT * tb
         scored.append((rowid, combined, cand))
 
     scored.sort(key=lambda x: x[1], reverse=True)
