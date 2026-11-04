@@ -1,13 +1,15 @@
-"""smriti embedded backend — uses ``store.search.search``.
+"""smriti embedded backend: smriti's own index, via ``store.search.search``.
 
-Fallback backend. Slower than qmd because it loads sentence-transformers
-each fire (~14s on Windows cold), but has no external dependencies and
-uses smriti's own trunk-distance scoring.
+The default backend. Recall runs in short-lived hook processes, where
+loading an embedding model costs 5-18 s per fire, so it searches by
+keyword only (FTS5, rarest terms; tens of ms) unless
+``SMRITI_RECALL_VECTORS=1``. Full hybrid search stays available through
+``smriti read`` and the MCP server's ``smriti_read``, whose process is warm.
 """
 
 from __future__ import annotations
 
-import sqlite3
+import os
 import time
 
 from smriti.recall.types import RecallMatch, RecallResponse
@@ -46,7 +48,9 @@ def query(text: str, *, top_k: int, timeout_s: float, rerank: bool) -> RecallRes
         # every session — it must never take (or wait on) a write lock.
         conn = open_readonly(db_path)
         try:
-            results = search(conn, text, top_k=top_k, use_reranker=rerank)
+            vectors = os.environ.get("SMRITI_RECALL_VECTORS", "") == "1"
+            results = search(conn, text, top_k=top_k, use_reranker=rerank and vectors,
+                             use_vectors=vectors)
         finally:
             conn.close()
     except Exception as exc:

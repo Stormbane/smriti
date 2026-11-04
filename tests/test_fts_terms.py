@@ -87,3 +87,24 @@ def test_without_fts5vocab_falls_back_to_the_first_terms() -> None:
 
     q = " ".join(f"term{i:02d}" for i in range(20))
     assert fts_terms(NoVocab(), q, k=3) == ["term00", "term01", "term02"]
+
+
+def test_search_can_skip_the_vector_leg(monkeypatch: pytest.MonkeyPatch) -> None:
+    """use_vectors=False never loads an embedding model (hooks can't afford it)."""
+    import smriti.store.indexer as indexer
+    import importlib
+
+    search_mod = importlib.import_module("smriti.store.search")
+
+    def boom():  # noqa: ANN202
+        raise AssertionError("embedding provider loaded")
+
+    monkeypatch.setattr(indexer, "_get_embedding_provider", boom)
+
+    class Conn:
+        has_vec, has_fts = True, False
+
+        def execute(self, *a: object) -> object:
+            raise AssertionError("unexpected query")
+
+    assert search_mod.search(Conn(), "anything", use_vectors=False, use_reranker=False) == []

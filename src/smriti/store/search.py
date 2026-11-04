@@ -146,6 +146,7 @@ def search(
     top_k: int = 5,
     candidate_k: int = 20,
     use_reranker: bool = True,
+    use_vectors: bool = True,
 ) -> list[SearchResult]:
     """Search the index for chunks matching *query*.
 
@@ -162,6 +163,10 @@ def search(
         merging.
     use_reranker:
         If True and a cross-encoder is available, rerank merged candidates.
+    use_vectors:
+        If False, skip the vector leg (keyword search only). Short-lived
+        processes such as hooks use this: loading the embedding model
+        costs 5-18 s per process.
     """
     import time as _time
     t0 = _time.monotonic()
@@ -171,7 +176,7 @@ def search(
     candidates: dict[int, dict] = {}  # rowid → {source, heading, content, ...}
 
     # ── Vector search ────────────────────────────────────────────────
-    has_vec = conn.has_vec
+    has_vec = conn.has_vec and use_vectors
     vec_scores: dict[int, float] = {}
 
     if has_vec:
