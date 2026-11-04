@@ -10,7 +10,7 @@ from pathlib import Path
 
 from smriti.wake.briefing import SYSTEM_LINE_CAP, _system_line, briefing
 
-NOW = datetime(2026, 11, 4, 0, 0, tzinfo=timezone.utc)  # 10:00 UTC+10
+NOW = datetime(2026, 11, 4, 0, 0, tzinfo=timezone.utc)  # 10:00 at UTC+10
 
 
 def _report(root: Path, checks: list[dict], at: datetime = NOW - timedelta(minutes=10)) -> None:
