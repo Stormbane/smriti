@@ -2,7 +2,7 @@
 
 This document covers:
 
-1. [smriti package + Narada session-start system](#1-smriti--narada-session-start) — the main install
+1. [smriti package + Narada session-start system](#1-smriti--entity-session-start) — the main install
 2. [New project setup](#2-new-project-setup) — template and mirror wiring for new projects
 3. [PreCompact capture hook](#3-precompact-capture-hook) — the raw-turn backstop
 
