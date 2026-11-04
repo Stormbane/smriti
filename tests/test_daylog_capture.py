@@ -374,3 +374,20 @@ def test_config_explicit_empty_sources_disable_defaults(tmp_path: Path) -> None:
     smriti_dir.mkdir()
     (smriti_dir / "daylog.json").write_text('{"sources": []}', encoding="utf-8")
     assert load_config(tmp_path).sources == []
+
+
+@pytest.mark.parametrize("without_psutil", [False, True])
+def test_lock_pid_alive_probe_is_side_effect_free(monkeypatch: pytest.MonkeyPatch,
+                                                  without_psutil: bool) -> None:
+    import subprocess
+    import sys
+
+    from smriti.daylog import lock
+
+    if without_psutil:  # the fallback path that fresh Windows installs take
+        monkeypatch.setitem(sys.modules, "psutil", None)
+    assert lock._pid_alive(os.getpid())
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    assert not lock._pid_alive(proc.pid)
+    assert not lock._pid_alive(0)

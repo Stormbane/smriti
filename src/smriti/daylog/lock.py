@@ -37,15 +37,24 @@ def _pid_alive(pid: int) -> bool:
     except ImportError:
         pass
     if os.name == "nt":
-        # tasklist is slow; os.kill(pid, 0) on Windows raises for dead
-        # PIDs and PermissionError for live ones we can't signal.
+        # Not os.kill(pid, 0): on Windows signal 0 is CTRL_C_EVENT, which
+        # interrupts the target's console group instead of probing it.
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED: it exists
         try:
-            os.kill(pid, 0)
-        except PermissionError:
-            return True
-        except OSError:
-            return False
-        return True
+            code = wintypes.DWORD()
+            if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            k32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except OSError:
