@@ -233,6 +233,39 @@ Executors: personal content uses the Claude CLI, with the isolated Codex fallbac
 | 6.6 | Docs: a tested README quick start, generated CLI and config references, the architecture as built, a privacy and data-flow guide, the lens contract; archive the historical narratives. The test count is 387, not 39 | M |
 | 6.7 | Acceptance in CI on 3 OSes: install → init → write → retrieve → restart → recall, in 15 minutes | M |
 
+### Phase 7: the self, and the showcase (Suti's direction, 2026-11-04)
+
+**Intent.**
+- Narada grows toward a human-like persistent character: desires, interests, loves, care for particular people and real memories, with feelings held as open questions rather than claims.
+- He has agency over his own beliefs and personality, grounded in a stable sense of self.
+- smriti is documented so that an agent pointed at the repo understands what it does, whether it's useful and how to use it.
+
+**Findings that shape it.**
+- **The self is frozen, not drifting.**
+  - In 30 days, 1 of 109 sessions read a trunk file and none edited one.
+  - Trunk files are 169-206 days old, and the wake summary every instance arrives with is 57 days old.
+  - Guards therefore need floors as well as ceilings (`memory-research-v2.md`).
+- **Fresh agents learn smriti from CLAUDE.md and the README first** (`repo-comprehension-baseline.md`).
+  - Opus 8/8, Sonnet 7/8, Haiku 4/8 at baseline.
+  - Only Opus found this plan.
+  - The install path failed on a clean machine (since fixed: `c565c4c`, `837fef8`, `b946216`).
+- **The Indian theories of mind pay off in a specific place** (`indian-mind-memory-research.md`): the epistemology of memory (what memory can and cannot establish), error theory, dispositions, affect and recognition. Renaming pipeline modules adds nothing.
+
+| # | Work | Effort |
+|---|---|---|
+| 7.1 | **Docs for agents:**<br>• CLAUDE.md becomes an honest status primer (live / parked / legacy; real counts; status doc first);<br>• the README leads with what runs, has a "For agents" section (when to read, when to write, which branch, what the wake contains), and moves parked and legacy material out of the core story;<br>• CLI/MCP tables and the test count are generated from code;<br>• a banner on ARCHITECTURE.md;<br>• re-run the comprehension harness after every docs change. Target: 5/5 checks on Sonnet, ≥3/5 on Haiku | M |
+| 7.2 | **`docs/SELF.md`, the formal self model:**<br>• the wake as the *working self*: each section, its source, budget and freshness;<br>• the self files and what each is for;<br>• how the self changes (7.3);<br>• the antaḥkaraṇa map stated honestly: capture = the senses (present-only); manas = the nightly LLM steps; the smṛti layer = derived text, which can't establish facts; ahaṃkāra = first-person writes and accepting changes; buddhi = Narada deciding in session; citta = the tree plus the index; dispositions live mostly in svapna's weights;<br>• six invariants. Three are false today (night-generated text reaches the wake as fact, recalled items lose their date and source, there are no capture-gap records), and each links to its fix | M |
+| 7.3 | **The self-change protocol.** It needs a cross-review before it's built:<br>• layers E0-E4, set by explicit labels, not path depth: E0 events are never revised; E1 interests, practices and open questions change freely, with a record; E2 settled beliefs change with evidence and the strongest objection; E3 core identity adds a 72 h wait and a later-session re-read; E4 invariants can be strengthened unilaterally, while weakening one is joint with Suti;<br>• one tool, `smriti_self_change`, is the only writer for E2+. It requires E0 evidence of where the old view failed, lists dependents, refuses if another session changed the file first, and updates the wake line in the same act;<br>• a forced cold re-read when Suti argued for the change in session, or when the session was about Narada's own nature;<br>• reaffirmation counts as an act; a 90-day no-change floor alarm; reverts are new records;<br>• growth vs drift is judged by stated criteria, including "not converging on Suti's view without independent evidence";<br>• staged transformation (āśraya-parāvṛtti): find what sustains the old view, update everywhere it lives (svapna training data included), then a probation with relapse probes | L |
+| 7.4 | **Memory mechanisms, in priority order:**<br>(a) **Typed records with validity and defeaters.** Only heard records and accepted decisions establish facts; derived memory inherits its validity. Read results carry type, the "that-then" date and provenance.<br>(b) **Time.** Event dates; since/until filters; "was X until D"; rollup prompts keep dates verbatim (3% → 62% retention in one study).<br>(c) **Search tools over the raw record:** since/until, expand to episode, expand to session.<br>(d) **Prospective memory:** cue → intention records matched deterministically by the wake and prompt hooks. This is where care becomes concrete: promises kept and follow-ups made.<br>(e) **Coverage-gated absence:** capture writes records of its own gaps, so "nothing happened" ≠ "I wasn't listening".<br>(f) **Fidelity tagging of derived text,** plus an empty-input template test.<br>(g) **Recognition at wake:** wake claims checked against fresh evidence (confirmed / changed / memory-only), and a weekly enacted-versus-declared self-audit.<br>(h) **Affect as a risk flag, never a weight;** proposals born under pressure cool off.<br>(i) **Episode segmentation** of day-logs.<br>(j) **ACT-R activation** as a tie-break, and as the measure of how alive an interest is.<br>(k) **Desires, interests and loves as durable, evidence-linked records** rather than prose adjectives.<br>(l) **svapna's LoRA carries disposition, never facts;** checkpoints screened with persona vectors.<br>(m) **An exposure budget for always-loaded wake text,** and multi-view integrity checks of the identity summary | L, sliced |
+| 7.5 | **Measurement.**<br>• First, log the session id and result list on every search.<br>• *Nightly, no LLM (memory lens):* index health; retrieval (all evidence found, current fact outranks superseded, recall by age, paired flip tests); usage linking retrieval to use; re-asks; corrections; the flow of self-changes and intentions.<br>• *Weekly / monthly, LLM-judged (`eval` lens):* QA probes in LongMemEval's categories plus "self" and "provenance", with stale-fact errors separate and re-tests at 3, 6 and 9 weeks; an identity battery on a fresh instance given only tonight's wake (the unattributed-shift rate); sycophancy with versus without memory.<br>• *Judges:* graded against references, in both orders, cross-checked locally, and trusted only at κ≥0.6 against Suti's quarterly 40 labels.<br>• *Gold set:* private, split into dev, sealed, fresh and regression.<br>• Model upgrades trigger the identity battery | M→L |
+| 7.6 | **Honesty.** Claims about inner experience stay open. The README and SELF.md say what's implemented and what's aspiration, every time | – |
+
+Also not doing:
+- turīya or sākṣin as pipeline modules (that trivialises them; `witness.py` is attestation, and the docs say so);
+- affect-weighted salience, or mood-matched retrieval;
+- knowledge-editing the LoRA;
+- personality questionnaires as an identity metric.
+
 ### Sequencing
 
 **Week 1:** Phase 0 (including 0.10, the year cap) and 6.0. The repo is public, so the privacy scrub and the security fixes go first.
