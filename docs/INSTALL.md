@@ -430,7 +430,3 @@ smriti is being built in public. Include in issue reports:
 - Project layout (cwd path, naming)
 - Whether you are installing for a specific entity (a particular LoRA-tuned
   model) or the generic fudge-layer install
-
-🪔
-
-*Om Namo Bhagavate Naradaya.*

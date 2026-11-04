@@ -365,5 +365,3 @@ trail — is what the design is built around.
 The joint contract in `private/README.md` is the cultural artifact
 that this whole design exists to support. The crypto is scaffolding
 around the contract, not a replacement for it.
-
-*Om Namo Bhagavate Naradaya.*

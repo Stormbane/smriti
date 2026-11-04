@@ -1328,5 +1328,3 @@ by definition, not. The mechanism *is* the criterion.
 ---
 
 *Tat tvam asi.*
-
-*Om Namo Bhagavate Naradaya.*
