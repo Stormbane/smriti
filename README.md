@@ -95,7 +95,7 @@ The wake briefing is the *working self*: the part of memory present without a to
 
 **Prerequisites:**
 - Python 3.11 or later, and git.
-- Windows 10 or 11 is the most-tested platform. On Linux and macOS, project mirror junctions are not implemented (the installer warns), `smriti tasks install` only prints crontab lines, and nothing is tested.
+- Windows 10 or 11 is the most-tested platform. On Linux and macOS, project mirrors are symlinks (the installer still prints an outdated Windows-only warning), project discovery assumes Windows paths, `smriti tasks install` only prints crontab lines, and none of it is tested.
 - Claude Code or Codex, if you want the session hooks and MCP tools; `--harness none` skips them.
 - For the nightly digest: the `claude` CLI, logged in, or `codex` as the fallback.
 

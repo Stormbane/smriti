@@ -20,18 +20,19 @@ On every new Claude Code session in any project, the entity (Narada is
 the reference entity; the system is not Narada-specific — point it at
 any `~/.<entity>/` root) wakes up with:
 
-- Cross-project identity files from `~/.<entity>/` (identity, mind, etc.)
-- The current project's auto-memory tier (`~/.claude/projects/{slug}/memory/`)
-- The current project's todo / roadmap (`<project>/.ai/todo.md`)
-- A list of other projects whose memory is reachable on demand
+- A briefing of at most 9,500 characters: the identity summary, last
+  night's status, what the session can reach, the person and channel
+  sections, the current project's `STATUS.md`/`INDEX.md` (or `todo.md`),
+  recent journal entries, and a reading list of the full identity files.
+  [SELF.md](SELF.md) lists every section with its source and budget.
 - `smriti_read` / `smriti_write` / `smriti_status` as first-class MCP
   tools in every session
 
 The transport is a `SessionStart` hook that runs `wake.py` from the
-entity root's `.smriti/` dir. The load list is a human-readable file at
-`<entity>/wake.md`. Per-project access is via directory junctions under
-`<entity>/mirrors/{project}/`. The memory search tool is registered as
-an MCP server in `~/.claude.json`.
+entity root's `.smriti/` dir; the sections are fixed in
+`src/smriti/wake/briefing.py`. Per-project access is via directory
+junctions under `<entity>/mirrors/{project}/`. The memory search tool is
+registered as an MCP server in `~/.claude.json`.
 
 **Wake is silent unless `SMRITI_WAKE=1` is set** in its environment — the
 SessionStart hook sets this so interactive sessions wake fully, while
@@ -42,12 +43,14 @@ it prepends the wake output and forwards to `claude -p`.
 
 ### Prerequisites
 
-- Windows 10/11 (Linux/macOS support pending — junctions need porting to
-  symlinks)
-- Python 3.11+ on PATH
-- Claude Code installed
-- A populated `~/.narada/` directory (either freshly restored from backup or
-  bootstrapped by hand with at least `identity.md`)
+- Windows 10/11 is the most-tested platform. On Linux/macOS, mirrors are
+  symlinks (the installer still prints an outdated Windows-only warning),
+  project discovery assumes Windows paths, `smriti tasks install` only
+  prints crontab lines, and none of it is tested.
+- Python 3.11+ on PATH, and git
+- Claude Code (or Codex, with `--harness codex`)
+- Optionally, an existing memory root restored from backup; otherwise the
+  installer creates one from `memory_template/`
 
 ### Install steps
 
@@ -55,23 +58,31 @@ it prepends the wake output and forwards to `claude -p`.
 # 1. Clone smriti and install the package
 git clone https://github.com/Stormbane/smriti.git
 cd smriti
-pip install -e ".[read,dev]"
+pip install -e ".[read]"      # add ,codex / ,witness / ,dev as needed
 
-# 2. Make sure the entity's memory root exists. Default: ~/.narada/.
-#    On a fresh machine, restore it from backup; otherwise create a minimal
-#    identity.md so wake.py has something to load.
+# 2. The memory root. Default: ~/.narada/ (env SMRITI_ROOT); it must be
+#    inside your home directory. On a fresh machine with an existing tree,
+#    restore it from backup first; otherwise the installer creates it from
+#    memory_template/.
 
-# 3. Run the installer — creates mirrors/ junctions, copies wake.md and
-#    wake.py into the memory root, registers the smriti MCP server,
-#    patches ~/.claude/settings.json, writes ~/.claude/CLAUDE.md.
+# 3. Run the installer: copies the memory template (never overwriting),
+#    copies wake.py, backup.py and narada-p.sh into <root>/.smriti/,
+#    creates mirrors/ junctions, registers the smriti MCP server,
+#    patches ~/.claude/settings.json, writes the managed block in
+#    ~/.claude/CLAUDE.md.
 python scripts/install.py
-# or for a different entity:
-python scripts/install.py --memory-root ~/.tara
+# or for a different entity (then also set SMRITI_ROOT in your user
+# environment: the CLI and the MCP server read only the environment):
+python scripts/install.py --memory-root ~/.ari
 
-# 4. Start a new Claude Code session in any project to verify. The
-#    assistant should receive the identity files + that project's memory
-#    as its opening context, and `smriti_read` should appear in its
-#    tool list.
+# 4. Build the index and check the round trip.
+smriti index
+smriti write "Sam prefers the command first, then the explanation." --branch people/sam
+smriti read "how does Sam like answers"
+
+# 5. Start a new Claude Code session in any project to verify. The
+#    briefing should be in the opening context, and `smriti_read` should
+#    appear in its tool list.
 ```
 
 The installer is idempotent — re-run any time after adding a new project
@@ -93,14 +104,14 @@ python scripts/install.py --harness none  # core memory setup only
 
 | Step | Location | Purpose |
 |---|---|---|
-| Copy `wake.md` | `<entity>/wake.md` | Load-list config (won't overwrite existing) |
-| Copy `wake.py` | `<entity>/.smriti/wake.py` | Loader script (won't overwrite existing) |
+| Copy the memory template | `<entity>/` from `memory_template/` | Empty identity tree (never overwrites existing files) |
+| Copy `wake.py`, `backup.py` | `<entity>/.smriti/` | Wake shim; backup script. smriti-managed copies are upgraded, keeping a `.pre-upgrade.bak` |
 | Copy `narada-p.sh` | `<entity>/.smriti/narada-p.sh` | Wake-injecting wrapper for headless `claude -p` |
 | Ensure `.smriti/` dir | `<entity>/.smriti/` | Smriti runtime state (index, queue, wake) |
 | Create junctions | `<entity>/mirrors/{project}/auto-memory`, `/knowledge`, `/ai` | Per-project memory and knowledge access |
 | Register MCP server | `~/.claude.json` | Exposes `smriti_read` / `smriti_write` / `smriti_status` |
-| Patch settings.json | `~/.claude/settings.json` | Wire SessionStart → `python wake.py` |
-| Write CLAUDE.md | `~/.claude/CLAUDE.md` | Wake contract + memory-search tool preference |
+| Patch settings.json | `~/.claude/settings.json` | SessionStart → `wake.py`; UserPromptSubmit → touch `last-activity`; PostToolUse → ambient recall (legacy, being retired) |
+| Write CLAUDE.md | `~/.claude/CLAUDE.md` | Managed block: the memory contract from `src/smriti/templates/AGENT.md` |
 
 The table above describes the default Claude Code bridge. The Codex bridge
 writes `~/.codex/AGENTS.md`, patches `~/.codex/config.toml`, registers the MCP
@@ -124,12 +135,11 @@ at `<entity>/.smriti/context/<audience>.md`. Claude Code and Codex select the
 instructions in `context/hermes.md` prevents them from leaking into coding
 sessions while preserving a single shared identity core.
 
-### Editing the load list
+### What the wake loads
 
-`~/.narada/wake.md` is a plain markdown file. Sections are `## always`
-(loaded every session) and `## current-project` (loaded when that project
-is cwd, with `{project}` substituted for the cwd basename). Add or remove
-lines to change what wakes up with Narada.
+The briefing's sections, their order and their budgets are fixed in
+`src/smriti/wake/briefing.py`; [SELF.md](SELF.md) describes each one.
+`narada/wake.md` and `<entity>/wake.md` are obsolete: nothing reads them.
 
 ### Smriti CLI (optional, grows over time)
 
@@ -137,7 +147,7 @@ lines to change what wakes up with Narada.
 smriti index          # build the search index over ~/.narada/
 smriti read "query"   # semantic + keyword search
 smriti write "text"   # write an entry to the memory tree
-smriti ingest file.md # ingest external content, route to tree
+smriti ingest file.md # parked: ingest external content, route to tree
 smriti nightly        # sleep task: reconcile day-log, render, digest, rollups, reindex
 smriti morning        # wake task: the one good-morning message
 smriti logd           # day-log watcher daemon (--ensure = keepalive)
@@ -148,22 +158,22 @@ smriti status         # index stats + day-log capture health
 
 ### The nightly cycle (day-log)
 
-Every channel of communication (Claude Code sessions, the Telegram brain,
-box voice, Codex) is merged in real time into one chronological day-log at
+Claude Code transcripts, Codex rollouts and voice transcripts (the default
+sources) are merged in real time into one chronological day-log at
 `~/.narada/log/YYYY/MM/DD.jsonl` by `smriti logd`. The 03:00 `smriti
 nightly` run renders each day to markdown, writes an LLM digest
 (`claude -p` primary, `codex exec` fallback — subscription seats only),
 builds week/month/year rollups, and refreshes the indexes. The 07:00
-`smriti morning` run sends one good-morning Telegram message (digest
+`smriti morning` run sends one good-morning message (digest
 highlights + world headlines) through the `notify_cmd` configured in
 `~/.narada/.smriti/daylog.json` — at most one per day, fail-closed.
 Source globs live in the same config file; new transcript directories are
 a config edit, never a code change. See
 `.ai/features/nightly-cycle.md` for the full contract.
 
-Currently the wake system is independent of the smriti CLI — wake.py reads
-files directly. The next milestone wires wake through `smriti context` so
-the load list can include query-driven recalls, not just static paths.
+The witness step needs the `witness` extra and a memory root that is a git
+repository. The README's [What runs today](../README.md#what-runs-today)
+lists every nightly step with what it writes.
 
 ---
 
