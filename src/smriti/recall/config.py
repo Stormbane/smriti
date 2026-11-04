@@ -1,7 +1,7 @@
 """Recall configuration — env-driven, no config file needed.
 
 Environment variables:
-    SMRITI_RECALL_BACKEND     ``qmd`` (default) or ``smriti``.
+    SMRITI_RECALL_BACKEND     ``smriti`` (default) or ``qmd``.
     SMRITI_RECALL_THRESHOLD   Min score to inject. Default 0.45.
     SMRITI_RECALL_TOP_K       Candidates to fetch. Default 4.
     SMRITI_RECALL_MAX_INJECT  Max matches to inject per fire. Default 2.
@@ -62,9 +62,9 @@ class RecallConfig:
 
 
 def load_config() -> RecallConfig:
-    backend = os.environ.get("SMRITI_RECALL_BACKEND", "qmd").strip().lower()
+    backend = os.environ.get("SMRITI_RECALL_BACKEND", "smriti").strip().lower()
     if backend not in ("qmd", "smriti"):
-        backend = "qmd"
+        backend = "smriti"
     intent_raw = os.environ.get("SMRITI_RECALL_INTENT", "").strip()
     return RecallConfig(
         backend=backend,

@@ -31,6 +31,8 @@ smriti = "smriti.cli:main"
 read = [
     "sqlite-vec>=0.1.1",
     "onnxruntime>=1.17",
+    "tokenizers>=0.15",
+    "huggingface_hub>=0.20",
 ]
 api = [
     "anthropic>=0.40",
@@ -51,6 +53,8 @@ dev = [
     "cryptography>=42.0",
     "sqlite-vec>=0.1.1",
     "onnxruntime>=1.17",
+    "tokenizers>=0.15",
+    "huggingface_hub>=0.20",
     "anthropic>=0.40",
     "tomli-w>=1.0",
     "opentimestamps>=0.4",

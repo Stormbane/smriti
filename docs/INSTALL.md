@@ -53,7 +53,7 @@ it prepends the wake output and forwards to `claude -p`.
 
 ```bash
 # 1. Clone smriti and install the package
-git clone https://github.com/<org>/smriti.git
+git clone https://github.com/Stormbane/smriti.git
 cd smriti
 pip install -e ".[read,dev]"
 

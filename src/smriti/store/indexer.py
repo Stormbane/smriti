@@ -129,8 +129,9 @@ def _get_embedding_provider():  # noqa: ANN202
             log.warning("embedding provider %r unavailable: %s", key, exc)
     raise RuntimeError(
         f"No embedding provider available (tried {', '.join(keys)}; "
-        f"last error: {last_error}). Install onnxruntime or "
-        "sentence-transformers: pip install 'smriti[read]'"
+        f"last error: {last_error}). The default ONNX provider needs "
+        "onnxruntime, tokenizers and huggingface_hub, all in "
+        "pip install 'smriti[read]'; the local provider needs sentence-transformers."
     )
 
 
