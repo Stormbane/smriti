@@ -314,3 +314,16 @@ def test_llm_workdir_carries_the_isolation_settings(tmp_path, monkeypatch):
     assert settings["claudeMdExcludes"] == ["**/CLAUDE.md"]
     assert settings["disableAllHooks"] is True
     assert settings["autoMemoryEnabled"] is False
+
+
+def test_llm_workdir_initialises_safely_under_concurrency(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from smriti.llm import workdir
+
+    monkeypatch.setattr(workdir, "tree_root", lambda: tmp_path)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        paths = list(pool.map(lambda _: workdir.llm_workdir(), range(32)))
+    assert len(set(paths)) == 1
+    settings = paths[0] / ".claude"
+    assert [p.name for p in settings.iterdir()] == ["settings.json"]  # no temp files left

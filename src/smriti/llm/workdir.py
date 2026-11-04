@@ -13,6 +13,8 @@ sandboxed fallbacks an empty view of the filesystem.
 from __future__ import annotations
 
 import json
+import os
+import uuid
 from pathlib import Path
 
 from smriti.core.tree import tree_root
@@ -42,7 +44,14 @@ def llm_workdir() -> Path:
         current = None
     if current != wanted:
         settings.parent.mkdir(parents=True, exist_ok=True)
-        tmp = settings.with_suffix(".json.tmp")
+        # A per-call temp name: concurrent calls may initialise at once.
+        tmp = settings.with_name(f"settings.json.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         tmp.write_text(wanted, encoding="utf-8")
-        tmp.replace(settings)
+        try:
+            tmp.replace(settings)
+        except OSError:
+            # Losing the race is fine if a concurrent call wrote the same file.
+            tmp.unlink(missing_ok=True)
+            if settings.read_text(encoding="utf-8") != wanted:
+                raise
     return path
