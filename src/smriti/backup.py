@@ -48,7 +48,10 @@ def trigger(
         script = root / ".smriti" / "backup.py"
         if not script.exists():
             return
-        args = [sys.executable, str(script), "--tag", tag]
+        # --foreground: callers (the nightly witness) need the commit to exist
+        # when this returns. Hooks call the script directly and get the
+        # detached default instead.
+        args = [sys.executable, str(script), "--tag", tag, "--foreground"]
         if push:
             args.append("--push")
         env = os.environ.copy()

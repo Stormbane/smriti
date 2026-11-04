@@ -194,6 +194,58 @@ def test_pid_alive_sees_this_process_and_not_a_finished_one(
     assert not backup.pid_alive(proc.pid)
 
 
+def _real_repo(tmp_path: Path) -> Path:
+    import shutil
+    import subprocess
+
+    if not shutil.which("git"):
+        pytest.skip("git not available")
+    repo = tmp_path / "tree"
+    repo.mkdir()
+    for args in (["init", "-q"], ["config", "user.email", "t@example.com"],
+                 ["config", "user.name", "t"], ["commit", "-q", "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    (repo / "note.md").write_text("hello\n", encoding="utf-8")
+    return repo
+
+
+def _commits(repo: Path) -> int:
+    import subprocess
+
+    out = subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=repo,
+                         capture_output=True, text=True)
+    return int(out.stdout.strip() or 0)
+
+
+def _run_script(repo: Path, *args: str) -> float:
+    import subprocess
+
+    env = {**os.environ, "SMRITI_ROOT": str(repo)}
+    env.pop("SMRITI_INTERNAL", None)
+    start = time.monotonic()
+    subprocess.run([sys.executable, str(_SCRIPT), "--tag", "t", *args], env=env, check=True,
+                   timeout=120)
+    return time.monotonic() - start
+
+
+def test_default_run_detaches_and_the_worker_still_commits(tmp_path: Path) -> None:
+    repo = _real_repo(tmp_path)
+    _run_script(repo)
+    deadline = time.time() + 60
+    while _commits(repo) < 2 and time.time() < deadline:
+        time.sleep(0.5)
+    assert _commits(repo) == 2, "the detached worker never committed"
+    while (repo / ".git" / "smriti-backup.lock").exists() and time.time() < deadline:
+        time.sleep(0.2)
+    assert not (repo / ".git" / "smriti-backup.lock").exists()
+
+
+def test_foreground_commits_before_returning(tmp_path: Path) -> None:
+    repo = _real_repo(tmp_path)
+    _run_script(repo, "--foreground")
+    assert _commits(repo) == 2
+
+
 def test_stale_locks_are_kept_while_git_runs(backup: ModuleType, tmp_path: Path,
                                              monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)

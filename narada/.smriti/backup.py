@@ -303,11 +303,42 @@ def do_push(cwd: Path) -> tuple[bool, str]:
     return code == 0, out
 
 
+def spawn_detached(argv: list[str]) -> bool:
+    """Re-run this script as a detached worker; True if it started.
+
+    Hooks call backup.py and a harness may kill the hook when its timeout
+    expires, taking git down with it: the run lock and index.lock it held
+    are then left behind. A detached worker isn't in the hook's process
+    tree (or, on Windows, its job), so the kill never reaches it.
+    """
+    cmd = [sys.executable, os.path.abspath(__file__), *argv, "--worker"]
+    kwargs: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+                    "stderr": subprocess.DEVNULL, "close_fds": True}
+    if os.name == "nt":
+        detached, new_group, breakaway = 0x00000008, 0x00000200, 0x01000000
+        for flags in (detached | new_group | breakaway, detached | new_group):
+            try:
+                subprocess.Popen(cmd, creationflags=flags, **kwargs)
+                return True
+            except OSError:  # the job may forbid breakaway; try without it
+                continue
+        return False
+    try:
+        subprocess.Popen(cmd, start_new_session=True, **kwargs)
+        return True
+    except OSError:
+        return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", default="manual", help="commit message tag")
     parser.add_argument("--push", action="store_true", help="push after commit")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--foreground", action="store_true",
+                        help="do the work in this process and wait (callers that need the "
+                             "commit to exist when this returns, e.g. the nightly witness)")
+    parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     # Skip when invoked from a smriti-internal `claude -p` subprocess.
@@ -321,6 +352,13 @@ def main() -> int:
         if args.verbose:
             print(f"[backup] no git repo at {cwd}", file=sys.stderr)
         return 0
+
+    # Detach by default; --verbose stays in the foreground so its output is seen.
+    if not (args.foreground or args.worker or args.verbose):
+        forwarded = ["--tag", args.tag] + (["--push"] if args.push else [])
+        if spawn_detached(forwarded):
+            return 0
+        log_event(cwd, event="detach_failed", tag=args.tag)  # fall through: run here
 
     token = acquire_run_lock(cwd)
     if token is None:
