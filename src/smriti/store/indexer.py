@@ -18,6 +18,7 @@ from pathlib import Path
 from smriti._vendored.memsearch.chunker import chunk_markdown, compute_chunk_id
 from smriti._vendored.memsearch.scanner import scan_paths
 from smriti.core.tree import smriti_db_path, tree_root, trunk_distance
+from smriti.store.index_policy import is_indexable
 from smriti.store.schema import ensure_schema
 
 log = logging.getLogger(__name__)
@@ -257,14 +258,29 @@ def index_tree(
             conn.commit()
 
         # ── Scan tree ────────────────────────────────────────────────────
-        scanned_files = scan_paths([str(root)])
-        # Exclude .smriti/ system directory
-        scanned_files = [f for f in scanned_files if ".smriti" not in f.path.parts]
+        root_resolved = root.resolve()
+        scanned_files = [
+            f for f in scan_paths([str(root)])
+            if is_indexable(str(f.path.relative_to(root_resolved)))
+        ]
         stats["scanned"] = len(scanned_files)
         log.info("Scanned %d files", len(scanned_files))
 
-        # ── Determine which files need (re-)indexing ─────────────────────
+        # ── Purge sources that are gone or now excluded ──────────────────
+        # Judged against the disk, not this scan, so a scan that misses a
+        # directory once can't wipe its chunks.
         indexed = _indexed_files(conn)
+        stats["purged"] = 0
+        for source in list(indexed):
+            if not is_indexable(source) or not (root / source).is_file():
+                _delete_source(conn, source)
+                del indexed[source]
+                stats["purged"] += 1
+        if stats["purged"]:
+            conn.commit()
+            log.info("Purged %d sources (deleted or excluded)", stats["purged"])
+
+        # ── Determine which files need (re-)indexing ─────────────────────
         to_index: list[tuple[Path, str]] = []
 
         for sf in scanned_files:
@@ -438,8 +454,10 @@ def index_file(path: Path, *, root: Path | None = None, db: Path | None = None) 
     if db is None:
         db = smriti_db_path()
 
-    text = path.read_text(encoding="utf-8")
     rel_source = str(path.resolve().relative_to(root.resolve())).replace("\\", "/")
+    if not is_indexable(rel_source):
+        return 0  # the same policy as index_tree; its purge removes any old chunks
+    text = path.read_text(encoding="utf-8")
 
     provider = _get_embedding_provider()
     chunks = chunk_markdown(text, source=rel_source)

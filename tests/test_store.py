@@ -281,3 +281,71 @@ class TestProviderPreference:
         from smriti.store import indexer
 
         assert indexer._recorded_provider_key(tmp_path / "nope.db") is None
+
+
+# ---------------------------------------------------------------- index policy
+
+
+def test_index_policy() -> None:
+    from smriti.store.index_policy import is_indexable
+
+    assert is_indexable("journal/2026/11/week1/11-04.md")
+    assert is_indexable("log/2026/11/03-digest.md")
+    assert is_indexable("log/2026/10/week3.md") and is_indexable("log/2026/10.md")
+    assert is_indexable("projects\smriti\2026\11-04.md")
+    assert not is_indexable("log/2026/11/03.md")  # raw day render: the digest covers it
+    for excluded in ("heartbeat/cycles/x.md", "mirrors/smriti/README.md",
+                     "private/README.md", ".smriti/wake-context.md", ".git/x.md"):
+        assert not is_indexable(excluded)
+    assert not is_indexable("notes/data.json")
+
+
+def _sources(db_path: Path) -> set[str]:
+    db = ensure_schema(db_path, dimension=384)
+    try:
+        return {r[0] for r in db.execute("SELECT DISTINCT source FROM chunks").fetchall()}
+    finally:
+        db.close()
+
+
+def test_purge_drops_deleted_and_newly_excluded_sources(mini_tree: Path) -> None:
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+    assert "threads/memory-system-design.md" in _sources(db_path)
+
+    # Simulate an index built under an older, looser policy: a raw render and
+    # a heartbeat note got in. Then a real file is deleted.
+    for rel in ("log/2026/11/03.md", "heartbeat/cycles/old.md"):
+        p = mini_tree / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# Old\n\nnoise\n", encoding="utf-8")
+    import smriti.store.indexer as indexer_mod
+
+    real = indexer_mod.is_indexable
+    indexer_mod.is_indexable = lambda rel: True  # the old policy
+    try:
+        index_tree(root=mini_tree, db=db_path)
+    finally:
+        indexer_mod.is_indexable = real
+    assert {"log/2026/11/03.md", "heartbeat/cycles/old.md"} <= _sources(db_path)
+
+    (mini_tree / "threads" / "memory-system-design.md").unlink()
+    stats = index_tree(root=mini_tree, db=db_path)
+
+    left = _sources(db_path)
+    assert stats["purged"] == 3
+    assert "threads/memory-system-design.md" not in left
+    assert not {"log/2026/11/03.md", "heartbeat/cycles/old.md"} & left
+    assert "identity.md" in left
+
+
+def test_index_file_follows_the_same_policy(mini_tree: Path) -> None:
+    from smriti.store.indexer import index_file
+
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+    raw = mini_tree / "log" / "2026" / "11" / "03.md"
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text("# Day log\n\nraw turns\n", encoding="utf-8")
+    assert index_file(raw, root=mini_tree, db=db_path) == 0
+    assert "log/2026/11/03.md" not in _sources(db_path)
