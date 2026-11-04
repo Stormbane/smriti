@@ -133,7 +133,7 @@ entity-tree-is-versioned context ("no further objection"). One new finding:
 
 ## Implementation notes
 
-Implemented on branch cross-harness-hardening (4 commits: f62c5f3, 30a7ccf, c66c68b, ca03774), NOT yet merged to master — Suti decides the merge.
+Implemented on branch cross-harness-hardening (4 commits: c1dcc8d, 2b7baf5, f8f2377, 7dac4c1), NOT yet merged to master — Suti decides the merge.
 
 What shipped:
 - integrations/common/managed_doc.py: marker pair, classify/write/migrate, atomic writes, fail-closed preflight (runs BEFORE run_core in the dispatcher per review P2-1, nonzero exit on refusal per plan-review finding 5).
