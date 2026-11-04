@@ -298,6 +298,8 @@ def test_index_policy() -> None:
                      "private/README.md", ".smriti/wake-context.md", ".git/x.md"):
         assert not is_indexable(excluded)
     assert not is_indexable("notes/data.json")
+    assert is_indexable("notes/old.markdown") and is_indexable("notes/README.MD")
+    assert not is_indexable("log/2026/11/03.MD")
 
 
 def _sources(db_path: Path) -> set[str]:

@@ -23,14 +23,16 @@ from __future__ import annotations
 import re
 
 EXCLUDED_TOP_LEVEL = frozenset({".smriti", ".git", "private", "heartbeat", "mirrors"})
+# Same as the scanner's default (memsearch.scanner.scan_paths), compared case-insensitively.
+MARKDOWN_SUFFIXES = (".md", ".markdown")
 _RAW_DAY_RENDER = re.compile(r"^log/\d{4}/\d{2}/\d{2}\.md$")
 
 
 def is_indexable(rel_source: str) -> bool:
     """Whether a tree-relative path (``/`` or ``\\`` separated) belongs in the index."""
     rel = rel_source.replace("\\", "/").strip("/")
-    if not rel.endswith(".md"):
+    if not rel.lower().endswith(MARKDOWN_SUFFIXES):
         return False
     if rel.split("/", 1)[0] in EXCLUDED_TOP_LEVEL:
         return False
-    return not _RAW_DAY_RENDER.match(rel)
+    return not _RAW_DAY_RENDER.match(rel.lower())
