@@ -13,7 +13,10 @@ Excluded, and why (retrieval eval, 2026-11-04):
   transcripts. It was 34% of chunks and never once a helpful hit; the
   nightly digests carry what mattered.
 - ``mirrors/``: junctions to other repos' docs, which duplicate their
-  sources (19% of chunks) and crowd out the memory itself.
+  sources (19% of chunks) and crowd out the memory itself. Except
+  ``mirrors/<project>/findings/`` and ``decisions/``: records that smriti's
+  own MCP tools write (``smriti_record_finding``, ``smriti_record_decision``),
+  which are memory and must stay searchable.
 - ``log/YYYY/MM/DD.md``: raw day-log renders (26% of chunks, one 13.8 MB
   day alone). The day's digest and rollups are indexed instead.
 """
@@ -26,6 +29,7 @@ EXCLUDED_TOP_LEVEL = frozenset({".smriti", ".git", "private", "heartbeat", "mirr
 # Same as the scanner's default (memsearch.scanner.scan_paths), compared case-insensitively.
 MARKDOWN_SUFFIXES = (".md", ".markdown")
 _RAW_DAY_RENDER = re.compile(r"^log/\d{4}/\d{2}/\d{2}\.md$")
+_MIRROR_RECORDS = re.compile(r"^mirrors/[^/]+/(findings|decisions)/", re.IGNORECASE)
 
 
 def is_indexable(rel_source: str) -> bool:
@@ -33,6 +37,9 @@ def is_indexable(rel_source: str) -> bool:
     rel = rel_source.replace("\\", "/").strip("/")
     if not rel.lower().endswith(MARKDOWN_SUFFIXES):
         return False
-    if rel.split("/", 1)[0] in EXCLUDED_TOP_LEVEL:
+    top = rel.split("/", 1)[0]
+    if top == "mirrors":
+        return bool(_MIRROR_RECORDS.match(rel))
+    if top in EXCLUDED_TOP_LEVEL:
         return False
     return not _RAW_DAY_RENDER.match(rel.lower())

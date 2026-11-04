@@ -298,6 +298,11 @@ def test_index_policy() -> None:
                      "private/README.md", ".smriti/wake-context.md", ".git/x.md"):
         assert not is_indexable(excluded)
     assert not is_indexable("notes/data.json")
+    # Records smriti's own MCP tools write under a mirror stay searchable.
+    assert is_indexable("mirrors/smriti/findings/2026-11-04-x.md")
+    assert is_indexable("mirrors/beeja/decisions/2026-11-04-y.md")
+    assert not is_indexable("mirrors/smriti/ai/todo.md")
+    assert not is_indexable("mirrors/smriti/src-docs/README.md")
     assert is_indexable("notes/old.markdown") and is_indexable("notes/README.MD")
     assert not is_indexable("log/2026/11/03.MD")
 
