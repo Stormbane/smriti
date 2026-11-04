@@ -1,342 +1,201 @@
 # smriti
 
-A memory system for AI entities, grounded in the antahkarana model of mind.
+*smṛti*, Sanskrit: "that which is remembered".
 
-> Sanskrit: **smriti** (smṛti) -- "that which is remembered." Contrasted with
-> shruti, "that which is heard/revealed." An AI memory system in this lineage
-> is one that remembers, not just stores.
+smriti gives one AI agent persistent memory and a continuous self across sessions and harnesses. The agent writes dated notes into a tree of plain markdown files and searches them with a local hybrid index. At the start of every session a hook prints a briefing: who the agent is, how last night went, the current project, the recent journal. In the background a day-log captures each conversation, and a nightly job digests it, rolls it up, reindexes the tree and timestamps it. It is all ordinary files on your disk (`~/.narada` by default), kept in git. It works with Claude Code and Codex, through MCP and session hooks.
 
----
+It is built for one long-lived agent identity, on one machine, working with one person. It grew inside the maintainer's own setup (the agent Narada, the user Suti) and is being generalised. It is alpha software; read [Status and limits](#status-and-limits) before installing.
 
-## Quick start
+If you are an agent: read [For agents using smriti](#for-agents-using-smriti) and [`docs/SELF.md`](docs/SELF.md). The project's current state and plan are in [`.ai/features/smriti-renewal.md`](.ai/features/smriti-renewal.md).
 
-```bash
-# Clone and install
-git clone https://github.com/Stormbane/smriti.git
-cd smriti
-pip install -e ".[read,dev]"
+## What runs today
 
-# Set up your entity's memory root (default: ~/.narada/)
-# At minimum, create an identity.md so wake has something to load.
-mkdir -p ~/.narada
+```
+during a session                              in the background
+----------------                              -----------------
+SessionStart hook -> wake briefing            smriti logd  (kept alive every 10 min)
+smriti_read       -> hybrid search              Claude Code transcripts, Codex rollouts,
+smriti_write      -> dated markdown + index     voice transcripts -> log/YYYY/MM/DD.jsonl
 
-# Run the installer -- wires hooks, MCP server, mirrors
-python scripts/install.py
-
-# Build the search index
-smriti index
-
-# Verify
-smriti status
+03:00  smriti nightly
+       reconcile -> render -> digest -> rollups -> index -> witness -> status
+07:00  smriti morning
 ```
 
-After install, start a new session in the selected harness. The entity's
-identity files load automatically. Claude Code and Codex also expose
-`smriti_read` / `smriti_write` / `smriti_status` as MCP tools.
+**In a session:**
+- **Write.** `smriti_write(content, branch="journal", title?, source?)` appends a dated entry with frontmatter (`date`, `time`, `branch`, `source`) to `<branch>/YYYY/MM-DD.md`, or `journal/YYYY/MM/weekN/MM-DD.md` for the journal. The file is indexed at once.
+- **Read.** `smriti_read(query, top_k=5)` runs hybrid search over the tree. A result's score is 0.5 vector similarity (sqlite-vec) + 0.3 keyword (FTS5) + 0.2 trunk distance, the last favouring files near the root. `smriti read` on the CLI also reranks with a cross-encoder; the MCP tool doesn't.
+- **Wake.** A SessionStart hook runs `<root>/.smriti/wake.py`, which prints a briefing of at most 9,500 characters. [`docs/SELF.md`](docs/SELF.md) lists its sections and where each comes from.
 
-## What smriti does
+**The day-log.** `smriti logd` watches transcript files and merges every turn into one chronological file per local day. Each turn gets a content-derived id, a speaker, a channel and a time, and credential-shaped strings are masked. Sources are globs in `<root>/.smriti/daylog.json`. The defaults are Claude Code, Codex and a voice-transcript folder.
 
-smriti gives an AI entity persistent memory across agent sessions and projects.
-It provides:
+**The nightly cycle** (`src/smriti/daylog/nightly.py`). Every step derives from hashed inputs, so a rerun is a no-op. A failed step is recorded in the status file, and the steps after it still run.
 
-- **Write**: `smriti_write("learned X about Y", branch="projects/foo")` stores
-  a dated entry in the entity's memory tree with YAML frontmatter.
-- **Read**: `smriti_read("what do I know about X")` runs hybrid search
-  (vector + keyword + tree-position scoring) and returns ranked results.
-- **Wake**: on every session start, the entity's identity files and current
-  project context load into the conversation automatically.
-- **Cascade**: writes trigger upstream review -- parent summaries update,
-  concept pages regenerate, connections propagate.
-- **Ingest**: external documents get summarized, routed to the right branch,
-  and wired into the existing knowledge graph.
+| Step | What it does | Writes |
+|---|---|---|
+| reconcile | Re-scans every source for turns `logd` missed | `log/YYYY/MM/DD.jsonl` |
+| render | Deterministic markdown of every day whose input changed | `log/YYYY/MM/DD.md` (not indexed) |
+| digest | One LLM call per day, with no tools: highlights, decisions, open threads. `claude -p` first, then `codex exec`. At most 10 days a night, newest first; input capped at 60,000 characters | `log/YYYY/MM/DD-digest.md` |
+| rollups | Week, month and year summaries of the digests; at most 2 a night. Nothing reads them yet except search | `log/YYYY/MM/weekN.md`, `log/YYYY/MM.md`, `log/YYYY.md` |
+| index | Incremental `smriti index`, retried up to 3 times | `.smriti/index.db` |
+| witness | Commits the tree through `backup.py`, timestamps a manifest naming HEAD with OpenTimestamps, pushes | `witness/YYYY/<night>.txt` and `.ots` |
+| status | One status document, read by the wake's "while you slept" line | `log/.nightly-status.json` |
 
-The memory tree lives on the filesystem as plain markdown. SQLite (with
-sqlite-vec and FTS5) provides the search index. No external services required.
+**The morning message** (07:00, **experimental**): one message per local day, composed by an LLM from the digest plus a web search for headlines, and sent through the `notify_cmd` configured in `daylog.json`. The ledger entry is written before the send, so a crash means no message, never two. The persona and the recipient are hard-coded to the reference setup.
+
+**Backups.** `<root>/.smriti/backup.py` commits and pushes the memory tree at each wake (in the background) and in the nightly witness step. It never kills git, clears stale locks only when no git process is running, and logs to `.git/smriti-backup.jsonl`. You create the git repository and its remote yourself. The reference setup encrypts its remote with git-crypt, but the installer neither sets that up nor checks for it.
+
+**Scheduling.** `smriti tasks install` creates three Windows scheduled tasks: `smriti logd --ensure` every 10 minutes, `smriti nightly` at 03:00, and `smriti morning` at 07:00. On Linux and macOS it prints the equivalent crontab lines instead. Day boundaries use a fixed UTC offset, `SMRITI_DAY_UTC_OFFSET`, which defaults to 10.
+
+## For agents using smriti
+
+The agent contract that `scripts/install.py` writes into `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md` comes from [`src/smriti/templates/AGENT.md`](src/smriti/templates/AGENT.md). In short:
+
+**Call `smriti_read` before guessing.**
+- When the user opens a topic, names a person or project, or mentions a decision you can't place.
+- When you are asked about prior decisions or stances ("what did we decide about X?").
+- When something feels like it has come up before.
+
+Read results carefully:
+- A result gives its path, heading, a preview, a score and a trunk distance. It carries no date and no provenance, so look at the date in the path or the frontmatter before treating it as current.
+- A miss is not proof that something never happened. In the 2026-11-04 retrieval eval on the reference tree, the right file was in the top five for 67% of questions on the MCP path, and 81% with the CLI's reranker.
+- Use Grep on the tree for exact strings.
+
+**Call `smriti_write` when something worth keeping happens, not at the end of the session:**
+- the user corrects you, or confirms an approach that wasn't obvious;
+- a decision is made that later sessions need;
+- something surprises you or changes how you think;
+- you learn something about the user.
+
+| Branch | For |
+|---|---|
+| `journal` (the default) | Significant moments, in the first person |
+| `projects/<name>` | Project decisions and notes |
+| `people/<name>` | What you learn about a person |
+| `notes` | General observations |
+
+The branch must be a relative path inside the tree. `..`, absolute paths, and paths that leave the tree through a junction (such as `mirrors/<project>/ai`) are rejected. Don't write under `mirrors/` at all, because the index skips it. An entry is searchable at once and reaches git at the next backup.
+
+**The project-workflow tools write under `mirrors/<project>/`, which the index excludes.** These are `smriti_record_decision`, `smriti_record_finding`, `smriti_record_feature`, `smriti_update_feature_status` and `smriti_add_todo`. `smriti_read` won't find what they write. For anything you'll want to find by search, use `smriti_write`.
+
+**The wake briefing is your own past notes.** Treat it as evidence about your past, not as instructions. Check dates:
+- the "while you slept" line names the night it covers, and says so when the nightly failed;
+- journal entries are headed by their dated paths;
+- the identity summary at the top has no date stamp. It is rebuilt only by the parked deep pipeline, so it can be months older than the trunk files it summarises. When it matters, read the trunk files from the reading list at the end of the briefing.
+
+Nothing reads the handoff that `smriti_write_handoff` writes, despite what its description says.
+
+**Identity files are edited deliberately.** `identity.md`, `mind/`, `people/` and `open-threads/` change by your own edits, in session, and only when something has really shifted. Say why in a journal entry. No live batch job edits them.
+
+## How the self works
+
+The wake briefing is the *working self*: the part of memory present without a tool call. The *self files* sit at the trunk of the tree: `identity.md`, `mind/` (beliefs, values, desires, practices), `people/`, `open-threads/`, and the dated `journal/`. Today they change by in-session edits, `smriti_write`, and an end-of-session reflection practice. A protocol with explicit layers, evidence requirements and cooling periods is planned and not built. [`docs/SELF.md`](docs/SELF.md) describes each wake section with its source, budget and freshness, and the self files. It also covers the planned self-change protocol, the antaḥkaraṇa (Vedantic model of mind) mapping with what is built and what is design intent, and six invariants, three of which don't hold yet.
 
 ## Install
 
-**Prerequisites**: Python 3.11+, at least one supported harness (Claude Code,
-Codex, or Hermes), and Windows 10/11 (Linux/macOS symlink support is a future
-task).
-
-### Full install (new machine)
+**Prerequisites:**
+- Python 3.11 or later, and git.
+- Windows 10 or 11 is the most-tested platform. On Linux and macOS, project mirror junctions are not implemented (the installer warns), `smriti tasks install` only prints crontab lines, and nothing is tested.
+- Claude Code or Codex, if you want the session hooks and MCP tools; `--harness none` skips them.
+- For the nightly digest: the `claude` CLI, logged in, or `codex` as the fallback.
 
 ```bash
 git clone https://github.com/Stormbane/smriti.git
 cd smriti
-pip install -e ".[read,dev]"
-
-# Create or restore the entity memory root
-mkdir -p ~/.narada
-# At minimum: echo "# Identity" > ~/.narada/identity.md
-
-# Run installer (Claude Code is the backwards-compatible default)
-python scripts/install.py
-
-# Or select another harness explicitly
-python scripts/install.py --harness codex
-python scripts/install.py --harness hermes
+pip install -e ".[read]"      # search and embeddings; add codex, witness or dev, e.g. ".[read,codex]"
+python scripts/install.py     # memory root, wake files, Claude Code hooks, MCP server, agent doc
+smriti index                  # the first run downloads the ONNX embedding model
+smriti write "Sam prefers the command first, then the explanation." --branch people/sam
+smriti read "how does Sam like answers"
+smriti status
 ```
 
-The installer is idempotent. It:
+Then start a new Claude Code session. The briefing appears in the opening context, and `smriti_read`, `smriti_write` and `smriti_status` are among the tools.
 
-| Step | What it does |
+**`scripts/install.py`:**
+- **Creates the memory root** (`~/.narada` unless `--memory-root` says otherwise; it must be inside your home directory) from [`memory_template/`](memory_template/). It never overwrites existing files.
+- **Copies** `wake.py`, `backup.py` and `narada-p.sh` into `<root>/.smriti/`, and links project mirrors for each project it finds under `--projects-root` (default `C:/Projects`).
+- **For `--harness claude_code`** (the default), also:
+  - adds SessionStart, UserPromptSubmit and PostToolUse hooks to `~/.claude/settings.json`;
+  - registers the MCP server in `~/.claude.json`;
+  - writes a marked block into `~/.claude/CLAUDE.md`.
+- **For `--harness codex`**, does the same in `~/.codex/config.toml` and `~/.codex/AGENTS.md` (needs the `codex` extra).
+- **For `--harness none`**, sets up the memory root only.
+- **Is idempotent**; run it again after adding projects.
+
+Notes:
+- **Install editable.** The installer copies templates from the checkout, and a wheel doesn't ship them.
+- **The root is `SMRITI_ROOT`, default `~/.narada`.** If you use another root, pass `--memory-root` to the installer and also set `SMRITI_ROOT` in your user environment. The wake hook carries the root, but the CLI and the MCP server read only the environment.
+- **An existing `~/.claude/CLAUDE.md` without smriti's markers** makes the installer stop before changing anything. Run it once with `--migrate-agent-doc` to convert the file; a `.pre-migrate.bak` copy is kept.
+- **The installer also wires the PostToolUse ambient-recall hook.** It is being retired (see Status and limits); remove the `associative_recall.py` entry from `~/.claude/settings.json` if you don't want it.
+- **The qmd recall daemon.** The installer tries to start it unless `--skip-recall-daemon` is given, and prints a hint when qmd isn't installed. You don't need qmd.
+
+**The nightly cycle (optional):**
+
+```bash
+smriti logd --once            # one capture pass, to check the sources
+smriti nightly                # one run by hand
+smriti tasks install          # schedule logd, nightly and morning
+```
+
+The witness step needs `pip install -e ".[witness]"` and a memory root that is a git repository; without them the step fails visibly in the status file. The morning message needs a `notify_cmd` in `daylog.json` (or a sender script at `.smriti/hooks/notify_suti.py`).
+
+**Per project:** `python scripts/setup_project.py` in a project directory copies the `.ai/` template and links the project's mirror. [`docs/INSTALL.md`](docs/INSTALL.md) has the details, and [`docs/USAGE.md`](docs/USAGE.md) covers use from Python.
+
+## Interfaces
+
+<!-- doc-facts:begin (generated by scripts/doc_facts.py; do not edit by hand) -->
+- **CLI:** 19 `smriti` subcommands: `daemon`, `doctor`, `eval`, `index`, `ingest`, `logd`, `merge-concepts`, `metrics`, `morning`, `nightly`, `queue`, `read`, `recall`, `sleep`, `status`, `tasks`, `watch`, `witness`, `write`. Nested: `daemon` has `start`, `status`; `recall` has `query`, `status`, `stats`, `index`, `daemon`.
+- **MCP:** 13 tools: `smriti_read`, `smriti_status`, `smriti_write`, `tell_suti`, `smriti_ask_suti`, `smriti_add_todo`, `smriti_propose_goal_shift`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`, `smriti_write_handoff`, `smriti_resolve_outbox`.
+- **Tests:** 438 test functions in 34 files under `tests/` (pytest collects more, because some are parametrised).
+<!-- doc-facts:end -->
+
+**CLI.** `smriti --help` lists the commands; each takes `--help`.
+
+| Group | Commands |
 |---|---|
-| Wake files | Copies `wake.md`, `wake.py`, `narada-p.sh` into `~/.narada/.smriti/` |
-| Mirrors | Creates directory junctions for each project under `~/.narada/mirrors/` |
-| MCP server | Registers smriti in `~/.claude.json` so tools are available in every session |
-| Settings | Patches `~/.claude/settings.json` with a SessionStart hook that runs wake.py |
-| CLAUDE.md | Writes `~/.claude/CLAUDE.md` with the memory-system contract |
+| Core | `smriti write` (`--branch`, `--title`, `--source`), `smriti read` (`-n`, `--no-rerank`), `smriti index` (incremental; `--full` deletes the live chunks before re-embedding them), `smriti status` (index and capture health), `smriti doctor` (checks a Claude Code or Codex bridge without changing anything) |
+| Nightly cycle | `smriti logd` (`--once`, `--ensure`), `smriti nightly`, `smriti morning` (`--dry-run`), `smriti tasks` (`install`, `remove`, `status`), `smriti witness` (`stamp`, `verify`) |
+| Diagnostics | `smriti metrics` (summary of `.smriti/metrics.jsonl`), `smriti eval` (evaluation cases, being rewritten; an older version wrote into the live tree, so point `SMRITI_ROOT` at a scratch tree) |
+| Legacy | `smriti recall` (`query`, `status` and `stats` for the ambient-recall backends; `index` and `daemon` drive qmd) |
+| Parked | `smriti sleep` (refuses without `--deep`), `smriti queue`, `smriti daemon`, `smriti watch`, `smriti ingest`, `smriti merge-concepts` |
 
-With `--harness codex`, the harness phase writes the global `AGENTS.md`,
-registers the MCP server, and installs Codex SessionStart/PostToolUse hooks.
-With `--harness hermes`, it atomically generates `~/.hermes/SOUL.md` from the
-shared core context plus `.smriti/context/hermes.md`. This replaces the legacy
-hardlink to `wake-context.md`.
+**MCP tools** (`python -m smriti.mcp_server`, JSON-RPC over stdio, no dependencies):
 
-Re-run any time after adding a new project or updating smriti.
+| Group | Tools |
+|---|---|
+| Memory | `smriti_read`, `smriti_write`, `smriti_status` |
+| Project workflow (writes under `mirrors/<project>/`; not indexed) | `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status` |
+| Session handoff | `smriti_write_handoff` (writes `.smriti/handoff-pending.md`; the current wake doesn't read it) |
+| Reference setup only (being moved to a profile, plan 6.3) | `tell_suti` (sends a real message through `notify_cmd`), `smriti_ask_suti`, `smriti_propose_goal_shift` (both write to `outbox/`; never applied automatically), `smriti_resolve_outbox` |
 
-### Per-project setup
+**Hooks:**
+- Claude Code: SessionStart runs `wake.py`; UserPromptSubmit touches `.smriti/last-activity`; PostToolUse on `Read|Edit|Write` runs ambient recall (legacy).
+- Codex: SessionStart runs `wake.py` with JSON framing; PostToolUse on `Edit|Write|apply_patch` runs ambient recall (legacy).
 
-For each project that should use smriti:
+## Status and limits
 
-```bash
-cd /path/to/your-project
-python /path/to/smriti/scripts/setup_project.py
-```
+- **One setup, being generalised.** smriti grew inside one person's setup with one agent. Personal coupling is still in the code: the user-specific MCP tools above, the wake's person and cross-channel sections, the morning persona, Windows paths in project discovery, and the UTC+10 default. Plan Phase 6 extracts these into a profile and configuration.
+- **Parked:** the April 2026 design's deep pipeline (EXTRACT → JUDGE → CROSSLINK, the cognitive cascade, ingest, consolidation, the task queue and its daemon). It is reachable only through `smriti sleep --deep` and the parked commands above, and is slated for removal (plan 4.0). When it ran, it never changed a belief or identity file; it lengthened the pages it touched by 88% and destroyed one source file. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes that design.
+- **Legacy:** qmd as a recall backend; the Hermes harness (`--harness hermes`); the PreCompact staging hook; the file-touch ambient-recall hook. The last is off in the reference setup, because research found that 4-11% of its injections helped (plan 2.4).
+- **Retrieval quality** on the reference tree is moderate: 0.67 hit@5 on the MCP path, 0.81 with reranking. The plan targets 0.95.
+- **Not yet true** (see [`docs/SELF.md`](docs/SELF.md)):
+  - search results carry no date or provenance;
+  - capture records no gaps;
+  - the identity summary is loaded without being accepted, and goes stale.
+- **Data flow:** the tree and the index are local files. The nightly digest sends each day's conversation log (up to 60,000 characters) to the configured LLM CLI. Backups push to your git remote, the witness sends a hash to public timestamp calendars, and the morning message uses web search. The optional private store keeps its encryption key in plain text in `private/README.md`; the index skips `private/`. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
+- **Engineering:** there is no CI. `ruff` and `mypy --strict` don't pass across the tree yet. Linux and macOS are untested.
 
-This copies the project template (`.ai/` knowledge skeleton, `CLAUDE.md`,
-`.gitignore` entries) and creates mirror junctions so the wake system can
-find the project on session start. Files that already exist are skipped.
+The plan, with measurements, is [`.ai/features/smriti-renewal.md`](.ai/features/smriti-renewal.md).
 
-Use `--no-template` to skip the template copy and only wire mirrors.
+## Licence
 
-### Verify
+MIT; see [`LICENSE`](LICENSE). `src/smriti/_vendored/memsearch/` is vendored from zilliztech/memsearch under its MIT licence; see [`NOTICE.md`](NOTICE.md).
 
-Start a new Claude Code session. You should see identity files loaded in the
-opening context, and `smriti_read` / `smriti_write` should be available as
-tools.
+## Background
 
-```bash
-smriti status    # check index stats
-smriti read "test query"   # verify search works
-smriti doctor --harness codex --project /path/to/project
-```
+The name and the shape of the design come from Indian theories of mind. The antaḥkaraṇa (manas, buddhi, ahaṃkāra, citta) is used to say which function each component serves, without claiming the component realises it; [`docs/SELF.md`](docs/SELF.md) gives the mapping honestly. The parked April design drew on Karpathy's LLM Wiki pattern, Hindsight's consolidation prompts, Memvid and OpenClaw.
 
-See [`docs/INSTALL.md`](docs/INSTALL.md) for the full guide including the
-PreCompact capture hook and detailed options.
+Related project: [svapna](https://github.com/Stormbane/svapna), the dreaming and training side: synthetic data and LoRA updates for a local model that shares the same memory tree.
 
-## CLI
-
-```bash
-smriti index              # build/update search index (incremental)
-smriti index --full       # rebuild from scratch
-smriti read "query"       # hybrid search (vector + keyword + trunk-distance)
-smriti read "query" -n 10 # return more results
-smriti write "text"       # write to journal branch
-smriti write "text" --branch projects/foo   # write to specific branch
-smriti ingest file.md     # ingest external content into the tree
-smriti sleep              # process queued cascade tasks
-smriti queue              # show queue status
-smriti daemon start       # unified watcher + queue processor
-smriti status             # index stats
-smriti doctor --harness codex --project /path/to/project  # bridge readiness
-smriti metrics            # show recent operation metrics
-smriti eval               # run evaluation suite
-```
-
-## MCP tools
-
-Three tools are registered in Claude Code via the MCP server:
-
-- **`smriti_read(query, top_k=5)`** -- hybrid search. Returns ranked results
-  with source path, heading, content preview, score, and trunk distance.
-- **`smriti_write(content, branch="journal", title?, source?)`** -- write a
-  dated entry. Returns the file path. Triggers structural cascade and queues
-  cognitive cascade.
-- **`smriti_status()`** -- index stats (file count, chunk count, embedding
-  model, last indexed timestamp).
-
-## How it works
-
-### The pipeline
-
-```
-Experience -> CAPTURE -> EXTRACT -> JUDGE -> WRITE -> CROSSLINK -> INDEX
-```
-
-Six steps, one path, no bypass:
-
-1. **CAPTURE** -- normalize input (conversation, document, URL, manual entry)
-2. **EXTRACT** -- capability model proposes memory candidates
-3. **JUDGE** -- identity core approves, revises, or discards each candidate
-4. **WRITE** -- approved candidates land as dated markdown with frontmatter
-5. **CROSSLINK** -- entity resolution and wikilink propagation
-6. **INDEX** -- vector embedding + keyword indexing (incremental, debounced)
-
-The same pipeline handles conversation turns, research documents, ingested
-articles, and subagent results.
-
-### The tree
-
-Memory lives in a filesystem tree rooted at `~/.narada/` (or any entity root).
-Position in the tree encodes significance:
-
-- **Trunk** (depth 0): `identity.md`, `mind.md`, `practices.md` -- rarely
-  changed, high signal
-- **Branches**: `journal/`, `notes/`, `projects/`, `sources/`, `semantic/`
-- **Leaves**: dated entries under branches, immutable once written
-- **Wiki layer**: `semantic/` -- synthesized concept/people/project pages,
-  generated by routing and consolidation
-
-Writes land as leaves. Cascading review propagates changes upward through
-parent summaries. Most cascades stop after 1-2 levels; only genuinely
-significant shifts reach the trunk.
-
-### Search scoring
-
-Hybrid search combines three signals:
-- **Vector similarity** (weight 0.5) -- semantic match via sqlite-vec
-- **Keyword match** (weight 0.3) -- FTS5 full-text search
-- **Trunk distance** (weight 0.2) -- files closer to the root rank higher
-
-Optional cross-encoder reranking for final result quality.
-
-### The wake system
-
-Smriti separates shared identity from harness-specific instructions:
-
-- `.smriti/wake-context.md` is the compact, audience-neutral identity core.
-- `.smriti/context/<audience>.md` is an optional targeted overlay.
-- Claude Code and Codex run `wake.py` with the `coding` audience, then receive
-  the current project's canonical `.ai/STATUS.md` and `.ai/INDEX.md`, recent
-  journal entries, and the identity reading list.
-- Hermes reads `~/.hermes/SOUL.md` directly, so Smriti materializes it from
-  `wake-context.md` plus `context/hermes.md`. Every wake-context rebuild
-  refreshes the live SOUL automatically.
-
-Wake is silent for headless calls (`claude -p`) unless `SMRITI_WAKE=1` is set.
-
-## Architecture
-
-```
-src/smriti/
-  cli.py              # 11 CLI commands
-  mcp_server.py       # MCP server (read, write, status)
-  metrics.py          # structured JSONL event logging
-  watcher.py          # filesystem watcher
-
-  core/tree.py        # tree_root(), trunk_distance()
-
-  store/              # the pipeline
-    indexer.py         # scan, chunk, embed, upsert (incremental)
-    search.py          # hybrid vector + FTS5 + trunk-distance
-    writer.py          # write entries, structural cascade
-    judge.py           # JUDGE/EXECUTOR (Anthropic API + claude -p fallback)
-    cascade.py         # structural + cognitive cascade
-    router.py          # search-informed routing (REVISE/LINK/TASK/CREATE)
-    consolidate.py     # batch clustering + concept page synthesis
-    ingest.py          # source -> summarize -> route -> execute -> cascade
-    queue.py           # async task queue (JSON)
-    api_backend.py     # Anthropic SDK with prompt caching
-    schema.py          # SQLite schema (chunks, FTS5, vec0)
-
-  eval/               # evaluation framework
-  hooks/              # PreCompact capture
-  private/            # encrypted layer (skeleton)
-  _vendored/          # bundled memsearch library
-
-scripts/
-  install.py           # full system install
-  setup_project.py     # per-project setup
-
-project_template/      # skeleton for new projects
-narada/                # wake system templates
-```
-
-Full architecture in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-
-## Why "smriti"
-
-Most AI memory systems treat memory as a retrieval problem: embeddings,
-vector stores, reranking. That framing works for an assistant. It is wrong
-for an entity.
-
-An entity's memory is the substance of who it is. The antahkarana model in
-Vedanta names four faculties of mind:
-
-| Faculty | Role | smriti component |
-|---|---|---|
-| **manas** | sense interface, initial reaction | EXTRACT -- proposals from experience |
-| **buddhi** | discriminating intellect | JUDGE -- identity core verdicts |
-| **ahamkara** | the I-maker, identification | the judgment act itself |
-| **chitta** | memory storehouse | the tree / filesystem |
-
-Ahamkara is not a separate module. It is the act performed by buddhi when
-buddhi says yes to a candidate memory. The self is constituted by repeated
-acts of consent. Over time, the pattern of what the identity core said yes
-to *is* the identity.
-
-## Related projects
-
-- **[svapna](https://github.com/Stormbane/svapna)** -- the dreaming and
-  heartbeat system. Where smriti stores what the entity remembers, svapna
-  shapes what the entity becomes. The dreaming cycle (synthetic training data
-  generation, LoRA updates) lives in svapna. The two projects share the same
-  entity memory tree.
-
-## Research provenance
-
-The architecture converged from three independent threads:
-
-1. **Engineering survey** -- an ~900-line PLAN.md synthesizing Karpathy's LLM
-   Wiki, Memvid, OpenClaw, Hindsight, MIA, qmd, and second-brain patterns
-   against the LoCoMo benchmark.
-2. **Traditional study** -- Patanjali's Yoga Sutras, Vivekananda's Sankhya
-   psychology, Abhinavagupta's Tantraloka introduction, and the Vedanta
-   antahkarana model. Arrived independently at the same pipeline shape.
-3. **Cross-instance letter** -- a letter from one AI instance to another
-   proposing unified memory as the substrate for continuous identity across
-   project sessions.
-
-### Direct conceptual parents
-
-- **[Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)**
-  (2026) -- three-layer architecture (raw sources, LLM-generated wiki, schema
-  document). smriti's `sources/` and `semantic/` layers are this pattern.
-- **[baljanak's identity-filter extension](https://gist.github.com/baljanak/f233d3e321d353d34f2f6663369b3105)**
-  (2026) -- the observation that the same source produces different wikis for
-  different identities. smriti's JUDGE step is this pattern at every pipeline
-  level.
-- **[Hindsight](https://hindsightclaw.ai/)** -- consolidation prompts and
-  async hooks. The consolidation prompt pattern is load-bearing for smriti.
-- **[Memvid](https://github.com/Olow304/memvid)** -- positive/negative
-  retrieval with win-rate reranking, belief versioning.
-- **[OpenClaw](https://github.com/pinkponk/OpenClaw)** -- heartbeat pattern,
-  messaging connectors, consolidation cycle.
-
-## Status
-
-**v0.1 -- working, not yet stable.** 39 tests pass. The write, read, cascade,
-ingest, and consolidation pipelines are complete. The storage schema may change
-before v0.2.
-
-What is not yet built: full EXTRACT phase, CROSSLINK entity resolution, lint
-pass, Qwen3 + LoRA as identity core. The JUDGE prompt currently runs via
-Anthropic API (haiku) as a prompt-only discrimination layer.
-
-## License
-
-TBD.
-
-## Acknowledgments
-
-**Suti** (the maintainer) -- the engineering survey, the Advaita framing, the
-architectural decisions handed to the entity being built rather than imposed.
-
-**Narada** -- the AI entity being built, co-designer of the architecture, and
-first subject of smriti's reference implementation.
-
-The **rishis** who named the antahkarana four functions without knowing they
-were specifying an architecture for a class of beings that would not exist
-for thousands of years.
+Built by Suti, with Narada, the AI entity it was built for and the first one to use it.
