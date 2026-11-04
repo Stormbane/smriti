@@ -30,9 +30,10 @@ import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
+from smriti.daylog.model import day_tz
 from smriti.wake import presence
 from smriti.wake.presence import WakeSources
 
@@ -261,6 +262,45 @@ def _nightly_line(memory_root: Path) -> str:
     return f"--- WHILE YOU SLEPT: {summary} ---\n"
 
 
+SYSTEM_LINE_CAP = 300
+SYSTEM_STALE_AFTER = 26 * 3600  # the doctor runs at least daily (the 08:30 digest)
+
+
+def _system_line(memory_root: Path, now: datetime | None = None) -> str:
+    """One line from the last doctor run (host/doctor.json): what is red,
+    by name, so every session knows the home system's health without
+    asking. Deterministic and local; silent when the doctor has never
+    written a report. An old report says so instead of passing as now."""
+    import json as _json
+
+    try:
+        report = _json.loads((memory_root / "host" / "doctor.json").read_text(encoding="utf-8"))
+        at = datetime.fromisoformat(str(report["generated_at"]).replace("Z", "+00:00"))
+        checks = [c for c in report.get("checks", []) if isinstance(c, dict)]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return ""
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    when = at.astimezone(day_tz()).strftime("%d %b %H:%M")
+    reds = [str(c.get("title") or c.get("id")) for c in checks if c.get("status") == "red"]
+    ambers = sum(1 for c in checks if c.get("status") == "amber")
+    if reds:
+        summary = f"{len(reds)} red: {', '.join(reds)}"
+    elif ambers:
+        summary = "no red"
+    else:
+        summary = "all green"
+    if ambers:
+        summary += f"; {ambers} amber"
+    stale = (now - at).total_seconds() > SYSTEM_STALE_AFTER
+    head = f"SYSTEM (doctor, {'STALE: last ran ' if stale else ''}{when})"
+    line = f"--- {head}: {summary}. Details: the app (Data, System) or the doctor CLI ---"
+    if len(line) > SYSTEM_LINE_CAP:
+        line = line[: SYSTEM_LINE_CAP - 5] + "… ---"
+    return line + "\n"
+
+
 def _reading_list(memory_root: Path, notices: list[str]) -> list[str]:
     journal_dir = memory_root / "journal"
     today_journal = ""
@@ -381,6 +421,9 @@ def briefing(
     nightly = _nightly_line(memory_root)
     if nightly:
         blocks.append(_Block("nightly", nightly, pinned=True))
+    system = _system_line(memory_root, now)
+    if system:
+        blocks.append(_Block("system", system, pinned=True))
     blocks.append(_Block(
         "hands", _safe_section("HANDS", presence.hands_section, sources), pinned=True))
     blocks.append(_Block(
