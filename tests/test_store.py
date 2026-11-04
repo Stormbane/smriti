@@ -290,7 +290,8 @@ def test_index_policy() -> None:
     assert is_indexable("journal/2026/11/week1/11-04.md")
     assert is_indexable("log/2026/11/03-digest.md")
     assert is_indexable("log/2026/10/week3.md") and is_indexable("log/2026/10.md")
-    assert is_indexable("projects\smriti\2026\11-04.md")
+    assert is_indexable(r"projects\smriti\2026\11-04.md")  # Windows separators
+    assert not is_indexable(r"log\2026\11\03.md")
     assert not is_indexable("log/2026/11/03.md")  # raw day render: the digest covers it
     for excluded in ("heartbeat/cycles/x.md", "mirrors/smriti/README.md",
                      "private/README.md", ".smriti/wake-context.md", ".git/x.md"):

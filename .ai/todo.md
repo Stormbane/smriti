@@ -33,6 +33,36 @@ publish, per-lens scheduling) comes before any new nightly lens.
 - [ ] Isolate the Codex fallback seat (dedicated `CODEX_HOME`, no AGENTS.md,
       hooks, plugins or MCP), as the Claude seat already is (plan 0.4).
 
+## Hardening (from two no-context code reviews, 2026-11-04: C+ and B-)
+
+Two fresh reviewers with no project context read the code. They agreed the
+live core is sound (connection discipline, capture design, backup locking,
+subprocess hygiene) and that these items stand between it and an adoptable
+product, most important first:
+
+- [ ] **Path validation on every MCP tool that takes a path argument**
+      (`project`, `slug`, `file` in `mcp_server.py`), the way
+      `writer._checked_branch` does, with traversal tests. Some of these
+      tools write, move or delete files.
+- [ ] **The memory root's backup privacy:** ship a `.gitignore` for the
+      memory template (index DB, metrics, private/), stop logging raw search
+      queries to `metrics.jsonl`, widen `daylog/scrub.py` (JWTs, `user:pass@`
+      URLs, more key prefixes), and either move the private-store key out of
+      the tree or drop the "encrypted" claim. Docstrings must not promise
+      encryption that the installer doesn't set up.
+- [ ] **Concurrency:** move `daylog/lock.py` to `smriti.core.oslock`; lock
+      the journal append in `writer.py` (O_APPEND isn't atomic across
+      processes on Windows); fix the private-store file counter race; track
+      file mtimes in the incremental index; make `index --full` build a new
+      generation and swap (plan 2.2).
+- [ ] **Digest truncation:** chunk long days instead of cutting at 60k chars,
+      or at least record the cut (plan 3.2).
+- [ ] **Remove the parked pipelines** (plan 4.0, 6.4); split `mcp_server.py`
+      into handler modules with a typed dispatch table; narrow the broad
+      `except Exception` handlers; deduplicate the index insert loop.
+- [ ] **CI:** ruff, the tests (with a cached or stub embedder), and strict
+      mypy on touched files.
+
 ## Nightly cycle (spec: .ai/features/nightly-cycle.md) — top of stack
 
 - [x] Capture core: per-source adapters (claude_jsonl incl. Telegram,
