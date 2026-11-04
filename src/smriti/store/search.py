@@ -95,21 +95,48 @@ def fts_terms(conn: object, query: str, k: int = FTS_MAX_TERMS) -> list[str]:
         return list(dict.fromkeys(t.lower() for t in raw))[:k]
     if len(content) <= k:
         return content
+    vocab = _vocab_table(conn)
+    if vocab is None:
+        return content[:k]
+    df: dict[str, int] = {}
+    try:
+        for t in content:
+            # unicode61 splits on '_', so `smriti_wake` is indexed as `smriti` + `wake`
+            # and matched as their phrase: its frequency is at most its rarest part's.
+            parts = [p for p in t.split("_") if p] or [t]
+            counts = []
+            for part in parts:
+                row = conn.execute(  # type: ignore[attr-defined]
+                    f"SELECT doc FROM {vocab} WHERE term = ?", (part,)
+                ).fetchone()
+                counts.append(row[0] if row else 0)
+            df[t] = min(counts)
+    except sqlite3.Error:
+        return content[:k]
+    present = [t for t in content if df[t] > 0]  # absent terms can't match anything
+    return sorted(present, key=lambda t: (df[t], t))[:k] or content[:k]
+
+
+def _vocab_table(conn: object) -> str | None:
+    """The fts5vocab table to read term frequencies from, or None.
+
+    The index schema creates ``chunks_fts_vocab`` in main, which query_only
+    readers (MCP, recall) can read but not create. Indexes built before it
+    existed get a temp one on writable connections.
+    """
+    try:
+        conn.execute("SELECT 1 FROM main.chunks_fts_vocab LIMIT 1")  # type: ignore[attr-defined]
+        return "main.chunks_fts_vocab"
+    except sqlite3.Error:
+        pass
     try:
         conn.execute(  # type: ignore[attr-defined]
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.chunks_fts_vocab "
             "USING fts5vocab(main, chunks_fts, 'row')"
         )
-        df = {}
-        for t in content:
-            row = conn.execute(  # type: ignore[attr-defined]
-                "SELECT doc FROM temp.chunks_fts_vocab WHERE term = ?", (t,)
-            ).fetchone()
-            df[t] = row[0] if row else 0
+        return "temp.chunks_fts_vocab"
     except sqlite3.Error:
-        return content[:k]
-    present = [t for t in content if df[t] > 0]  # absent terms can't match anything
-    return sorted(present, key=lambda t: (df[t], t))[:k] or content[:k]
+        return None
 
 
 def search(

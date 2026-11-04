@@ -53,6 +53,33 @@ def test_terms_absent_from_the_index_are_dropped_when_others_match(
     assert fts_terms(conn, q, k=12) == ["zebrafish"]
 
 
+def test_query_only_reader_uses_the_main_schema_vocab(conn: sqlite3.Connection) -> None:
+    # MCP and recall open the index with PRAGMA query_only=ON: no temp tables allowed.
+    conn.execute("CREATE VIRTUAL TABLE chunks_fts_vocab USING fts5vocab(chunks_fts, 'row')")
+    conn.execute("PRAGMA query_only=ON")
+    q = ("memory nightly digest rollup index chunk " * 3) + "witness anchor zebrafish quokka"
+    q += " " + " ".join(f"filler{i}" for i in range(10))
+    assert set(fts_terms(conn, q, k=3)) <= {"zebrafish", "quokka", "witness", "anchor"}
+
+
+def test_query_only_reader_without_vocab_still_answers(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA query_only=ON")
+    q = " ".join(f"term{i:02d}" for i in range(20))
+    assert fts_terms(conn, q, k=3) == ["term00", "term01", "term02"]
+
+
+def test_underscore_identifiers_are_kept_when_their_parts_are_indexed(
+        conn: sqlite3.Connection) -> None:
+    conn.execute("INSERT INTO chunks_fts(content, heading, source) VALUES "
+                 "('the smriti_wake hook fired', '', '')")
+    q = "smriti_wake " + " ".join(f"memory{i}" for i in range(15)) + " zebrafish"
+    terms = fts_terms(conn, q, k=12)
+    assert "smriti_wake" in terms
+    hits = conn.execute("SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH ?",
+                        (" OR ".join(f'"{t}"' for t in terms),)).fetchone()[0]
+    assert hits >= 1
+
+
 def test_without_fts5vocab_falls_back_to_the_first_terms() -> None:
     class NoVocab:
         def execute(self, *a: object) -> object:

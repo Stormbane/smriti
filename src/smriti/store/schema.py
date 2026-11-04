@@ -207,6 +207,16 @@ def _ensure_schema_inner(
                 content='chunks', content_rowid='rowid'
             )
         """)
+        # Term document frequencies for search.fts_terms. A vocab table stores
+        # nothing (it reads chunks_fts's index), and living in the main schema
+        # lets query_only readers use it; they can't create a temp one.
+        try:
+            conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts_vocab "
+                "USING fts5vocab(chunks_fts, 'row')"
+            )
+        except sqlite3.OperationalError as exc:  # fts5vocab missing: fts_terms falls back
+            log.debug("fts5vocab unavailable: %s", exc)
         # Sync triggers
         conn.executescript("""
             CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
