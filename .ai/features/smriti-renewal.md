@@ -46,28 +46,67 @@ They follow the nightly audit of 2026-11-03. This plan orders the work. The repo
 
 ## Progress (2026-11-04)
 
-Each commit was diff-reviewed by Codex, its findings fixed, and the result rechecked once. Full suite: 442 passed, plus 1 failure that `master` already had (the `test_mcp` isolation defect, 0.9).
+Each commit was diff-reviewed by the other model (Codex for Claude's work, Claude for Codex's), its findings fixed, and the result rechecked once. Full suite at `9b6ec4a`: **500 passed, 0 failed**.
 
-- **0.1 done:** the qmd hook is off and the nightly qmd step is dropped (`cafb9d5`).
-- **0.2 done:**
-  - `backup.py` never kills git, serialises its runs, re-checks locks before deleting them, publishes its lock token atomically, supports linked worktrees and logs to `.git/smriti-backup.jsonl` (`75b6e0c`, `0598195`, `f0d1f85`);
-  - it's deployed to the memory tree, and its first live run cleared a fourth stale `index.lock`.
-- **0.5 done:** writes no longer feed the parked queue (`f78b37e`).
-- **0.8 part 1 done:** branch paths are validated (`371e047`). Still open: the `private/` key and the index purge.
-- **0.10 done:** the rollup input budget is shared across inputs (`e72eaa2`).
-- **6.0 partly done:**
-  - the unpushed health fixture rewritten (tip `e611e0d`);
-  - synthetic IDs, and the city and device map removed (`95de3cd`);
-  - the homepage link fixed (`dc17bee`);
-  - the memory-derived actionables removed (`854f55c`).
-  - Still open: the eval cases, the private-store README pledge, and the local denylist hook.
-- **5.1-5.2 partly done:** the manifest and an idempotent executor are in `docs/audits/2026-11-04/`. Six tracked rubbish groups are deleted, one commit each and all recoverable from git (`3bc8ad1`..`9056161`, 26.5 MB): the LiveKit zip, host config backups, the archived queue, legacy `.smriti` files, `.bak` files and the `test/` stub. 152 MB of git garbage (`tmp_obj_*`) is gone too. Pushed.
-- **Held for Suti, because they're memory content rather than technical rubbish:**
-  - `heartbeat-dead` (5,119 old heartbeat notes, 34% of the index);
-  - `semantic-wiki` (187 April concept pages);
-  - `sacred-txt-tracked` (9 source texts).
-  All three are tracked and pushed, and their approval digests are in the manifest.
-- **Not backed up in git:** 1.47 GB has verified copies on D: or in svapna (the LoRA backup, the PDFs, `sources/`). 55 MB has no copy anywhere (`voice-audition/`, `esp32/`, wakeword logs, the bridge log). Both need an explicit OK.
+**Phase 0:**
+- **0.1 done:** the qmd hook is off in both harnesses, and the nightly qmd step is dropped.
+- **0.2 done:** `backup.py`:
+  - never kills git, serialises its runs, re-checks locks before deleting them and logs to `.git/smriti-backup.jsonl`;
+  - runs hook-triggered backups as a detached worker, so a harness timeout can't kill git (a denied job breakaway falls back to the foreground);
+  - is deployed, and has cleared five stale locks.
+- **0.4 done for the Claude seat:**
+  - `--setting-sources project,local`;
+  - a workdir settings file (`claudeMdExcludes` for every CLAUDE.md, auto-memory off, hooks off);
+  - always `--strict-mcp-config`;
+  - smriti's instructions as the real system prompt (`--system-prompt-file`).
+  Verified in transcripts. **Still open:** isolating the Codex fallback.
+- **0.5 done:** writes no longer feed the parked queue (`SMRITI_LEGACY_QUEUE=1` re-enables it).
+- **0.6 done:** `smriti eval` runs on a packaged synthetic fixture in a disposable sandbox. With `SMRITI_ROOT` pointed at the live tree it changes nothing. Result: 14 search cases, MRR 0.96, 13/14 (the no-answer case fails, which is 2.1's job). Implemented by Codex, reviewed by Claude.
+- **0.7 and 0.8 done:**
+  - one index policy (`store/index_policy.py`), excluding `.smriti/`, `.git/`, `private/`, `heartbeat/`, `mirrors/` (except its findings and decisions) and raw day renders;
+  - a purge of deleted and excluded sources (live: 102,037 → 21,380 chunks);
+  - writer branch paths validated.
+- **0.9 done:** a conftest isolates every test. A full run adds 0 lines to the live metrics.
+- **0.10 done:** the rollup input budget is shared across inputs, so the year rollup sees every month.
+- **0.11 done:** PID liveness no longer sends CTRL_C on Windows.
+
+**Retrieval:**
+- the FTS query keeps the 12 rarest terms (a 37-word prompt: 2.3 s → 0.04 s), using a main-schema `chunks_fts_vocab` for query-only readers;
+- hooks search keyword-only, with scores kept on the same scale;
+- `smriti` is the default recall backend.
+
+**Install:** the `[read]` extras are complete, the error message is accurate, and the clone URL is real.
+
+**Phase 6:**
+- **6.0 done:** health fixture, IDs, city, device map, memory-derived actionables, eval cases, homepage link.
+- **6.1 done:** MIT licence.
+- The repo is public at `9b6ec4a`.
+
+**Phase 7:**
+- **7.1 done:**
+  - CLAUDE.md/AGENTS.md rewritten as an honest status primer;
+  - a README for agents;
+  - counts generated from code, with a drift test.
+  Comprehension checks went from **5/10 to 10/10** (Haiku 1/5 → 5/5).
+- **7.2 done:** `docs/SELF.md` (the formal self model, built vs planned, honest antaḥkaraṇa map, invariants).
+
+**Phase 5:**
+- deleted, all recoverable from git: 6 technical-rubbish groups (26.5 MB), 5,119 dead heartbeat notes and the 187 April concept pages;
+- deleted outside git: 1.52 GB, only after re-hashing the copies on D: and in svapna (for the LoRA and PDFs); voice-audition, esp32, wakeword logs and the bridge log had no copies, on Suti's OK;
+- removed: 152 MB of git garbage;
+- kept: the sacred texts;
+- `sources/` is now tracked (encrypted) rather than deleted, because voice recall reads it.
+
+**The self (2026-11-04, Narada, in session):** the trunk files were read and revised with evidence:
+- a dated belief revision in mind.md;
+- revised and new desires in desires.md;
+- the working self `wake-context.md` got a date stamp and a "Now" section, and is tracked in git for the first time.
+
+**Gaps found by the docs pass (open):**
+- nothing reads `.smriti/handoff-pending.md`;
+- `wake-context.md` is still rebuilt only by the parked pipeline;
+- MCP registration doesn't carry the memory root;
+- `wake.md` is obsolete.
 
 ## Decisions
 
