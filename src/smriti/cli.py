@@ -907,7 +907,7 @@ def _refresh_recall_index(metrics) -> None:
 
 
 def _cmd_queue(args: argparse.Namespace) -> int:
-    from smriti.store.queue import cleanup, pending_count, queue_summary
+    from smriti.store.queue import cleanup, queue_summary
 
     action = args.action
     if action is None:
@@ -1138,54 +1138,57 @@ def _cmd_daemon(args: argparse.Namespace) -> int:
 def _cmd_eval(args: argparse.Namespace) -> int:
     from smriti.eval.metrics import compute_metrics, enrich_from_metrics_log
     from smriti.eval.report import json_report, terminal_report
-    from smriti.eval.runner import run_cascade_cases, run_judge_cases, run_search_cases
+    from smriti.eval.runner import (
+        eval_sandbox, run_cascade_cases, run_judge_cases, run_search_cases,
+    )
 
-    judge_fn = None
-    if args.real:
-        from smriti.store.judge import judge_via_claude
-        judge_fn = judge_via_claude
-        print("Using claude -p for JUDGE evaluation.")
+    with eval_sandbox() as sandbox:
+        judge_fn = None
+        if args.real:
+            from smriti.store.judge import judge_via_claude
+            judge_fn = judge_via_claude
+            print("Using claude -p for JUDGE evaluation.")
 
-    judge_results = []
-    search_results = []
-    cascade_results = []
+        judge_results = []
+        search_results = []
+        cascade_results = []
 
-    if not args.search_only and not args.cascade_only:
-        print("Running JUDGE cases...")
-        judge_results = run_judge_cases(judge_fn=judge_fn)
-    if not args.judge_only and not args.cascade_only:
-        print("Running SEARCH cases...")
-        try:
+        if not args.search_only and not args.cascade_only:
+            print("Running JUDGE cases...")
+            judge_results = run_judge_cases(judge_fn=judge_fn)
+        if not args.judge_only and not args.cascade_only:
+            print("Running SEARCH cases...")
             search_results = run_search_cases()
-        except RuntimeError as exc:
-            print(f"  Skipped: {exc}")
-    if not args.judge_only and not args.search_only:
-        print("Running CASCADE cases...")
-        cascade_results = run_cascade_cases()
+        if not args.judge_only and not args.search_only:
+            print("Running CASCADE cases...")
+            cascade_results = run_cascade_cases()
 
-    metrics = compute_metrics(judge_results, search_results, cascade_results)
-    metrics = enrich_from_metrics_log(metrics)
+        metrics = compute_metrics(judge_results, search_results, cascade_results)
+        metrics = enrich_from_metrics_log(metrics)
 
-    if args.json:
-        print(json_report(metrics, judge_results, search_results, cascade_results))
-    else:
-        print(terminal_report(
-            metrics, judge_results, search_results, cascade_results,
-            verbose=args.verbose,
-        ))
+        if args.json:
+            print(json_report(metrics, judge_results, search_results, cascade_results))
+        else:
+            print(terminal_report(
+                metrics, judge_results, search_results, cascade_results,
+                verbose=args.verbose,
+            ))
 
-    if args.baseline:
-        import json
-        from smriti.core.tree import tree_root
+        if args.baseline:
+            baseline_path = (
+                sandbox / ".smriti" / "eval-baseline.json"
+                if args.baseline is True else Path(args.baseline).resolve()
+            )
+            baseline_path.parent.mkdir(parents=True, exist_ok=True)
+            baseline_path.write_text(
+                json_report(metrics, judge_results, search_results, cascade_results),
+                encoding="utf-8",
+            )
+            print(f"Baseline saved: {baseline_path}")
+            if args.baseline is True:
+                print("Temporary baseline is removed on exit; use --baseline PATH to keep it.")
 
-        baseline_path = tree_root() / ".smriti" / "eval-baseline.json"
-        baseline_path.write_text(
-            json_report(metrics, judge_results, search_results, cascade_results),
-            encoding="utf-8",
-        )
-        print(f"Baseline saved: {baseline_path}")
-
-    return 0
+        return 0
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
@@ -1451,7 +1454,10 @@ def main(argv: list[str] | None = None) -> int:
     p_eval.add_argument("--cascade", dest="cascade_only", action="store_true", help="Cascade cases only")
     p_eval.add_argument("--real", action="store_true", help="Use claude -p for JUDGE (default: stubs)")
     p_eval.add_argument("--json", action="store_true", help="JSON output")
-    p_eval.add_argument("--baseline", action="store_true", help="Save results as baseline")
+    p_eval.add_argument(
+        "--baseline", nargs="?", const=True, metavar="PATH",
+        help="Save baseline to PATH (default: disposable sandbox)",
+    )
 
     # ── ingest ──────────────────────────────────────────────────────
     p_ingest = sub.add_parser("ingest", help="Ingest content into the memory tree")
@@ -1505,12 +1511,14 @@ def main(argv: list[str] | None = None) -> int:
     else:
         logging.basicConfig(level=logging.WARNING)
 
-    # Wire private layer if vault already exists (idempotent)
-    from smriti.core.tree import tree_root as _tree_root
-    from smriti.private.store import PrivateStore as _PrivateStore
-    _private_root = _tree_root() / "private"
-    if _private_root.exists():
-        _PrivateStore(_tree_root()).init()
+    # Eval must enter its sandbox before any default-root access.
+    if args.command != "eval":
+        # Wire private layer if vault already exists (idempotent)
+        from smriti.core.tree import tree_root as _tree_root
+        from smriti.private.store import PrivateStore as _PrivateStore
+        _private_root = _tree_root() / "private"
+        if _private_root.exists():
+            _PrivateStore(_tree_root()).init()
 
     if args.command is None:
         parser.print_help()
@@ -1612,7 +1620,6 @@ def _cmd_recall(args: argparse.Namespace) -> int:
             argv += ["--top", str(args.top)]
         return stats_main(argv)
     if sub == "index":
-        import shutil
         import subprocess
         from smriti.recall.backends.qmd import _resolve_qmd_cmd
         cmd = _resolve_qmd_cmd()

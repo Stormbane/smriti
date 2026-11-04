@@ -80,6 +80,33 @@ the same pipeline Codex uses in production.
 
 ---
 
+## Synthetic evaluation
+
+Install `smriti[read]`, then run `smriti eval` (or `smriti eval --search`).
+Each run copies the bundled fictional Ari/Sam memory tree into a fresh temporary
+folder, builds its own index, and keeps metrics and cascade writes there. The
+folder is removed on exit. No existing memory tree or index is used by default.
+Embedding models use the normal model cache and may need an initial download.
+
+The corpus has 20 short files and 14 search cases, including dated decisions,
+paraphrases, a superseded fact (the newest source must rank first), and a topic
+with no answer (any returned result fails that case). Scores measure retrieval;
+these difficult cases may fail with the current search implementation. The default
+judge always returns KEEP, so REVISE/PROMOTE cases intentionally fail until a real
+judge is selected with `--real`. Cascade uses deterministic stubs even with `--real`.
+
+Use `smriti eval --baseline ./eval-baseline.json` to keep a JSON report. Bare
+`--baseline` writes only inside the disposable folder; it is removed on exit.
+`--judge`, `--search`, and `--cascade` select individual groups. There is no CLI
+custom-tree option. Python callers may pass `db_path` to `run_search_cases` for
+searches of a disposable, read-only snapshot of an explicit index (stop its writer
+while the database and WAL are copied); cascade rejects any root that was not
+created by the active `eval_sandbox()` context. The library sandbox temporarily
+scopes process-wide environment and metrics state, so run eval separately from
+concurrent store operations in the same process.
+
+---
+
 ## Library use
 
 The harness-agnostic surface is in three packages:
