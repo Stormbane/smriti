@@ -543,3 +543,21 @@ def test_morning_location_comes_from_private_config(tmp_path: Path) -> None:
     assert cfg.location == "Lisbon, Portugal"
     prompt = morning._system_prompt(cfg.location)
     assert "(in Lisbon, Portugal)" in prompt and "tech/AI, Lisbon, Portugal" in prompt
+
+
+def test_morning_dry_run_uses_the_formatted_prompt(monkeypatch: pytest.MonkeyPatch,
+                                                   capsys: pytest.CaptureFixture[str]) -> None:
+    import argparse
+
+    from smriti import cli
+    from smriti.daylog import digest
+
+    seen: dict[str, str] = {}
+
+    def fake_compose(system: str, user: str, attempts: list, **kw: object) -> str:
+        seen["system"] = system
+        return "ok"
+
+    monkeypatch.setattr(digest, "compose", fake_compose)
+    assert cli._cmd_morning(argparse.Namespace(dry_run=True)) == 0
+    assert "{where}" not in seen["system"] and "{region}" not in seen["system"]
