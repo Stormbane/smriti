@@ -734,6 +734,7 @@ def handle_write_handoff(arguments: dict) -> str:
     reading, so subsequent sessions don't see the same handoff twice.
     """
     import os
+    import time
     from datetime import datetime, timezone
 
     from smriti.core.tree import tree_root
@@ -761,11 +762,25 @@ def handle_write_handoff(arguments: dict) -> str:
     fm = "\n".join(fm_lines) + "\n\n"
 
     body = "# Handoff to next session\n\n" + content.rstrip() + "\n"
-    # Atomic: a wake claims the letter by renaming it, so it must never see
-    # a half-written file.
-    tmp = path.with_name(f".handoff-write-{os.getpid()}.tmp")
-    tmp.write_text(fm + body, encoding="utf-8")
-    os.replace(tmp, path)
+    # Under the handoff lock the wake shares, and atomically, so a wake never
+    # archives a letter it didn't show or reads a half-written one. A busy
+    # lock doesn't stop the write: losing the letter would be worse.
+    from smriti.wake.briefing import handoff_lock
+
+    with handoff_lock(root, wait_s=5.0):
+        tmp = path.with_name(f".handoff-write-{os.getpid()}.tmp")
+        tmp.write_text(fm + body, encoding="utf-8")
+        # On Windows a replace fails while a wake is reading the old letter;
+        # retry briefly, and say so rather than lose the letter silently.
+        for attempt in range(40):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                time.sleep(0.01 * (attempt + 1))
+        else:
+            tmp.unlink(missing_ok=True)
+            return "Error: the handoff file was busy; nothing was written. Try again."
 
     msg = f"Handoff written: {path}"
     if overwriting:

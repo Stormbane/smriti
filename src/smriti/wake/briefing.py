@@ -29,8 +29,9 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import uuid
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -240,49 +241,84 @@ def pending_handoff(memory_root: Path) -> tuple[Path, str] | None:
     return (path, text) if text and text.strip() else None
 
 
-def handoff_archive_path(memory_root: Path, path: Path, text: str) -> Path:
-    """Where a letter goes once shown, derived from the letter itself.
+HANDOFF_LOCK = ".handoff.lock"
+HANDOFF_LOCK_STALE_S = 30  # held for milliseconds; older than this, its owner is gone
+_WRITTEN_RE = re.compile(r"^written:\s*(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})", re.MULTILINE)
 
-    Built from the file's mtime (a rename keeps it) and a hash of its text,
-    so the briefing can point at the archived copy before the move happens.
+
+@contextmanager
+def handoff_lock(memory_root: Path, wait_s: float = 2.0) -> Iterator[bool]:
+    """Serialise handoff writers (smriti_write_handoff) and consumers (the wake).
+
+    Yields True when the lock is held. If it can't be taken within
+    ``wait_s``, yields False: the caller decides (the wake then leaves the
+    letter for next time; the writer writes anyway rather than lose it).
     """
-    stamp = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+    lock = memory_root / ".smriti" / HANDOFF_LOCK
+    deadline = time.monotonic() + wait_s
+    held = False
+    while True:
+        try:
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode("ascii"))
+            os.close(fd)
+            held = True
+            break
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > HANDOFF_LOCK_STALE_S:
+                    lock.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                continue
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        except OSError:
+            break
+    try:
+        yield held
+    finally:
+        if held:
+            lock.unlink(missing_ok=True)
+
+
+def handoff_archive_path(memory_root: Path, text: str) -> Path:
+    """Where a letter goes once shown, derived from the letter's text alone.
+
+    Its ``written:`` time (from smriti_write_handoff's frontmatter) plus a
+    hash of the text, so the briefing can name the archived copy in advance
+    without touching the file system.
+    """
+    m = _WRITTEN_RE.search(text)
+    stamp = "{}-{}-{}T{}-{}-{}".format(*m.groups()) if m else "undated"
     digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
-    name = f"{stamp.strftime('%Y-%m-%dT%H-%M-%SZ')}-{digest}.md"
-    return memory_root / ".smriti" / "handoff-consumed" / name
+    return memory_root / ".smriti" / "handoff-consumed" / f"{stamp}-{digest}.md"
 
 
 def consume_handoff(memory_root: Path, shown: str) -> Path | None:
     """Archive the pending handoff once it has been shown, so it's shown once.
 
     Only the real session-start path calls this (``wake_runner.run``):
-    previews and tests render the briefing without consuming. The letter is
-    claimed first (an atomic rename to a private name) and compared after, so
-    a letter rewritten after rendering can't be archived unseen: it goes back
-    to pending, or, if an even newer one has landed meanwhile, into the
-    archive marked ``-unseen``. Nothing is dropped. Returns the archive path
-    of the shown letter, or None.
+    previews and tests render without consuming. Under the handoff lock, a
+    letter is archived only if it is still exactly the one that was shown;
+    a rewritten letter, a busy lock or a failed move all leave it pending
+    for the next wake. Returns the archive path, or None.
     """
-    pending = memory_root / ".smriti" / HANDOFF_FILE
-    claim = pending.with_name(f".handoff-claim-{os.getpid()}-{uuid.uuid4().hex}.md")
-    try:
-        os.replace(pending, claim)
-    except OSError:
-        return None  # nothing pending, or another wake claimed it first
-    text = _read(claim) or ""
-    target = handoff_archive_path(memory_root, claim, text)
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if text == shown:
-            os.replace(claim, target)
-            return target
-        if not pending.exists():  # rewritten after rendering: leave it for the next wake
-            os.replace(claim, pending)
+    with handoff_lock(memory_root) as held:
+        if not held:
             return None
-        os.replace(claim, target.with_name(target.stem + "-unseen.md"))
-        return None
-    except OSError:
-        return None
+        pending = memory_root / ".smriti" / HANDOFF_FILE
+        if _read(pending) != shown:
+            return None
+        target = handoff_archive_path(memory_root, shown)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(pending, target)
+        except OSError:
+            return None
+        return target
 
 
 def _handoff_block(memory_root: Path) -> _Block | None:
@@ -292,7 +328,7 @@ def _handoff_block(memory_root: Path) -> _Block | None:
     path, text = pending
     body = text.strip()
     if len(body) > HANDOFF_CAP:
-        archived = handoff_archive_path(memory_root, path, text)
+        archived = handoff_archive_path(memory_root, text)
         body = _cut(body, HANDOFF_CAP) + f"\n(full letter: {archived}, once this wake archives it)"
     head = "--- HANDOFF from your last session (shown once, then archived) ---\n"
     return _Block("handoff", head + body + "\n", pinned=True)

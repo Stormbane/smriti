@@ -43,7 +43,7 @@ def test_long_letters_are_capped_with_a_pointer(tmp_path: Path) -> None:
     out = briefing(root, cwd=tmp_path)
     from smriti.wake.briefing import handoff_archive_path
 
-    archived = handoff_archive_path(root, path, path.read_text(encoding="utf-8"))
+    archived = handoff_archive_path(root, path.read_text(encoding="utf-8"))
     assert f"(full letter: {archived}" in out
     shown = pending_handoff(root)
     assert shown is not None and consume_handoff(root, shown[1]) == archived
@@ -86,31 +86,61 @@ def test_session_start_consumes_after_printing(tmp_path: Path, monkeypatch: pyte
     assert len(list((root / ".smriti" / "handoff-consumed").glob("*.md"))) == 1
 
 
-def test_a_newer_letter_claimed_by_mistake_is_never_lost(tmp_path: Path) -> None:
-    """Rewritten after rendering, then rewritten again: the unseen one is archived, not dropped."""
+def test_a_busy_lock_leaves_the_letter_for_the_next_wake(tmp_path: Path) -> None:
     root = _root(tmp_path)
     _write(root)
+    (root / ".smriti" / ".handoff.lock").write_text("123", encoding="ascii")
     shown = pending_handoff(root)
     assert shown is not None
-    _write(root, LETTER + "\nB\n")
-    # Simulate an even newer letter landing between the claim and the give-back.
-    import importlib
+    assert consume_handoff(root, shown[1]) is None
+    assert pending_handoff(root) is not None
 
-    b = importlib.import_module("smriti.wake.briefing")  # the package re-exports a same-named function
 
-    real_read = b._read
+def test_a_stale_lock_is_broken(tmp_path: Path) -> None:
+    import os
+    import time
 
-    def read_then_newer(path: Path) -> str | None:
-        text = real_read(path)
-        if path.name.startswith(".handoff-claim-"):
-            _write(root, LETTER + "\nC\n")
-        return text
+    root = _root(tmp_path)
+    _write(root)
+    lock = root / ".smriti" / ".handoff.lock"
+    lock.write_text("123", encoding="ascii")
+    old = time.time() - 120
+    os.utime(lock, (old, old))
+    shown = pending_handoff(root)
+    assert shown is not None and consume_handoff(root, shown[1]) is not None
 
-    b._read = read_then_newer
-    try:
-        assert consume_handoff(root, shown[1]) is None
-    finally:
-        b._read = real_read
-    assert "C" in (pending_handoff(root) or ("", ""))[1]
-    unseen = list((root / ".smriti" / "handoff-consumed").glob("*-unseen.md"))
-    assert len(unseen) == 1 and "B" in unseen[0].read_text(encoding="utf-8")
+
+def test_writer_and_wake_never_archive_an_unshown_letter(tmp_path: Path,
+                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Concurrent writes and wakes: everything archived is exactly what was shown."""
+    import threading
+
+    from smriti.mcp_server import handle_write_handoff
+
+    root = _root(tmp_path)
+    monkeypatch.setenv("SMRITI_ROOT", str(root))
+    shown_texts: set[str] = set()
+    archived: list[Path] = []
+
+    def writer() -> None:
+        for i in range(25):
+            handle_write_handoff({"content": f"letter {i}"})
+
+    def wake() -> None:
+        for _ in range(25):
+            pending = pending_handoff(root)
+            if pending is None:
+                continue
+            shown_texts.add(pending[1])
+            target = consume_handoff(root, pending[1])
+            if target is not None:
+                archived.append(target)
+
+    threads = [threading.Thread(target=writer), threading.Thread(target=wake)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    for target in archived:
+        assert target.read_text(encoding="utf-8") in shown_texts
+    assert not list((root / ".smriti").glob(".handoff-*.tmp"))
