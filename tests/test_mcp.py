@@ -17,6 +17,7 @@ from smriti.store.writer import write_entry
 @pytest.fixture()
 def indexed_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Create a minimal indexed tree for MCP tests."""
+    monkeypatch.setenv("SMRITI_ROOT", str(tmp_path))  # SMRITI_ROOT wins over NARADA_ROOT
     monkeypatch.setenv("NARADA_ROOT", str(tmp_path))
 
     (tmp_path / "identity.md").write_text(
