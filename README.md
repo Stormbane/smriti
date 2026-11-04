@@ -35,7 +35,7 @@ smriti_write      -> dated markdown + index     voice transcripts -> log/YYYY/MM
 |---|---|---|
 | reconcile | Re-scans every source for turns `logd` missed | `log/YYYY/MM/DD.jsonl` |
 | render | Deterministic markdown of every day whose input changed | `log/YYYY/MM/DD.md` (not indexed) |
-| digest | One LLM call per day, with no tools: highlights, decisions, open threads. `claude -p` first, then `codex exec`. At most 10 days a night, newest first; input capped at 60,000 characters | `log/YYYY/MM/DD-digest.md` |
+| digest | One LLM call per day: highlights, decisions, open threads. `claude -p` first (no tools or MCP, isolated from the user's Claude settings), then `codex exec` as a fallback (read-only sandbox; not yet isolated from the user's Codex config). At most 10 days a night, newest first; input capped at 60,000 characters | `log/YYYY/MM/DD-digest.md` |
 | rollups | Week, month and year summaries of the digests; at most 2 a night. Nothing reads them yet except search | `log/YYYY/MM/weekN.md`, `log/YYYY/MM.md`, `log/YYYY.md` |
 | index | Incremental `smriti index`, retried up to 3 times | `.smriti/index.db` |
 | witness | Commits the tree through `backup.py`, timestamps a manifest naming HEAD with OpenTimestamps, pushes | `witness/YYYY/<night>.txt` and `.ots` |
@@ -140,7 +140,7 @@ smriti tasks install          # schedule logd, nightly and morning
 
 The witness step needs `pip install -e ".[witness]"` and a memory root that is a git repository; without them the step fails visibly in the status file. The morning message needs a `notify_cmd` in `daylog.json` (or a sender script at `.smriti/hooks/notify_suti.py`).
 
-**Per project:** `python scripts/setup_project.py` in a project directory copies the `.ai/` template and links the project's mirror. [`docs/INSTALL.md`](docs/INSTALL.md) has the details, and [`docs/USAGE.md`](docs/USAGE.md) covers use from Python.
+**Per project:** run `python <path-to-smriti>/scripts/setup_project.py` from the project's directory (or pass the project path as an argument). It copies the `.ai/` template and links the project's mirror. [`docs/INSTALL.md`](docs/INSTALL.md) has the details, and [`docs/USAGE.md`](docs/USAGE.md) covers use from Python.
 
 ## Interfaces
 
