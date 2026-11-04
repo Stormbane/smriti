@@ -251,6 +251,9 @@ def main(argv: list[str] | None = None) -> int:
     stale: list[str] = []
     for name in DOC_FILES:
         path = REPO_ROOT / name
+        # Text mode reads CRLF as LF, so blocks compare equal on any checkout;
+        # a refresh keeps the file's own line endings.
+        newline = "\r\n" if b"\r\n" in path.read_bytes() else "\n"
         text = path.read_text(encoding="utf-8")
         if stored_snippet(text) is None:
             print(f"{name}: no doc-facts markers", file=sys.stderr)
@@ -259,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
         if stored_snippet(text) == block:
             continue
         if args.write:
-            path.write_text(refresh(text, block), encoding="utf-8", newline="\n")
+            path.write_text(refresh(text, block), encoding="utf-8", newline=newline)
             print(f"{name}: refreshed")
         else:
             stale.append(name)
