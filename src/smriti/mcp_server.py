@@ -733,6 +733,7 @@ def handle_write_handoff(arguments: dict) -> str:
     Wake archives it to ~/.narada/.smriti/handoff-consumed/{utc-iso}.md after
     reading, so subsequent sessions don't see the same handoff twice.
     """
+    import os
     from datetime import datetime, timezone
 
     from smriti.core.tree import tree_root
@@ -760,7 +761,11 @@ def handle_write_handoff(arguments: dict) -> str:
     fm = "\n".join(fm_lines) + "\n\n"
 
     body = "# Handoff to next session\n\n" + content.rstrip() + "\n"
-    path.write_text(fm + body, encoding="utf-8")
+    # Atomic: a wake claims the letter by renaming it, so it must never see
+    # a half-written file.
+    tmp = path.with_name(f".handoff-write-{os.getpid()}.tmp")
+    tmp.write_text(fm + body, encoding="utf-8")
+    os.replace(tmp, path)
 
     msg = f"Handoff written: {path}"
     if overwriting:

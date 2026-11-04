@@ -26,8 +26,10 @@ they shrink further. The result never exceeds ``budget_chars``.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -238,28 +240,49 @@ def pending_handoff(memory_root: Path) -> tuple[Path, str] | None:
     return (path, text) if text and text.strip() else None
 
 
+def handoff_archive_path(memory_root: Path, path: Path, text: str) -> Path:
+    """Where a letter goes once shown, derived from the letter itself.
+
+    Built from the file's mtime (a rename keeps it) and a hash of its text,
+    so the briefing can point at the archived copy before the move happens.
+    """
+    stamp = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
+    name = f"{stamp.strftime('%Y-%m-%dT%H-%M-%SZ')}-{digest}.md"
+    return memory_root / ".smriti" / "handoff-consumed" / name
+
+
 def consume_handoff(memory_root: Path, shown: str) -> Path | None:
     """Archive the pending handoff once it has been shown, so it's shown once.
 
     Only the real session-start path calls this (``wake_runner.run``):
-    previews and tests render the briefing without consuming. ``shown`` is
-    the text that was rendered; a letter rewritten since then is left for
-    the next session instead of being archived unseen. Returns the archive
-    path, or None if there was nothing (or nothing unchanged) to archive.
+    previews and tests render the briefing without consuming. The letter is
+    claimed first (an atomic rename to a private name) and compared after, so
+    a letter rewritten after rendering can't be archived unseen: it goes back
+    to pending, or, if an even newer one has landed meanwhile, into the
+    archive marked ``-unseen``. Nothing is dropped. Returns the archive path
+    of the shown letter, or None.
     """
-    pending = pending_handoff(memory_root)
-    if pending is None or pending[1] != shown:
-        return None
-    path = pending[0]
-    archive = memory_root / ".smriti" / "handoff-consumed"
-    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-    target = archive / f"{stamp}.md"
+    pending = memory_root / ".smriti" / HANDOFF_FILE
+    claim = pending.with_name(f".handoff-claim-{os.getpid()}-{uuid.uuid4().hex}.md")
     try:
-        archive.mkdir(parents=True, exist_ok=True)
-        os.replace(path, target)
+        os.replace(pending, claim)
     except OSError:
-        return None  # another session's wake got there first
-    return target
+        return None  # nothing pending, or another wake claimed it first
+    text = _read(claim) or ""
+    target = handoff_archive_path(memory_root, claim, text)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if text == shown:
+            os.replace(claim, target)
+            return target
+        if not pending.exists():  # rewritten after rendering: leave it for the next wake
+            os.replace(claim, pending)
+            return None
+        os.replace(claim, target.with_name(target.stem + "-unseen.md"))
+        return None
+    except OSError:
+        return None
 
 
 def _handoff_block(memory_root: Path) -> _Block | None:
@@ -269,7 +292,8 @@ def _handoff_block(memory_root: Path) -> _Block | None:
     path, text = pending
     body = text.strip()
     if len(body) > HANDOFF_CAP:
-        body = _cut(body, HANDOFF_CAP) + f"\n(full letter: {path})"
+        archived = handoff_archive_path(memory_root, path, text)
+        body = _cut(body, HANDOFF_CAP) + f"\n(full letter: {archived}, once this wake archives it)"
     head = "--- HANDOFF from your last session (shown once, then archived) ---\n"
     return _Block("handoff", head + body + "\n", pinned=True)
 

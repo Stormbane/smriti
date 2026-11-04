@@ -41,7 +41,13 @@ def test_long_letters_are_capped_with_a_pointer(tmp_path: Path) -> None:
     root = _root(tmp_path)
     path = _write(root, LETTER + "x" * (HANDOFF_CAP * 2))
     out = briefing(root, cwd=tmp_path)
-    assert f"(full letter: {path})" in out
+    from smriti.wake.briefing import handoff_archive_path
+
+    archived = handoff_archive_path(root, path, path.read_text(encoding="utf-8"))
+    assert f"(full letter: {archived}" in out
+    shown = pending_handoff(root)
+    assert shown is not None and consume_handoff(root, shown[1]) == archived
+    assert archived.exists(), "the pointer must name where the letter now lives"
 
 
 def test_consume_archives_the_shown_letter(tmp_path: Path) -> None:
@@ -78,3 +84,33 @@ def test_session_start_consumes_after_printing(tmp_path: Path, monkeypatch: pyte
     assert "Finish the intentions slice." in capsys.readouterr().out
     assert pending_handoff(root) is None
     assert len(list((root / ".smriti" / "handoff-consumed").glob("*.md"))) == 1
+
+
+def test_a_newer_letter_claimed_by_mistake_is_never_lost(tmp_path: Path) -> None:
+    """Rewritten after rendering, then rewritten again: the unseen one is archived, not dropped."""
+    root = _root(tmp_path)
+    _write(root)
+    shown = pending_handoff(root)
+    assert shown is not None
+    _write(root, LETTER + "\nB\n")
+    # Simulate an even newer letter landing between the claim and the give-back.
+    import importlib
+
+    b = importlib.import_module("smriti.wake.briefing")  # the package re-exports a same-named function
+
+    real_read = b._read
+
+    def read_then_newer(path: Path) -> str | None:
+        text = real_read(path)
+        if path.name.startswith(".handoff-claim-"):
+            _write(root, LETTER + "\nC\n")
+        return text
+
+    b._read = read_then_newer
+    try:
+        assert consume_handoff(root, shown[1]) is None
+    finally:
+        b._read = real_read
+    assert "C" in (pending_handoff(root) or ("", ""))[1]
+    unseen = list((root / ".smriti" / "handoff-consumed").glob("*-unseen.md"))
+    assert len(unseen) == 1 and "B" in unseen[0].read_text(encoding="utf-8")
