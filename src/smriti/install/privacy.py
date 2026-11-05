@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -93,13 +94,30 @@ class GitState:
     # Day-log files git already tracks. An ignore rule doesn't untrack them,
     # and backup.py's `git add -A` keeps committing their changes.
     log_tracked: int = 0
-    log_encrypted: bool = False  # .gitattributes sends every committed one through git-crypt
+    log_crypt: str = "none"  # one of CRYPT_STATES: how well git-crypt protects them
+    crypt_detail: str = ""  # why, when it isn't plainly encrypted or plainly not
     error: str = ""  # git couldn't be run
 
     @property
     def log_committed(self) -> bool:
         """Conversations reach a commit: new ones aren't ignored, or old ones are tracked."""
         return not self.log_ignored or self.log_tracked > 0
+
+    @property
+    def log_encrypted(self) -> bool:
+        """Only a verified encryption counts; anything less is reported as plaintext."""
+        return self.log_crypt == CRYPT_ENCRYPTED
+
+
+# How well git-crypt protects the day-log the backup commits, weakest first.
+# A .gitattributes line alone proves nothing: git treats a filter it has no
+# configuration for as a passthrough, so a copied .gitattributes, or a clone
+# that was never unlocked, commits plaintext under a git-crypt attribute.
+CRYPT_NONE = "none"  # not every committed day-log file is marked for git-crypt
+CRYPT_INACTIVE = "inactive"  # marked, but this clone commits plaintext anyway
+CRYPT_UNVERIFIED = "unverified"  # marked and configured; git-crypt isn't here to confirm
+CRYPT_ENCRYPTED = "encrypted"  # configured, and git-crypt reports each tracked day encrypted
+CRYPT_STATES = (CRYPT_NONE, CRYPT_INACTIVE, CRYPT_UNVERIFIED, CRYPT_ENCRYPTED)
 
 
 @dataclass(frozen=True)
@@ -253,6 +271,70 @@ def _filter_attrs(root: Path, paths: list[str]) -> dict[str, str]:
     return {fields[i]: fields[i + 2] for i in range(0, len(fields) - 2, 3)}
 
 
+def git_crypt_exe() -> str | None:
+    """The git-crypt binary on PATH, if there is one."""
+    return shutil.which("git-crypt")
+
+
+# `git-crypt status` lines: "    encrypted: <path>", "not encrypted: <path>",
+# and for a file marked for encryption whose staged blob is plaintext,
+# "    encrypted: <path> *** WARNING: staged/committed version is NOT ENCRYPTED! ***".
+_CRYPT_STATUS = re.compile(r"^\s*(not encrypted|encrypted): (.*?)( \*\*\* WARNING.*)?$")
+
+
+def git_crypt_status(root: Path, exe: str) -> dict[str, bool] | None:
+    """Each file's path, and whether git-crypt says its staged version is
+    encrypted. None when git-crypt can't say."""
+    try:
+        done = subprocess.run(
+            [exe, "status"], cwd=root,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode not in (0, 1):  # 1: some file is staged unencrypted
+        return None
+    status: dict[str, bool] = {}
+    for line in done.stdout.splitlines():
+        m = _CRYPT_STATUS.match(line)
+        if m:
+            status[m.group(2)] = m.group(1) == "encrypted" and m.group(3) is None
+    return status
+
+
+def _log_protection(
+    root: Path, committed: list[str], tracked: list[str], attrs: dict[str, str]
+) -> tuple[str, str]:
+    """(one of CRYPT_STATES, why) for the day-log files the backup commits."""
+    if not committed or not all(attrs.get(p) == "git-crypt" for p in committed):
+        return CRYPT_NONE, ""
+    clean = _git(root, "config", "--get", "filter.git-crypt.clean").stdout.strip()
+    smudge = _git(root, "config", "--get", "filter.git-crypt.smudge").stdout.strip()
+    if not (clean and smudge):
+        return CRYPT_INACTIVE, (
+            ".gitattributes marks log/ for git-crypt, but this clone has no git-crypt "
+            "filter configured (git-crypt init, or git-crypt unlock after a clone), so git "
+            "commits it in plaintext"
+        )
+    exe = git_crypt_exe()
+    if exe is None:
+        return CRYPT_UNVERIFIED, (
+            "log/ is marked for git-crypt and its filter is configured, but git-crypt isn't "
+            "on PATH, so smriti couldn't confirm it encrypts"
+        )
+    status = git_crypt_status(root, exe)
+    if status is None:
+        return CRYPT_UNVERIFIED, "git-crypt status failed, so smriti couldn't confirm it encrypts"
+    plain = [p for p in tracked if status.get(p) is not True]
+    if plain:
+        return CRYPT_INACTIVE, (
+            f"{len(plain)} tracked day-log file(s) are staged unencrypted (git-crypt status -f "
+            "re-stages them; earlier commits stay readable)"
+        )
+    return CRYPT_ENCRYPTED, ""
+
+
 def inspect_git(root: Path) -> GitState:
     """The repository, its ``origin`` (where ``backup.py`` pushes), and how
     git treats the day-log: which of it is committed, and whether git-crypt
@@ -271,6 +353,7 @@ def inspect_git(root: Path) -> GitState:
         # ones unless they're ignored.
         committed = tracked + ([] if log_ignored else list(_SAMPLE_LOGS))
         attrs = _filter_attrs(root, committed) if committed else {}
+        crypt, detail = _log_protection(root, committed, tracked, attrs)
     except (OSError, subprocess.SubprocessError) as exc:
         return GitState(is_repo=True, error=str(exc))
     remote: str | None = None
@@ -283,7 +366,8 @@ def inspect_git(root: Path) -> GitState:
         remote_url=remote,
         log_ignored=log_ignored,
         log_tracked=len(tracked),
-        log_encrypted=bool(committed) and all(attrs.get(p) == "git-crypt" for p in committed),
+        log_crypt=crypt,
+        crypt_detail=detail,
     )
 
 
@@ -359,11 +443,12 @@ def remote_explanation(root: Path, git: GitState) -> str:
             f"Backup remote: {root} has no remote named origin, so the backup commits on "
             "this machine and pushes nothing. Skipping this question."
         )
-    crypt = (
-        "here it encrypts log/, but file names and commit messages stay readable"
-        if git.log_encrypted
-        else "here it isn't set up for log/"
-    )
+    if git.log_encrypted:
+        crypt = "here it encrypts log/, but file names and commit messages stay readable"
+    elif git.crypt_detail:
+        crypt = f"here {git.crypt_detail}"
+    else:
+        crypt = "here it isn't set up for log/"
     return "\n" + _para(
         f"Backup remote: the hourly backup and the nightly push the memory tree to "
         f"origin, {git.remote_url}. Git sends files in plaintext unless git-crypt "
@@ -538,11 +623,12 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
         if git.remote_url is None:
             lines.append("  pushed:    nothing; there is no remote named origin")
         else:
-            how = (
-                "log/ encrypted by git-crypt, everything else in plaintext"
-                if git.log_encrypted
-                else "in plaintext"
-            )
+            if git.log_encrypted:
+                how = "log/ encrypted by git-crypt, everything else in plaintext"
+            elif git.log_crypt == CRYPT_UNVERIFIED:
+                how = "in plaintext unless git-crypt encrypts log/ (unverified)"
+            else:
+                how = "in plaintext"
             if plan.remote.value is True:
                 said = "private, you said"
             elif plan.remote.value is False:
@@ -550,6 +636,8 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
             else:
                 said = "nobody has said it is private"
             lines.append(f"  pushed:    {tree}, to {git.remote_url}, {how}")
+            if git.crypt_detail and conversations:
+                lines.append(f"  git-crypt: {git.crypt_detail}")
             lines.append(f"  remote:    {said}")
             pushes_plain = plan.remote.value is not True
         lines.append("  (the backup and the nightly run once `smriti tasks install` schedules them)")

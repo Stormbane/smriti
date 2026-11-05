@@ -54,6 +54,32 @@ def root(home: Path) -> Path:
     return home / ".ari"
 
 
+@pytest.fixture(autouse=True)
+def _no_git_crypt_binary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """git-crypt is absent unless a test says otherwise, whatever this
+    machine has on PATH."""
+    monkeypatch.setattr(privacy, "git_crypt_exe", lambda: None)
+
+
+def mark_log_for_git_crypt(root: Path) -> None:
+    (root / ".gitattributes").write_text(
+        "log/** filter=git-crypt diff=git-crypt\n", encoding="utf-8"
+    )
+
+
+def configure_git_crypt_filter(root: Path) -> None:
+    """What `git-crypt init` or `git-crypt unlock` puts in a clone's config."""
+    for key in ("clean", "smudge"):
+        subprocess.run(["git", "-C", str(root), "config", f"filter.git-crypt.{key}",
+                        f"git-crypt {key}"], check=True)
+
+
+def fake_git_crypt(monkeypatch: pytest.MonkeyPatch, status: dict[str, bool] | None) -> None:
+    """git-crypt on PATH, whose `status` reports ``status``."""
+    monkeypatch.setattr(privacy, "git_crypt_exe", lambda: "git-crypt")
+    monkeypatch.setattr(privacy, "git_crypt_status", lambda _root, _exe: status)
+
+
 def write_daylog(root: Path, data: object) -> Path:
     path = privacy.daylog_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -382,14 +408,9 @@ class TestRemote:
         assert "ignored: there is no remote" in privacy.summary(root, plan)
 
     @needs_git
-    def test_git_crypt_and_ignore_rules_are_read_from_the_repository(self, root: Path) -> None:
+    def test_ignore_rules_are_read_from_the_repository(self, root: Path) -> None:
         git_repo(root, REMOTE)
-        (root / ".gitattributes").write_text(
-            "log/** filter=git-crypt diff=git-crypt\n", encoding="utf-8"
-        )
-        assert privacy.inspect_git(root) == privacy.GitState(
-            is_repo=True, remote_url=REMOTE, log_encrypted=True
-        )
+        assert privacy.inspect_git(root).log_ignored is False
         (root / ".gitignore").write_text("log/\n", encoding="utf-8")
         assert privacy.inspect_git(root).log_ignored is True
 
@@ -440,6 +461,29 @@ class TestRemote:
             "log/2000/** filter=git-crypt diff=git-crypt\n", encoding="utf-8"
         )
         assert privacy.inspect_git(root).log_encrypted is False
+
+    def test_git_crypt_status_output_is_parsed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Lines as git-crypt 0.7.0 prints them."""
+        out = (
+            "not encrypted: .gitattributes\n"
+            "    encrypted: log/2026/11/04.jsonl\n"
+            "    encrypted: log/2026/11/05.jsonl *** WARNING: staged/committed version is "
+            "NOT ENCRYPTED! ***\n"
+            "not encrypted: notes/a.md\n"
+            "\n"
+            "Warning: one or more files is marked for encryption via .gitattributes but\n"
+        )
+
+        def run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(args, 1, stdout=out, stderr="")
+
+        monkeypatch.setattr(privacy.subprocess, "run", run)
+        assert privacy.git_crypt_status(Path("."), "git-crypt") == {
+            ".gitattributes": False,
+            "log/2026/11/04.jsonl": True,
+            "log/2026/11/05.jsonl": False,
+            "notes/a.md": False,
+        }
 
     def test_git_that_cannot_run_is_reported(
         self, root: Path, monkeypatch: pytest.MonkeyPatch
@@ -501,16 +545,6 @@ class TestSummary:
         assert f"pushed:    the memory tree, to {REMOTE}, in plaintext" in text
         assert "WARNING" not in text  # no conversations go
 
-    @needs_git
-    def test_git_crypt_over_the_day_log_is_named(self, root: Path) -> None:
-        git_repo(root, REMOTE)
-        (root / ".gitattributes").write_text(
-            "log/** filter=git-crypt diff=git-crypt\n", encoding="utf-8"
-        )
-        plan = decide_and_apply(root, capture=True, remote_private=False)
-        text = privacy.summary(root, plan)
-        assert "log/ encrypted by git-crypt, everything else in plaintext" in text
-        assert "WARNING" not in text
 
     @needs_git
     def test_tracked_days_are_still_pushed_after_log_is_ignored(self, root: Path) -> None:
@@ -546,6 +580,112 @@ class TestSummary:
         text = privacy.summary(root, plan)
         assert "log/ is git-ignored, so not the conversations" in text
         assert "WARNING" not in text
+
+
+# ── git-crypt: verified, not assumed ────────────────────────────────
+
+
+@needs_git
+class TestGitCrypt:
+    """A git-crypt attribute is only a request; git passes a filter it has no
+    configuration for straight through, and commits plaintext."""
+
+    def _summary(self, root: Path) -> str:
+        plan = decide_and_apply(root, capture=True, remote_private=False)
+        return privacy.summary(root, plan)
+
+    def test_an_attribute_without_the_filter_configured_is_plaintext(self, root: Path) -> None:
+        """A copied .gitattributes, or a clone never unlocked."""
+        git_repo(root, REMOTE)
+        mark_log_for_git_crypt(root)
+
+        state = privacy.inspect_git(root)
+        assert state.log_crypt == privacy.CRYPT_INACTIVE
+        assert state.log_encrypted is False
+
+        text = self._summary(root)
+        assert f"to {REMOTE}, in plaintext" in text
+        assert "this clone has no git-crypt filter configured" in text
+        assert "WARNING: your conversations would go in plaintext" in text
+
+    def test_configured_but_no_git_crypt_to_check_is_unverified(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        mark_log_for_git_crypt(root)
+        configure_git_crypt_filter(root)
+
+        assert privacy.inspect_git(root).log_crypt == privacy.CRYPT_UNVERIFIED
+        text = self._summary(root)
+        assert "in plaintext unless git-crypt encrypts log/ (unverified)" in text
+        assert "isn't on PATH" in text
+        assert "WARNING: your conversations would go in plaintext" in text
+
+    def test_configured_and_confirmed_is_encrypted(
+        self, root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        git_repo(root, REMOTE)
+        track(root, "log/2026/11/04.jsonl")
+        mark_log_for_git_crypt(root)
+        configure_git_crypt_filter(root)
+        fake_git_crypt(monkeypatch, {"log/2026/11/04.jsonl": True, ".gitattributes": False})
+
+        assert privacy.inspect_git(root).log_crypt == privacy.CRYPT_ENCRYPTED
+        text = self._summary(root)
+        assert "log/ encrypted by git-crypt, everything else in plaintext" in text
+        assert "WARNING" not in text
+
+    def test_a_day_staged_before_git_crypt_is_plaintext(
+        self, root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        git_repo(root, REMOTE)
+        track(root, "log/2026/11/04.jsonl")
+        track(root, "log/2026/11/05.jsonl")
+        mark_log_for_git_crypt(root)
+        configure_git_crypt_filter(root)
+        fake_git_crypt(monkeypatch, {"log/2026/11/04.jsonl": True,
+                                     "log/2026/11/05.jsonl": False})
+
+        state = privacy.inspect_git(root)
+        assert state.log_crypt == privacy.CRYPT_INACTIVE
+        assert "1 tracked day-log file(s) are staged unencrypted" in state.crypt_detail
+        assert "WARNING" in self._summary(root)
+
+    def test_a_tracked_day_git_crypt_does_not_list_is_not_assumed_encrypted(
+        self, root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        git_repo(root, REMOTE)
+        track(root, "log/2026/11/04.jsonl")
+        mark_log_for_git_crypt(root)
+        configure_git_crypt_filter(root)
+        fake_git_crypt(monkeypatch, {})
+
+        assert privacy.inspect_git(root).log_crypt == privacy.CRYPT_INACTIVE
+
+    def test_git_crypt_status_failing_is_unverified(
+        self, root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        git_repo(root, REMOTE)
+        mark_log_for_git_crypt(root)
+        configure_git_crypt_filter(root)
+        fake_git_crypt(monkeypatch, None)
+
+        assert privacy.inspect_git(root).log_crypt == privacy.CRYPT_UNVERIFIED
+        assert "WARNING" in self._summary(root)
+
+    @pytest.mark.skipif(shutil.which("git-crypt") is None, reason="git-crypt is not installed")
+    def test_against_the_real_git_crypt(
+        self, root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A day committed before `git-crypt init` stays plaintext until re-staged."""
+        monkeypatch.setattr(privacy, "git_crypt_exe", lambda: shutil.which("git-crypt"))
+        git_repo(root, REMOTE)
+        track(root, "log/2026/11/04.jsonl")
+        subprocess.run(["git-crypt", "init"], cwd=root, check=True, capture_output=True)
+        mark_log_for_git_crypt(root)
+
+        assert privacy.inspect_git(root).log_crypt == privacy.CRYPT_INACTIVE
+
+        subprocess.run(["git-crypt", "status", "-f"], cwd=root, capture_output=True)
+        assert privacy.inspect_git(root).log_crypt == privacy.CRYPT_ENCRYPTED
 
 
 # ── scripts/install.py ──────────────────────────────────────────────
