@@ -129,10 +129,16 @@ def compose(
     """Run one read-compose-emit call through the provider chain.
 
     ``claude_cli_args`` overrides the default no-tools constraint for
-    the claude_cli seat (the morning call allows web search).
+    the claude_cli seat (the morning call allows web search). Such a call
+    runs on claude_cli ONLY: the fallback seat can't be held to the same
+    tool boundary (codex_cli keeps its shell), and a call that reads
+    untrusted web results must not fall through to it (Codex, 2026-11-05).
     """
     last_error: Exception | None = None
-    for name in _providers():
+    chain = _providers()
+    if claude_cli_args is not None:
+        chain = ["claude_cli"]
+    for name in chain:
         try:
             provider = get_provider(name)
             if not provider.is_available():

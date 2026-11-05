@@ -701,3 +701,24 @@ def test_morning_dry_run_uses_the_formatted_prompt(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(digest, "compose", fake_compose)
     assert cli._cmd_morning(argparse.Namespace(dry_run=True)) == 0
     assert "{where}" not in seen["system"] and "{region}" not in seen["system"]
+
+
+def test_a_web_search_call_never_falls_back_to_codex(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A call given claude_cli_args reads untrusted web results; codex_cli
+    can't be held to the same tool boundary, so it is never the fallback
+    (Codex, 2026-11-05)."""
+    good = FakeProvider("from codex")
+
+    class Boom:
+        def is_available(self) -> bool:
+            return True
+
+        def call(self, request: LLMRequest) -> LLMResponse:
+            raise RuntimeError("claude down")
+
+    providers = {"claude_cli": Boom(), "codex_cli": good}
+    monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: providers[name])
+    attempts: list[dict[str, str]] = []
+    with pytest.raises(Exception):
+        digest_mod.compose("sys", "user", attempts, claude_cli_args=["--tools", "WebSearch"])
+    assert [a["provider"] for a in attempts] == ["claude_cli"]
