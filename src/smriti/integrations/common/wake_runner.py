@@ -47,7 +47,8 @@ def _fire_backup(script_dir: Path) -> None:
             "close_fds": True,
         }
         if sys.platform == "win32":
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP
+                                     | subprocess.CREATE_NO_WINDOW)
         subprocess.Popen(
             [sys.executable, str(script), "--tag", "wake", "--push"],
             **kwargs,

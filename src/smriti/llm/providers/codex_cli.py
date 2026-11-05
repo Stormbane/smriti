@@ -70,6 +70,7 @@ class CodexCliProvider:
                 cmd, capture_output=True, text=True, timeout=timeout,
                 input=prompt, encoding="utf-8", errors="replace",
                 env={**os.environ, "SMRITI_INTERNAL": "1"},
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except FileNotFoundError as exc:
             raise LLMError("codex CLI not found. Is Codex installed?") from exc

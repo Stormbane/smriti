@@ -26,11 +26,12 @@ def _windowless_python() -> str:
 
 
 def _smriti_cmd(args: str, *, windowless: bool = False) -> str:
-    """Task command line. ``windowless`` uses pythonw so the tick doesn't
-    flash a console window — only safe for tasks that spawn no console
-    children of their own: a console child of a windowless parent
-    allocates its OWN console, so nightly/morning (which run ``claude
-    -p`` repeatedly) would flash MORE under pythonw, not less.
+    """Task command line. ``windowless`` uses pythonw so the task doesn't
+    show a console window for its whole run. Only safe because every
+    background spawn in smriti (claude/codex calls, git, qmd, backup,
+    notify) passes CREATE_NO_WINDOW: a console child of a windowless
+    parent otherwise allocates its OWN visible console, which flashes
+    more under pythonw, not less. A new spawn site must do the same.
     """
     exe = _windowless_python() if windowless and os.name == "nt" else sys.executable
     return f'"{exe}" -m smriti {args}'
@@ -39,8 +40,8 @@ def _smriti_cmd(args: str, *, windowless: bool = False) -> str:
 TASKS: list[tuple[str, str, list[str], bool]] = [
     # name, smriti args, schtasks schedule, windowless
     ("smriti-logd", "logd --ensure", ["/sc", "minute", "/mo", "10"], True),
-    ("smriti-nightly", "nightly", ["/sc", "daily", "/st", "03:00"], False),
-    ("smriti-morning", "morning", ["/sc", "daily", "/st", "07:00"], False),
+    ("smriti-nightly", "nightly", ["/sc", "daily", "/st", "03:00"], True),
+    ("smriti-morning", "morning", ["/sc", "daily", "/st", "07:00"], True),
 ]
 
 

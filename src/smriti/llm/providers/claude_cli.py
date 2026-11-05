@@ -133,6 +133,9 @@ class ClaudeCliProvider:
                 cmd, capture_output=True, text=True, timeout=timeout,
                 input=stdin_text, env=env, cwd=workdir,
                 encoding="utf-8", errors="replace",
+                # hidden console: from a windowless caller (pythonw task,
+                # daemon) claude and every shell it runs would otherwise flash
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
 
         try:

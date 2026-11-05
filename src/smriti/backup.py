@@ -65,6 +65,7 @@ def trigger(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=timeout)

@@ -20,6 +20,7 @@ def git_running() -> bool:
             proc = subprocess.run(
                 ["tasklist", "/FI", "IMAGENAME eq git.exe", "/FO", "CSV", "/NH"],
                 capture_output=True, text=True, timeout=10, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             return proc.returncode != 0 or "git.exe" in proc.stdout.lower()
         # pgrep: 0 = found, 1 = none found, anything else = could not tell.

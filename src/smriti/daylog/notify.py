@@ -36,6 +36,7 @@ def notify_user(cfg: DaylogConfig, message: str, *, timeout_s: int = 60) -> None
         encoding="utf-8",
         errors="replace",
         timeout=timeout_s,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if result.returncode != 0:
         snippet = (result.stderr or result.stdout or "(no output)")[:300]

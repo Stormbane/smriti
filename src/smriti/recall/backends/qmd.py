@@ -170,6 +170,7 @@ def _query_via_subprocess(
     try:
         proc = subprocess.run(
             args, capture_output=True, text=True, timeout=timeout_s,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.TimeoutExpired:
         return [], None, "qmd_timeout"
@@ -244,11 +245,13 @@ def daemon_start() -> tuple[bool, str]:
     if daemon_health(timeout_s=0.5):
         return True, "already_running"
     try:
-        # On Windows, DETACHED_PROCESS keeps it alive after our process
-        # exits. On POSIX, start_new_session does the same.
+        # It outlives our process either way. On Windows it gets a hidden
+        # console (CREATE_NO_WINDOW), never DETACHED_PROCESS: qmd is a .cmd,
+        # and cmd.exe with no console gives node a visible window.
+        # On POSIX, start_new_session detaches it.
         kwargs: dict = {}
         if os.name == "nt":
-            kwargs["creationflags"] = 0x00000008  # DETACHED_PROCESS
+            kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
         else:
             kwargs["start_new_session"] = True
         subprocess.Popen(
@@ -277,6 +280,7 @@ def daemon_stop() -> tuple[bool, str]:
     try:
         proc = subprocess.run(
             [*cmd, "mcp", "stop"], capture_output=True, text=True, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except Exception as exc:
         return False, f"stop_failed: {str(exc)[:160]}"
