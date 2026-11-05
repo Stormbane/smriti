@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from smriti.core.frontmatter import one_line
@@ -9,6 +10,15 @@ from smriti.mcp.tool import Arguments, Tool, ToolError
 
 # Characters that would end or split the frontmatter's [tag, tag] list.
 _LIST_SYNTAX = str.maketrans("[],", "   ")
+
+
+def _mentions(text: str, phrase: str) -> bool:
+    """Whether ``phrase`` appears in ``text`` as whole words, any case or spacing."""
+    words = phrase.split()
+    if not words:
+        return False
+    pattern = r"(?<!\w)" + r"\s+".join(re.escape(w) for w in words) + r"(?!\w)"
+    return re.search(pattern, text, re.IGNORECASE) is not None
 
 
 def _slugify(text: str, max_len: int = 60) -> str:
@@ -70,10 +80,8 @@ def handle_add_todo(arguments: Arguments) -> str:
     todo_path = root / "mirrors" / project / "ai" / "todo.md"
     if not todo_path.exists():
         # Caller must use a known mirror -- no silent misroute.
-        available = sorted(
-            p.name for p in (root / "mirrors").iterdir()
-            if p.is_dir() and (p / "ai" / "todo.md").exists()
-        )
+        available = [p for p in _known_projects()
+                     if (root / "mirrors" / p / "ai" / "todo.md").exists()]
         raise ToolError(
             f"project {project!r} has no .ai/todo.md mirror. "
             f"Known projects with todos: {', '.join(available) or '(none)'}."
@@ -89,8 +97,9 @@ def handle_add_todo(arguments: Arguments) -> str:
         except OSError as exc:
             raise ToolError(f"could not read {todo_path}: {exc}") from exc
 
-        # Substring dedup on topic
-        if topic and topic in content:
+        # The topic as a whole phrase, not a substring: "fix" used to match
+        # "prefix", and so almost anything.
+        if _mentions(content, topic):
             return f"Skipped (topic already present): {topic[:60]}"
 
         # Insert under "## Active" (create if missing)

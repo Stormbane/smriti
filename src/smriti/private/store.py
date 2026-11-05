@@ -14,6 +14,7 @@ Layout:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -114,7 +115,11 @@ class PrivateStore:
         has_ciphertext = any(self.private_root.rglob("*.md.enc"))
         if (not key_path.exists() and self._legacy_readme_key() is None
                 and not has_ciphertext):
-            key_path.write_text(self._generate_key() + "\n", encoding="ascii")
+            # Owner-only from the first byte (POSIX; Windows ignores the mode),
+            # and exclusive, so two inits can't both write a key.
+            fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="ascii") as f:
+                f.write(self._generate_key() + "\n")
 
     @staticmethod
     def _generate_key() -> str:

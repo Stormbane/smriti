@@ -8,9 +8,12 @@ from smriti.core.frontmatter import one_line
 from smriti.mcp.tool import Arguments, Tool, ToolError
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from smriti.store.schema import IndexDB
 
 _db: IndexDB | None = None
+_db_path: Path | None = None  # the index _db was opened on
 
 
 def _get_db() -> IndexDB:
@@ -19,13 +22,16 @@ def _get_db() -> IndexDB:
     and with one server per Claude/codex session those writes deadlocked
     reads across the fleet ("database is locked", 2026-08-27). The
     indexer owns the schema; this process only reads it."""
-    global _db
-    if _db is not None:
-        return _db
+    global _db, _db_path
     from smriti.core.tree import smriti_db_path
     from smriti.store.schema import open_readonly
 
     db_path = smriti_db_path()
+    if _db is not None and _db_path == db_path:
+        return _db
+    if _db is not None:  # the root changed under a long-lived server: follow it
+        _db.close()
+        _db = None
     if not db_path.exists():
         raise ToolError("no index yet; run 'smriti index' first")
     db = open_readonly(db_path)
@@ -33,7 +39,7 @@ def _get_db() -> IndexDB:
     if not row:
         db.close()
         raise ToolError("the index has no dimension recorded; run 'smriti index --full'")
-    _db = db
+    _db, _db_path = db, db_path
     return _db
 
 
