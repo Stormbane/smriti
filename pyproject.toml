@@ -72,6 +72,7 @@ packages = ["src/smriti"]
 
 [tool.pytest.ini_options]
 markers = [
+    "needs_model: requires semantic embedding quality; skipped with SMRITI_EMBED_PROVIDER=stub",
     "slow: perf regression guards — run with `pytest -m slow`. Excluded from default runs to keep `pytest` fast.",
 ]
 addopts = "-m 'not slow'"

@@ -10,10 +10,19 @@ and a temp HOME would re-download the model for every run.
 """
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    if os.environ.get("SMRITI_EMBED_PROVIDER", "").strip().lower() == "stub":
+        skip = pytest.mark.skip(reason="requires semantic embeddings; stub hashes words only")
+        for item in items:
+            if item.get_closest_marker("needs_model") is not None:
+                item.add_marker(skip)
 
 
 @pytest.fixture(autouse=True)

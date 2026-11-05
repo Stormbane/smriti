@@ -4,7 +4,7 @@
 Vendored from zilliztech/memsearch (MIT License, (c) 2025 Zilliz Inc.)
 Upstream: https://github.com/zilliztech/memsearch/blob/main/src/memsearch/embeddings/
 Vendored on: 2026-04-12
-Modifications from upstream: _PROVIDERS module paths updated for vendored location.
+Modifications from upstream: vendored module paths and a stdlib-only stub provider.
 License: see smriti/NOTICE.md and smriti/src/smriti/_vendored/memsearch/LICENSE
 ---
 """
@@ -35,6 +35,7 @@ _PROVIDERS: dict[str, tuple[str, str]] = {
     "ollama": ("smriti._vendored.memsearch.embeddings.ollama", "OllamaEmbedding"),
     "local": ("smriti._vendored.memsearch.embeddings.local", "LocalEmbedding"),
     "onnx": ("smriti._vendored.memsearch.embeddings.onnx", "OnnxEmbedding"),
+    "stub": ("smriti._vendored.memsearch.embeddings.stub", "StubEmbedding"),
 }
 
 # Default model for each provider (mirrors the __init__ defaults in each class).
@@ -46,6 +47,7 @@ DEFAULT_MODELS: dict[str, str] = {
     "ollama": "nomic-embed-text",
     "local": "all-MiniLM-L6-v2",
     "onnx": "gpahal/bge-m3-onnx-int8",
+    "stub": "stub-384",
 }
 
 _INSTALL_HINTS: dict[str, str] = {
@@ -71,7 +73,7 @@ def get_provider(
     Parameters
     ----------
     name:
-        One of "openai", "google", "voyage", "ollama", "local", "onnx".
+        One of "openai", "google", "voyage", "ollama", "local", "onnx", "stub".
     model:
         Override the default model for the provider.
     batch_size:
