@@ -659,6 +659,10 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
         lines.append(f"  captured:  {what}, copied into {root / 'log'} as you talk")
     else:
         lines.append('  captured:  nothing ("sources": [] in .smriti/daylog.json)')
+    lines.append(
+        "             (a running smriti logd rereads .smriti/daylog.json when it changes, "
+        "on its next pass, within a few seconds)"
+    )
 
     # Day-log files already tracked, or on disk and not ignored, are
     # committed whether or not capture is on now.

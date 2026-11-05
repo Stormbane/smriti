@@ -853,6 +853,7 @@ class TestInstaller:
         assert (root / ".smriti" / "wake.py").exists()  # the core install ran
         out = capsys.readouterr().out
         assert "captured:  nothing" in out
+        assert "a running smriti logd rereads .smriti/daylog.json when it changes" in out
         assert out.rstrip().endswith("pushed:    nothing")  # the summary is last
 
     def test_capture_flag_without_a_terminal(
