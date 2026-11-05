@@ -69,8 +69,11 @@ _SYSTEM = (
 
 # Web search only: no MCP servers, no file/exec tools. --tools removes every
 # other built-in tool; --allowedTools alone only permits WebSearch and leaves
-# file tools in reach of a malicious search result (Codex, 2026-11-05).
-_COMPOSE_ARGS = ["--strict-mcp-config", "--tools", "WebSearch", "--allowedTools", "WebSearch"]
+# file tools in reach of a malicious search result (Codex, 2026-11-05). The
+# values are attached for the reason digest._NO_TOOLS_ARGS gives, and
+# tests/test_llm_tool_boundary.py checks the set against the installed CLI.
+_COMPOSE_ARGS = ["--strict-mcp-config", "--tools=WebSearch", "--allowedTools=WebSearch",
+                 "--disable-slash-commands"]
 
 
 def _scrubbed(value: object) -> object:

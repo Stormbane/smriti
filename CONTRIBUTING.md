@@ -46,6 +46,11 @@ tests when the stub is selected. An index built with the stub records it, and
 later runs against that index keep using it. Use disposable indexes, never a
 real memory index, for stub runs. Offline mode also prevents the optional reranker from downloading a model.
 
+Tests marked `needs_cli` (`tests/test_llm_tool_boundary.py`) run the installed
+Claude Code CLI to check that the nightly's and the morning's LLM calls get no
+tools beyond the ones they need. They run when `claude` is installed and logged
+in, cost a few cents on haiku, and skip in CI; set `CI=1` to skip them locally.
+
 To exercise the normal model path, unset `SMRITI_EMBED_PROVIDER` and run the same
 pytest command. The selected provider needs its model installed or cached. Unset
 `HF_HUB_OFFLINE` only when intentionally allowing a first model download. The

@@ -105,9 +105,21 @@ _MERGE_SYSTEM = (
 # any other heading, even an unindented one, belongs to the turn it is in.
 _TURN_RE = re.compile(r"- `(\d\d:\d\d)`")
 
-# No-tools constraint for the compose subprocess. --strict-mcp-config with
-# no --mcp-config drops MCP servers entirely.
-_NO_TOOLS_ARGS = ["--strict-mcp-config", "--disallowedTools", "*"]
+# The compose subprocess reads untrusted text (captured transcripts), so it
+# gets text in and text out, nothing else. tests/test_llm_tool_boundary.py
+# runs the installed CLI with these flags; on Claude Code 2.1.283:
+# - --strict-mcp-config, with no --mcp-config, drops every MCP server. Without
+#   it the account's claude.ai connectors (mail, documents) load, even under
+#   --setting-sources project,local. It comes first, so no flag can swallow it.
+# - --tools= is the documented "no built-in tools". Its empty value is attached:
+#   a separate "" that a wrapper dropped would leave the variadic --tools to
+#   take the next flag as its value (--tools --strict-mcp-config loads the
+#   connectors, and --tools --setting-sources drops the isolation).
+# - --disallowedTools=* denies every tool as a second layer. On 2.1.283 it
+#   alone empties the tool list too, but the wildcard isn't documented.
+# - --disable-slash-commands removes the skills and slash commands.
+_NO_TOOLS_ARGS = ["--strict-mcp-config", "--tools=", "--disallowedTools=*",
+                  "--disable-slash-commands"]
 
 
 def _providers() -> list[str]:

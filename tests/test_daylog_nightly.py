@@ -180,7 +180,8 @@ def test_digest_writes_file_with_input_hash(tmp_path: Path, fake_llm: FakeProvid
     assert "test digest" in out.read_text(encoding="utf-8")
     assert attempts == [{"provider": "claude_cli", "outcome": "ok"}]
     # The compose subprocess is constrained to no tools.
-    assert fake_llm.requests[0].cli_args == ["--strict-mcp-config", "--disallowedTools", "*"]
+    assert fake_llm.requests[0].cli_args == [
+        "--strict-mcp-config", "--tools=", "--disallowedTools=*", "--disable-slash-commands"]
 
 
 def test_digest_falls_back_when_primary_fails(tmp_path: Path,

@@ -10,7 +10,10 @@ and a temp HOME would re-download the model for every run.
 """
 from __future__ import annotations
 
+import json
 import os
+import shutil
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -23,6 +26,30 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         for item in items:
             if item.get_closest_marker("needs_model") is not None:
                 item.add_marker(skip)
+    cli_items = [item for item in items if item.get_closest_marker("needs_cli") is not None]
+    if cli_items:
+        why = _claude_cli_unready()
+        if why:
+            for item in cli_items:
+                item.add_marker(pytest.mark.skip(reason=why))
+
+
+def _claude_cli_unready() -> str:
+    """Why the real-CLI tests can't run here; "" when they can."""
+    if os.environ.get("CI"):
+        return "CI has no Claude Code login"
+    cli = shutil.which("claude")
+    if cli is None:
+        return "the claude CLI is not installed"
+    try:
+        result = subprocess.run([cli, "auth", "status"], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=60)
+        status = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return "`claude auth status` gave no answer"
+    if not (isinstance(status, dict) and status.get("loggedIn") is True):
+        return "the claude CLI is not logged in"
+    return ""
 
 
 @pytest.fixture(autouse=True)

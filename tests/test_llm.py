@@ -335,6 +335,30 @@ def test_the_morning_call_has_web_search_and_no_other_tool():
     (Codex, 2026-11-05)."""
     from smriti.daylog.morning import _COMPOSE_ARGS
 
-    i = _COMPOSE_ARGS.index("--tools")
-    assert _COMPOSE_ARGS[i + 1] == "WebSearch"
+    assert "--tools=WebSearch" in _COMPOSE_ARGS
+    assert "--allowedTools=WebSearch" in _COMPOSE_ARGS
     assert "--strict-mcp-config" in _COMPOSE_ARGS
+
+
+def test_the_digest_call_disables_every_tool_by_the_documented_flag():
+    """`--tools=` is Claude Code's documented "no built-in tools";
+    `--disallowedTools=*` relies on an undocumented wildcard, so it is only
+    the second layer. tests/test_llm_tool_boundary.py runs the real CLI."""
+    from smriti.daylog.digest import _NO_TOOLS_ARGS
+
+    assert "--tools=" in _NO_TOOLS_ARGS and "--disallowedTools=*" in _NO_TOOLS_ARGS
+
+
+def test_the_tool_flags_carry_their_values_attached():
+    """No flag takes a separate value: a separate "" that a wrapper dropped
+    would let the variadic --tools take the next flag as its value, and on
+    Claude Code 2.1.283 `--tools --strict-mcp-config` loaded the account's
+    MCP connectors. --strict-mcp-config comes first, where nothing precedes
+    it to swallow it."""
+    from smriti.daylog.digest import _NO_TOOLS_ARGS
+    from smriti.daylog.morning import _COMPOSE_ARGS
+
+    for args in (_NO_TOOLS_ARGS, _COMPOSE_ARGS):
+        assert args[0] == "--strict-mcp-config"
+        assert all(arg.startswith("--") for arg in args), args
+        assert "--disable-slash-commands" in args
