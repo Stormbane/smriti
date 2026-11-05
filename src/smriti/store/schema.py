@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -154,10 +155,10 @@ def ensure_schema(
             busy_ms = 10_000
     busy_ms = max(busy_ms, 1000)
     conn = sqlite3.connect(str(db_path), timeout=max(busy_ms / 1000.0, 1.0))
-    conn.execute(f"PRAGMA busy_timeout={busy_ms}")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
     try:
+        conn.execute(f"PRAGMA busy_timeout={busy_ms}")
+        _set_wal(conn, busy_ms)
+        conn.execute("PRAGMA foreign_keys=ON")
         return _ensure_schema_inner(conn, dimension)
     except BaseException:
         # Leak-proofing (2026-08-28 lock cascade): a throw mid-schema
@@ -297,6 +298,24 @@ def _ensure_schema_inner(
     conn.commit()
 
     return IndexDB(conn=conn, has_vec=has_vec, has_fts=has_fts)
+
+
+def _set_wal(conn: sqlite3.Connection, busy_ms: int) -> None:
+    """Switch to WAL, waiting out another connection doing the same to a new file.
+
+    Two writers creating an index at once (two sessions' first writes) both
+    switch the new file to WAL, and SQLite fails one of them with "database
+    is locked" at once, without running the busy handler.
+    """
+    deadline = time.monotonic() + busy_ms / 1000.0
+    while True:
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
 
 
 def _add_sources_vectors(conn: sqlite3.Connection) -> None:

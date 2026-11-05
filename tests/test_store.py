@@ -314,6 +314,36 @@ def _sources(db_path: Path) -> set[str]:
         db.close()
 
 
+def test_writers_creating_a_new_index_at_once_all_get_it(tmp_path: Path) -> None:
+    """Two sessions' first writes create the index together. Switching a new file
+    to WAL failed one of them with "database is locked" at once, without
+    waiting (seen in H10's first-write race test)."""
+    import threading
+
+    for round_ in range(15):
+        db_path = tmp_path / f"round{round_}" / "index.db"
+        start = threading.Barrier(4)
+        errors: list[BaseException] = []
+
+        def create(dim: int, db_path: Path = db_path, start: threading.Barrier = start,
+                   errors: list[BaseException] = errors) -> None:
+            start.wait()
+            try:
+                conn = ensure_schema(db_path, dim)
+                conn.execute("BEGIN IMMEDIATE")
+                conn.commit()
+                conn.close()
+            except BaseException as exc:  # noqa: BLE001 — collected, asserted below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=create, args=(d,)) for d in (384, 8, 384, 8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors, errors
+
+
 def test_purge_drops_deleted_and_newly_excluded_sources(mini_tree: Path) -> None:
     db_path = mini_tree / ".smriti" / "index.db"
     index_tree(root=mini_tree, db=db_path)
