@@ -63,8 +63,8 @@ Before submitting:
 
 ```sh
 python -m ruff check src tests scripts
-python -m mypy --strict src/smriti/core src/smriti/store src/smriti/daylog src/smriti/wake src/smriti/mcp src/smriti/profiles
-python -m mypy --strict --platform linux src/smriti/core src/smriti/store src/smriti/daylog src/smriti/wake src/smriti/mcp src/smriti/profiles
+python -m mypy --strict src/smriti
+python -m mypy --strict --platform linux src/smriti
 python scripts/doc_facts.py --write
 ```
 
@@ -84,9 +84,7 @@ Run tests with both the stub and the normal model for embedding-related changes.
 The generated counts in README.md, AGENTS.md, and CLAUDE.md must travel with test or
 CLI/MCP surface changes. Keep AGENTS.md and CLAUDE.md identical apart from their
 orientation sentence. CI runs lint, `mypy --strict` and stub-mode tests on Windows,
-Linux, and macOS with Python 3.11 and 3.12. Strict typing is enforced on `core`,
-`store`, `daylog`, `wake`, `mcp` and `profiles`; elsewhere it still has a backlog,
-so keep new and touched code clean.
+Linux, and macOS with Python 3.11 and 3.12. Strict typing is enforced on the whole package (vendored code excepted).
 
 ## Commits and review
 

@@ -90,7 +90,7 @@ Tests import `smriti` from wherever it is installed. In a second checkout or wor
 
 ## Rules
 
-- Python 3.11+. `ruff` and `mypy --strict` are the standard. Ruff checks `E4`, `E7`, `E9` and `F`, plus `E501` (line length 100), `B` (bugbear) and `BLE` (blind excepts); vendored code is exempt from the last three. `ruff check src tests scripts` passes, and CI enforces `mypy --strict` on `core`, `store`, `daylog`, `wake`, `mcp` and `profiles`. The rest of the package (the CLI, integrations, recall, llm, private, eval) still has strict errors, so keep new and touched code there clean.
+- Python 3.11+. `ruff` and `mypy --strict` are the standard. Ruff checks `E4`, `E7`, `E9` and `F`, plus `E501` (line length 100), `B` (bugbear) and `BLE` (blind excepts); vendored code is exempt from the last three. `ruff check src tests scripts` passes, and CI enforces `mypy --strict` on the whole package on every OS (vendored code excepted).
 - Narrow an `except Exception` to what can be raised. Keep one only where any failure must be survived (a top-level handler, a hook, a non-critical step), with `# noqa: BLE001 — <reason>`; it still logs the failure or records it in a status the caller sees.
 - No runtime dependencies in the base install (`dependencies = []`). Optional ones go in extras: `read`, `api`, `codex`, `private`, `witness`, `dev`.
 - Check `.ai/knowledge/conventions.md` before introducing a new pattern.

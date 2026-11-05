@@ -205,7 +205,7 @@ The witness step needs `pip install -e ".[witness]"` and a memory root that is a
   - capture records no gaps;
   - the identity summary is loaded without being accepted, and goes stale.
 - **Data flow:** the tree and the index are local files; [Privacy](#privacy) says what is captured, what backups push, and what the nightly sends to an LLM.
-- **Engineering:** CI runs `ruff`, `mypy --strict` and the tests on Windows, Linux and macOS with Python 3.11 and 3.12, with a deterministic stub embedder, so no model is downloaded. Strict types are enforced on `core`, `store`, `daylog`, `wake`, `mcp` and `profiles`; the rest of the package isn't strict yet. Day-to-day use is on Windows; on macOS the CI's Python can't load sqlite-vec, so search there is keyword-only.
+- **Engineering:** CI runs `ruff`, `mypy --strict` and the tests on Windows, Linux and macOS with Python 3.11 and 3.12, with a deterministic stub embedder, so no model is downloaded. Strict types are enforced on the whole package (the vendored code excepted). Day-to-day use is on Windows; on macOS the CI's Python can't load sqlite-vec, so search there is keyword-only.
 
 The plan, with measurements, is [`.ai/features/smriti-renewal.md`](.ai/features/smriti-renewal.md).
 
