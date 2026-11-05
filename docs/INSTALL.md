@@ -279,6 +279,7 @@ defaults apply, and capture is off.
 | `extra_sources` | none | Capture globs added to whichever of the above applies |
 | `notify_cmd` | none | The command `smriti morning` pipes its message to; no command, no morning |
 | `location` | none | Where the user lives, for the morning's local headlines |
+| `morning_web_search` | `false` | `true` lets the morning call search the web for headlines, and only that; off, it gets no tools and writes from the digest alone. Search results can carry a prompt injection: see [PRIVACY.md](PRIVACY.md#what-goes-to-an-llm) |
 | `user_name` | `"User"` | The user's display name: the day render, the presence line, the nightly and morning prompts, the core tools' text, the reading list's person file (`people/<name>/<name>.md`) |
 | `agent_name` | `"Agent"` | The agent's display name, used in the same places |
 | `profile` | none | An optional profile, `smriti.profiles.<name>`; see below |
@@ -299,10 +300,12 @@ The only profile in the repo is `reference`, the maintainer's own
 installation (the agent Narada, the user Suti). It adds the `tell_suti`,
 `smriti_ask_suti`, `smriti_propose_goal_shift` and `smriti_resolve_outbox`
 tools, the wake's `HANDS`, `SUTI NOW` and `ACROSS SURFACES` sections, and
-the morning persona. That installation enables it with:
+the morning persona. That installation enables it, with the morning's web
+search, with:
 
 ```json
-{"profile": "reference", "user_name": "Suti", "agent_name": "Narada"}
+{"profile": "reference", "user_name": "Suti", "agent_name": "Narada",
+ "morning_web_search": true}
 ```
 
 To write your own, add a package under `src/smriti/profiles/<name>/`

@@ -93,9 +93,10 @@ log needs only a collector, not new instrumentation.
   message is the sole autonomous outbound act. The sending code (not the LLM)
   performs delivery, guarded by a durable per-date sent ledger written before
   the send attempt — a crash mid-send means no message that day, never two.
-  The composing LLM call has no MCP tools and no side-effect capability
-  beyond web search for headlines; it returns text, and smriti's own code
-  sends it.
+  The composing LLM call has no tools, or web search for headlines and
+  nothing else when `morning_web_search` is on in `daylog.json` (H11.2:
+  search results can carry a prompt injection, so it is opt-in); it returns
+  text, and smriti's own code sends it.
 - **LLM steps are read-compose-emit.** The digest and rollup calls read
   inputs and return text; they hold no `smriti_write` license and no tools.
   Anything notable belongs *in the digest file*, which lives in the tree and
@@ -213,9 +214,12 @@ hash; re-running a night that already completed is a no-op.
 
 1. Check the sent ledger (`log/.morning-sent/YYYY-MM-DD`); if present, exit —
    at most one message per day, ever.
-2. Compose: one `claude -p` call with web search only (no MCP, no file
-   tools) — reads the digest text passed in the prompt, fetches broad world
-   headlines, picks 3–5 worth knowing, returns the good-morning message text.
+2. Compose: one `claude -p` call, on claude_cli only, that reads the digest
+   text passed in the prompt and returns the good-morning message text. It
+   has no tools (the digest's flags); with `morning_web_search` on, it has web
+   search and nothing else (no MCP, no file tools), fetches broad world
+   headlines and picks 3–5 worth knowing. The prompt offers headlines only
+   when the call can search.
 3. Write the sent-ledger entry (fail-closed: crash after this point means a
    silent morning, never a double send), then smriti's own code delivers via
    `notify_user(cfg, message)` (named `notify_suti` before H5) — the

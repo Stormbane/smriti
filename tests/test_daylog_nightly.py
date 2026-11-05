@@ -625,8 +625,53 @@ def test_morning_location_comes_from_private_config(tmp_path: Path) -> None:
         json.dumps({"location": "  Lisbon, Portugal "}), encoding="utf-8")
     cfg = load_config(tmp_path)
     assert cfg.location == "Lisbon, Portugal"
-    prompt = morning._system_prompt(cfg)
+    assert "(in Lisbon, Portugal)" in morning._system_prompt(cfg)
+    (tmp_path / ".smriti" / "daylog.json").write_text(
+        json.dumps({"location": "Lisbon, Portugal", "morning_web_search": True}),
+        encoding="utf-8")
+    prompt = morning._system_prompt(load_config(tmp_path))
     assert "(in Lisbon, Portugal)" in prompt and "tech/AI, Lisbon, Portugal" in prompt
+
+
+def test_morning_web_search_is_off_unless_daylog_json_turns_it_on(tmp_path: Path) -> None:
+    from smriti.daylog.config import load_config
+
+    assert load_config(tmp_path).morning_web_search is False
+    (tmp_path / ".smriti").mkdir()
+    path = tmp_path / ".smriti" / "daylog.json"
+    path.write_text(json.dumps({"morning_web_search": "yes"}), encoding="utf-8")
+    assert load_config(tmp_path).morning_web_search is False  # only a JSON true
+    path.write_text(json.dumps({"morning_web_search": True}), encoding="utf-8")
+    assert load_config(tmp_path).morning_web_search is True
+
+
+def test_a_morning_without_web_search_gets_no_tools_and_offers_no_news(
+    tmp_path: Path, fake_llm: FakeProvider,
+) -> None:
+    """The morning reads the digest, which derives from untrusted transcripts:
+    by default it gets the digest's no-tools flags, and a prompt that doesn't
+    promise headlines it can't fetch."""
+    cfg = _cfg(tmp_path)
+    cfg.notify_cmd, _sent = _notify_to_file(tmp_path)
+    assert run_morning(cfg, now=datetime(2026, 9, 4, 21, 0, tzinfo=timezone.utc))["sent"] is True
+    request = fake_llm.requests[0]
+    assert request.cli_args == digest_mod._NO_TOOLS_ARGS
+    assert "you have no web search" in request.system
+    assert "Use web search" not in request.system and "half-line each" not in request.system
+
+
+def test_a_morning_with_web_search_gets_it_and_nothing_else(
+    tmp_path: Path, fake_llm: FakeProvider,
+) -> None:
+    from smriti.daylog.morning import _COMPOSE_ARGS
+
+    cfg = _cfg(tmp_path)
+    cfg.notify_cmd, _sent = _notify_to_file(tmp_path)
+    cfg.morning_web_search = True
+    assert run_morning(cfg, now=datetime(2026, 9, 4, 21, 0, tzinfo=timezone.utc))["sent"] is True
+    request = fake_llm.requests[0]
+    assert request.cli_args == _COMPOSE_ARGS
+    assert "Use web search" in request.system
 
 
 # The morning prompt before the persona moved into the reference profile,
@@ -655,12 +700,19 @@ def test_the_reference_profile_keeps_the_morning_persona(tmp_path: Path) -> None
 
     from smriti.daylog.morning import _system_prompt
 
-    reference = DaylogConfig(root=tmp_path, profile="reference")
+    # With web search on (the reference install's setting), word for word.
+    reference = DaylogConfig(root=tmp_path, profile="reference", morning_web_search=True)
     assert _system_prompt(reference) == _REFERENCE_MORNING
     lisbon = _system_prompt(replace(reference, location="Lisbon, Portugal"))
     assert lisbon == _REFERENCE_MORNING.replace(
         "to Suti.", "to Suti (in Lisbon, Portugal).").replace(
         "tech/AI)", "tech/AI, Lisbon, Portugal)")
+    # Without it, the same persona, and no news on offer.
+    offline = _system_prompt(replace(reference, morning_web_search=False))
+    persona = _REFERENCE_MORNING[:_REFERENCE_MORNING.index("You get last night's digest")]
+    assert offline.startswith(persona) and offline.endswith("Return ONLY the message.")
+    assert "you have no web search" in offline
+    assert "Use web search" not in offline and "half-line each" not in offline
 
 
 def test_without_a_profile_the_morning_has_no_persona(tmp_path: Path) -> None:

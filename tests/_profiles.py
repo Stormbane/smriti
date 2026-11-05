@@ -6,10 +6,11 @@ import json
 from pathlib import Path
 
 # What the reference installation's daylog.json sets to keep its behaviour.
-REFERENCE_CONFIG = {"profile": "reference", "user_name": "Suti", "agent_name": "Narada"}
+REFERENCE_CONFIG: dict[str, object] = {"profile": "reference", "user_name": "Suti",
+                                      "agent_name": "Narada", "morning_web_search": True}
 
 
-def enable_profile(root: Path, **config: str) -> Path:
+def enable_profile(root: Path, **config: object) -> Path:
     """Merge *config* into ``<root>/.smriti/daylog.json``; returns the file."""
     path = root / ".smriti" / "daylog.json"
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -29,6 +29,9 @@ default to "User" and "Agent".
 ``profile`` names an optional profile, ``smriti.profiles.<name>``, that
 adds one installation's tools, wake sections and morning persona to the
 core (see :mod:`smriti.profiles`). Unset, the core runs alone.
+
+``morning_web_search`` (default false) lets the morning call search the
+web for headlines; off, that call gets no tools at all.
 """
 
 from __future__ import annotations
@@ -66,6 +69,9 @@ class DaylogConfig:
     profile: str = ""
     # Why nothing is captured, when nothing is; "" otherwise (see capture_note).
     capture_off: str = ""
+    # The morning call may search the web for headlines only when this is on;
+    # off, it gets no tools at all, like the digest (see daylog.morning).
+    morning_web_search: bool = False
 
     def speaker(self, who: str) -> str:
         """The display name for a turn's role; anything but the user is the agent."""
@@ -173,6 +179,9 @@ def load_config(root: Path | None = None) -> DaylogConfig:
     profile = raw.get("profile")
     if isinstance(profile, str):
         cfg.profile = profile.strip()
+    web_search = raw.get("morning_web_search")
+    if isinstance(web_search, bool):  # only a JSON true turns it on
+        cfg.morning_web_search = web_search
     return cfg
 
 

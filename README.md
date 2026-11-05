@@ -46,7 +46,7 @@ smriti_write      -> dated markdown + index     voice transcripts -> log/YYYY/MM
 | witness | Commits the tree through `backup.py`, timestamps a manifest naming HEAD with OpenTimestamps, pushes | `witness/YYYY/<night>.txt` and `.ots` |
 | status | One status document, read by the wake's "while you slept" line | `log/.nightly-status.json` |
 
-**The morning message** (07:00, **experimental**): one message per local day, composed by an LLM from the digest plus a web search for headlines, and sent through the `notify_cmd` configured in `daylog.json`. The ledger entry is written before the send, so a crash means no message, never two. It is written from the configured agent to the configured user, with no persona; a profile can supply its own prompt (the reference profile's carries its agent's persona).
+**The morning message** (07:00, **experimental**): one message per local day, composed by an LLM from the digest, and sent through the `notify_cmd` configured in `daylog.json`. The ledger entry is written before the send, so a crash means no message, never two. It is written from the configured agent to the configured user, with no persona; a profile can supply its own prompt (the reference profile's carries its agent's persona). The call has no tools; `"morning_web_search": true` in `daylog.json` gives it web search, and only that, to add the day's headlines.
 
 **Backups.** `<root>/.smriti/backup.py` commits the memory tree once an hour when it has changed (`smriti backup --push`, run by the `smriti-backup` task) and pushes only when there is something new; the nightly witness step commits and pushes too. Sessions don't trigger backups. It never kills git, clears stale locks only when no git process is running, and logs to `.git/smriti-backup.jsonl`. You create the git repository and its remote yourself. The tree is pushed in plaintext unless git-crypt encrypts it; the installer asks whether the remote is private and says whether git-crypt covers the day-log, but doesn't set it up (see [Privacy](#privacy)).
 
@@ -110,7 +110,7 @@ Flags answer them without a terminal: `--capture` or `--no-capture`, and `--remo
 **What leaves the machine:**
 - **Backups** push everything git tracks in the tree: the memory notes, the captured conversations and their renders, the digests and rollups, and `daylog.json`. The template's `.gitignore` keeps out the index, metrics, runtime state and the private store's key. Even with git-crypt, file names, sizes and commit messages stay readable. [`docs/PRIVACY.md`](docs/PRIVACY.md#what-is-pushed-in-the-clear) lists it all.
 - **The nightly digest** sends each day's conversation log (up to 248,000 characters: four parts of 60,000 and 8,000 of autonomous-session markers) to the configured LLM CLI.
-- **The witness** sends a hash to public timestamp calendars, and **the morning message** uses web search.
+- **The witness** sends a hash to public timestamp calendars, and **the morning message** uses web search when `morning_web_search` is on.
 - **The optional private store** encrypts its files; its key stays in `private/.key`, which git ignores, and the index skips `private/`.
 
 ## Install
@@ -167,7 +167,7 @@ The witness step needs `pip install -e ".[witness]"` and a memory root that is a
 
 ### Configuration
 
-`<root>/.smriti/daylog.json` is optional; every key has a default. `user_name` and `agent_name` (default `"User"` and `"Agent"`) are the names the day render, the nightly and morning prompts and the core tools use for the two speaker roles. `profile` enables an optional profile, `smriti.profiles.<name>`: one installation's own tools, wake sections and morning persona. With none set, smriti runs its generic core. The repo's one profile, `reference`, is the maintainer's installation, which sets `{"profile": "reference", "user_name": "Suti", "agent_name": "Narada"}`. [`docs/INSTALL.md`](docs/INSTALL.md#configuration-rootsmritidaylogjson) lists every key.
+`<root>/.smriti/daylog.json` is optional; every key has a default. `user_name` and `agent_name` (default `"User"` and `"Agent"`) are the names the day render, the nightly and morning prompts and the core tools use for the two speaker roles. `profile` enables an optional profile, `smriti.profiles.<name>`: one installation's own tools, wake sections and morning persona. With none set, smriti runs its generic core. The repo's one profile, `reference`, is the maintainer's installation, which sets `{"profile": "reference", "user_name": "Suti", "agent_name": "Narada", "morning_web_search": true}`. [`docs/INSTALL.md`](docs/INSTALL.md#configuration-rootsmritidaylogjson) lists every key.
 
 The embedding service reads three environment variables: `SMRITI_EMBED_SERVICE=0` turns it off; `SMRITI_EMBED_IDLE_S` sets its idle exit (default 900 seconds); `SMRITI_RUNTIME_DIR` moves its runtime directory (default `%LOCALAPPDATA%\smriti\run` on Windows, `$XDG_RUNTIME_DIR/smriti` or `~/.cache/smriti/run` elsewhere), which holds its key, lock, discovery file and log and is never inside the memory root.
 
