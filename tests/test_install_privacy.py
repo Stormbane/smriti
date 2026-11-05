@@ -573,6 +573,39 @@ class TestSummary:
         assert "WARNING" in text
 
     @needs_git
+    def test_days_on_disk_before_the_first_backup_go_with_it(self, root: Path) -> None:
+        """Captured before any backup, then --no-capture: `git add -A` still takes them."""
+        git_repo(root, REMOTE)
+        day = root / "log" / "2026" / "11" / "04.jsonl"
+        day.parent.mkdir(parents=True)
+        day.write_text('{"who": "user", "text": "hi"}\n', encoding="utf-8")
+        (root / "log" / ".nightly-status.json").write_text("{}\n", encoding="utf-8")
+
+        state = privacy.inspect_git(root)
+        assert (state.log_tracked, state.log_untracked) == (0, 1)
+        assert state.log_committed is True
+
+        plan = decide_and_apply(root, capture=False, remote_private=False)
+        text = privacy.summary(root, plan)
+
+        assert "captured:  nothing" in text
+        assert "pushed:    the memory tree, with the captured conversations, to" in text
+        assert "1 day-log file(s) it wrote earlier are on disk and not yet committed" in text
+        assert "WARNING: your conversations would go in plaintext" in text
+
+    @needs_git
+    def test_ignored_days_on_disk_are_not_counted(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        day = root / "log" / "2026" / "11" / "04.jsonl"
+        day.parent.mkdir(parents=True)
+        day.write_text("{}\n", encoding="utf-8")
+        (root / ".gitignore").write_text("log/\n", encoding="utf-8")
+
+        state = privacy.inspect_git(root)
+        assert state.log_untracked == 0
+        assert state.log_committed is False
+
+    @needs_git
     def test_a_git_ignored_day_log_is_not_called_pushed(self, root: Path) -> None:
         git_repo(root, REMOTE)
         (root / ".gitignore").write_text("log/\n", encoding="utf-8")

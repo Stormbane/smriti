@@ -103,14 +103,22 @@ class GitState:
     # Day-log files git already tracks. An ignore rule doesn't untrack them,
     # and backup.py's `git add -A` keeps committing their changes.
     log_tracked: int = 0
+    # Day-log files on disk, not ignored and not yet committed: written
+    # before the first backup, they go with the next one, capture on or off.
+    log_untracked: int = 0
     log_crypt: str = "none"  # one of CRYPT_STATES: how well git-crypt protects them
     crypt_detail: str = ""  # why, when it isn't plainly encrypted or plainly not
     error: str = ""  # git couldn't be run
 
     @property
+    def log_on_disk(self) -> int:
+        """Day-log files the next backup commits whatever capture does from now on."""
+        return self.log_tracked + self.log_untracked
+
+    @property
     def log_committed(self) -> bool:
-        """Conversations reach a commit: new ones aren't ignored, or old ones are tracked."""
-        return not self.log_ignored or self.log_tracked > 0
+        """Conversations reach a commit: new ones aren't ignored, or existing ones are."""
+        return not self.log_ignored or self.log_on_disk > 0
 
     @property
     def log_encrypted(self) -> bool:
@@ -355,14 +363,20 @@ def inspect_git(root: Path) -> GitState:
         ignored = _git(root, "check-ignore", "--stdin", "-z",  # prints each ignored path
                        stdin="\0".join(_SAMPLE_LOGS) + "\0")
         listed = _git(root, "ls-files", "-z", "--", "log/")
-        if listed.returncode != 0:
-            raise subprocess.SubprocessError(listed.stderr.strip() or "git ls-files failed")
+        others = _git(root, "ls-files", "--others", "--exclude-standard", "-z", "--", "log/")
+        for done in (listed, others):
+            if done.returncode != 0:
+                raise subprocess.SubprocessError(done.stderr.strip() or "git ls-files failed")
         tracked = [p for p in listed.stdout.split("\0") if _CONVERSATION.match(p)]
+        untracked = [p for p in others.stdout.split("\0") if _CONVERSATION.match(p)]
         ignored_samples = set(ignored.stdout.split("\0")) & set(_SAMPLE_LOGS)
         log_ignored = ignored_samples == set(_SAMPLE_LOGS)
-        # What the backup commits from log/: the tracked files, and each kind
-        # of new file that isn't ignored.
-        committed = tracked + [p for p in _SAMPLE_LOGS if p not in ignored_samples]
+        # What the backup commits from log/: the tracked files, the untracked
+        # ones that aren't ignored (`git add -A`), and each kind of new file
+        # that isn't ignored.
+        committed = (
+            tracked + untracked + [p for p in _SAMPLE_LOGS if p not in ignored_samples]
+        )
         attrs = _filter_attrs(root, committed) if committed else {}
         crypt, detail = _log_protection(root, committed, tracked, attrs)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -377,6 +391,7 @@ def inspect_git(root: Path) -> GitState:
         remote_url=remote,
         log_ignored=log_ignored,
         log_tracked=len(tracked),
+        log_untracked=len(untracked),
         log_crypt=crypt,
         crypt_detail=detail,
     )
@@ -612,9 +627,9 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
     else:
         lines.append('  captured:  nothing ("sources": [] in .smriti/daylog.json)')
 
-    # Conversations already tracked are committed whether or not capture is
-    # on now, and whatever the ignore rules say.
-    conversations = (bool(sources) and not git.log_ignored) or git.log_tracked > 0
+    # Day-log files already tracked, or on disk and not ignored, are
+    # committed whether or not capture is on now.
+    conversations = (bool(sources) and not git.log_ignored) or git.log_on_disk > 0
     pushes_plain = False
     if git.error or not git.is_repo:
         why = f"git couldn't be run ({git.error})" if git.error else f"{root} isn't a git repository"
@@ -630,6 +645,12 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
                 f"             log/ is git-ignored, but {git.log_tracked} day-log file(s) "
                 "committed earlier are still tracked, and each backup commits their changes "
                 "(`git rm -r --cached log/` untracks them; history keeps them)"
+            )
+        if not sources and git.log_untracked:
+            lines.append(
+                f"             capture is off, but {git.log_untracked} day-log file(s) it wrote "
+                "earlier are on disk and not yet committed; the next backup commits them "
+                "(delete them, or git-ignore log/, to keep them out)"
             )
         if git.remote_url is None:
             lines.append("  pushed:    nothing; there is no remote named origin")
