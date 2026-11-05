@@ -78,6 +78,31 @@ parallel. H2 runs alongside H1 because it only adds new files.
 Run the isolated two-model review on the public repo and record the grades.
 New P1/P2 findings become H9.
 
+## H9. From outside review #3 (B- and B, at `3074a41`)
+
+Both reviewers verified their claims against the code; the first five
+were rechecked by hand before this list was written.
+
+| # | Change | Acceptance |
+|---|---|---|
+| H9.1 | `smriti read` opens the index with `open_readonly`, never `ensure_schema` (which writes). | A test: the CLI read holds no write lock. |
+| H9.2 | When the vector leg fails, search rescales as in keyword-only mode. | A test: scores keep the 0-1 scale when embedding raises. |
+| H9.3 | The scanner skips a file deleted between the walk and its `stat`. | A test: a vanishing file doesn't abort `index_tree`. |
+| H9.4 | Frontmatter values (`title`, `source`, `tags`, and the project tools' fields) can't forge keys: newlines are folded and values quoted where needed. | Tests with injected newlines. |
+| H9.5 | The day boundary defaults to the system's local time zone (DST included); `SMRITI_DAY_UTC_OFFSET` and a daylog.json `timezone` override it. Journal writes and the day-log use the same clock. | The reference install sets its zone explicitly; tests for both. |
+| H9.6 | The CLI has a top-level handler: a clean message and exit code, the traceback only with `-v`. | A test. |
+| H9.7 | Small robustness: `private/.key` is created mode 600 on POSIX; the todo dedup matches a whole topic, not a substring; a missing `mirrors/` gives a useful error; the MCP server reopens its index when the root changes. | Tests. |
+| H9.8 | `mypy --strict` extends to `cli`, `llm`, `integrations`, `private`, `recall`, `eval` and the rest of the package; CI checks all of `src/smriti`. | CI. |
+| H9.9 | Ruff adds `E501` (line length 100), `B` and `BLE` (blind excepts, each kept one justified with a reason). `backup.trigger` and the reranker log their failures. | CI. |
+| H9.10 | One insert path for `index_tree` and `index_file`. | The suite. |
+| H9.11 | Capture privacy is chosen, not defaulted: the installer asks whether to capture transcripts and whether a backup remote is private, and says what is pushed in the clear; the README's privacy section leads with it. | Install test; README. |
+| H9.12 | Outside review #4. | Grades recorded. |
+
+Considered and kept: `backup.py` keeps its own copies of `pid_alive` and
+`git_running` (it is a standalone script copied into the memory root and
+must run without smriti importable); the reference profile ships in the
+wheel as the worked example of a profile, off unless configured.
+
 ## Status
 
 Updated as phases land. Each phase had a Codex diff review, fixes for every
@@ -113,4 +138,6 @@ a recheck.
   CI runs `mypy --strict` on core, store, daylog, wake, mcp and profiles on
   every OS, with mypy pinned; the first Linux run found Windows-only code
   behind `os.name`/`hasattr` checks that mypy doesn't narrow.
-- **H8**: running.
+- **H8 done** (2026-11-05). Review #3 at `3074a41`: Opus B- (was C+), Sonnet B
+  (was B-). The findings are H9.
+- **H9**: planned.
