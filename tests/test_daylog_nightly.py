@@ -719,6 +719,8 @@ def test_a_web_search_call_never_falls_back_to_codex(monkeypatch: pytest.MonkeyP
     providers = {"claude_cli": Boom(), "codex_cli": good}
     monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: providers[name])
     attempts: list[dict[str, str]] = []
-    with pytest.raises(Exception):
+    from smriti.llm.types import LLMError
+
+    with pytest.raises(LLMError, match="all providers failed"):
         digest_mod.compose("sys", "user", attempts, claude_cli_args=["--tools", "WebSearch"])
     assert [a["provider"] for a in attempts] == ["claude_cli"]
