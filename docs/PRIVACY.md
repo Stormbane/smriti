@@ -115,6 +115,50 @@ If the tree was already pushed in plaintext, encrypting from now on
 doesn't remove the old commits: rotate to a fresh remote, or rewrite the
 history and force-push.
 
+## What goes to an LLM
+
+The nightly and the morning send memory text to an LLM through a CLI you
+are logged in to, under that provider's terms: `claude -p` first, and
+`codex exec` as the nightly's fallback.
+
+- **The digest** sends each day's rendered conversation log, which is
+  everything capture keeps (see [README](../README.md#privacy) for the
+  sizes). **The rollups** send the digests.
+- **The morning** sends yesterday's digest, at most 20,000 characters of
+  it. With `morning_web_search` on in `daylog.json`, its web searches go
+  to the search provider as well.
+
+That text is untrusted. A transcript can quote a web page, a file or a
+message someone else wrote, and a morning with web search reads search
+results, so any of it can carry a prompt injection: an instruction aimed
+at the model that reads it. What holds such an instruction:
+
+- **On Claude Code, the digest and rollup calls, and the morning call by
+  default, have no tools.**
+  No built-in tools (`--tools=`, and `--disallowedTools=*` as a second
+  layer), no MCP servers (`--strict-mcp-config`, which also keeps out the
+  account's claude.ai connectors), no skills or slash commands
+  (`--disable-slash-commands`), and none of your settings, hooks or
+  `CLAUDE.md` (an isolated working directory under `.smriti/llm-workdir`).
+  `tests/test_llm_tool_boundary.py` checks the flags against the installed
+  CLI. An injection can still change what a call writes: a wrong digest, or
+  text of its choosing carried into the tree, the index, the wake briefing,
+  the morning message and the backup.
+- **The codex fallback** runs `codex exec --sandbox read-only` with no MCP
+  servers, from an empty working directory, but its sandbox still lets it
+  read files and run read-only commands, and how strictly it holds depends
+  on the platform. An injected instruction could make it copy a local
+  file into the digest, which is then indexed, committed and pushed. Set
+  `SMRITI_NIGHTLY_FALLBACK=` (empty) to run the nightly on Claude Code
+  only. The morning never falls back to codex.
+- **With `morning_web_search` on, the morning call can search the web, and
+  nothing else.** That gives an injection a way off the machine while the
+  call runs: an instruction in a transcript (carried into the digest) or in a
+  search result could make the call put private text from the digest into
+  a search query, which goes to the search provider. Leave it off (the
+  default) unless you want the headlines; off, the morning call has no
+  tools and writes from the digest alone.
+
 ---
 
 ## 1. The principle

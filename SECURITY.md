@@ -27,6 +27,16 @@ security backport series or guaranteed response time.
   providers keep inference local after model installation; choosing a hosted
   provider sends embedding inputs to that provider. Nightly digests and rollups
   send conversation text to the configured LLM CLI/provider.
+- Those LLM calls, and the morning message's, read that untrusted text. On
+  Claude Code they run with no tools, MCP servers or skills
+  (`tests/test_llm_tool_boundary.py` checks the flags against the installed
+  CLI), so an injection can change what they write but can't act. The nightly's
+  fallback, `codex exec`, has a read-only sandbox that can still read local
+  files into a digest; `SMRITI_NIGHTLY_FALLBACK=` (empty) turns it off. With
+  `morning_web_search` on, the morning call can search the web, and an injected
+  instruction could leak digest text through its search queries. It is off by
+  default. [`docs/PRIVACY.md`](docs/PRIVACY.md#what-goes-to-an-llm) has the
+  details.
 - The embedding service listens on a loopback TCP port, and every process of the
   same user that holds its key can use it; other users can connect but are
   refused. See [The embedding service](#the-embedding-service).
