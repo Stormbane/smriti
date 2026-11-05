@@ -113,56 +113,125 @@ session runs its own server, and harnesses that leak sessions multiply it:
 66 servers held about 32 GB. The first search in each server also waits
 about 14 s for the model.
 
-**Design.** A per-user embedding service holds the model once; everything
-that embeds a query or a single file asks it.
+**Design (rev 2, after the Claude-Codex cross-review; dispositions below).**
+A per-user embedding service holds the model once; every long-lived
+process asks it.
 
-- `smriti.embed` (new): `service.py` (the server), `client.py`, and
-  `RemoteEmbedding`, an embedding provider with the usual interface
-  (`model_name`, `dimension`, `async embed`) that forwards to the service.
-- Transport: stdlib `multiprocessing.connection` (a named pipe on Windows,
-  a Unix socket elsewhere), messages as JSON through `send_bytes` /
-  `recv_bytes` (never pickle), authenticated by an HMAC handshake with a
-  per-user key in a file only the user can read. The address is derived
-  from the memory root, so two roots get two services.
-- One service per root: it holds an OS lock (`smriti.core.oslock`) for its
-  lifetime; a second one started by a race exits at once.
-- Started on demand: a client that can't connect spawns
-  `python -m smriti embed serve` detached with a hidden console
-  (`CREATE_NO_WINDOW`, not `DETACHED_PROCESS`), then waits for it, bounded.
-- It loads the index's recorded provider (the same selection
-  `_get_embedding_provider` makes), so vectors are exactly the in-process
-  ones; a test compares them.
-- `ping` returns smriti's version, the provider key, model and dimension.
-  A client that finds a different version or provider asks it to stop and
-  starts a fresh one, so an upgrade never serves stale code.
-- It exits after 15 minutes without a request (configurable), giving the
-  memory back to the OS: unloading inside a long-lived process wouldn't,
-  since PyTorch rarely returns its allocations.
-- Calls into the model are serialised; a query embeds in about 20 ms.
+*Embedding identity.* An index is built with one embedding identity:
+provider key, model name, model revision (the files' hash where the
+provider exposes it), and dimension. It is recorded in the index's `meta`
+atomically with the first vectors, including when the first vectors come
+from `index_file` on an empty index. Every embedding result carries the
+identity that produced it. `index_file` checks it against `meta` inside its
+`BEGIN IMMEDIATE` transaction, and search against the snapshot it reads
+vectors from; a mismatch is stale work: it is retried once on a fresh
+embedding, then treated as the service being unavailable. This closes a gap
+that exists today even without a service (a cached in-process model
+outliving a migration).
 
-**Who uses it.** `search()` and `index_file()`, through
-`_get_embedding_provider()`, in every long-lived process (the MCP server,
-`smriti read`, hooks). `index_tree()` (the nightly and `smriti index`)
-keeps an in-process model: it embeds thousands of chunks in one
-short-lived process that exits after. `SMRITI_EMBED_SERVICE=0` turns the
-service off everywhere (tests, CI, debugging).
+*Transport.* Loopback TCP (`127.0.0.1`, an ephemeral port), stdlib
+`socket` only. Every connect, read and write has a socket timeout.
+Messages are length-prefixed JSON (never pickle), at most 4 MB a frame and
+64 texts a request; clients split larger batches. Each connection is
+authenticated both ways by HMAC challenge-response over a per-user key, so
+a client can't be served by an impostor that bound the port after the
+service died, and nobody without the key gets an answer. The listener
+accepts on one thread and hands each connection to a worker with its own
+deadline, so a stalled or hostile peer can't block others.
 
-**When it isn't there.** If the service can't be reached or started in
-time, search falls back to keyword-only (H9.2 keeps the scores on the same
-scale), and a write's immediate index is skipped with a warning (the
-nightly indexes it); neither blocks. Nothing ever loads the model inside
-an MCP server.
+*Runtime directory.* Keys, the discovery file (port, pid, instance id),
+the service lock and the service log live in a private per-user directory
+outside the memory root: `%LOCALAPPDATA%\smriti\run` on Windows (the
+profile's ACLs), `$XDG_RUNTIME_DIR/smriti` or `~/.cache/smriti/run`
+elsewhere, created 0700 with its owner verified, refusing to use one that
+another user owns or others can write. The key is created atomically (an
+exclusive create, mode 0600) and never replaced while a service uses it.
+Same-user processes are trusted; this is stated in SECURITY. (`oslock`'s
+lock files move into this directory too: today they sit in the shared
+temp directory under predictable names, mode 0644, which another Unix user
+could pre-create or hold.)
+
+*Lifecycle.*
+- One service per memory root, enforced by an OS lock in the runtime
+  directory held for its lifetime.
+- A client that can't connect starts `python -m smriti embed serve`
+  (hidden console: `CREATE_NO_WINDOW`) and waits, bounded; a second
+  starter loses the lock race and exits.
+- Restart is decided by the index, not by a client. A service serves the
+  identity it loaded; when `meta` records a different identity (a
+  migration, a full reindex with another model), the service drains:
+  stops accepting, finishes in-flight work, exits. The next client starts
+  a fresh one. Clients with differing code reuse whatever service is
+  running, so long-lived sessions of different versions can't replace each
+  other in a loop.
+- A protocol version is part of the handshake. A client with an
+  incompatible protocol degrades, as if the service were down, and never
+  stops it.
+- Code updates rotate in at idle exit: the service exits after 15 minutes
+  without a request (configurable), which returns the model's memory to
+  the OS (unloading inside a long-lived process wouldn't: PyTorch rarely
+  gives memory back). `smriti embed stop` drains it at once. A request that
+  arrives as it exits gets EOF and retries once on a fresh connection.
+- Deadlines end to end, covering connect, handshake, queueing and
+  inference: a query 3 s, a write's batch 30 s. Inference is serialised;
+  queries go ahead of write batches.
+
+*Degraded operation is visible, never silent.*
+- Search without vectors runs keyword-only, and `smriti_read` says so
+  ("keyword-only: <reason>").
+- A write whose vectors can't be made still indexes its chunks for
+  keyword search at once, and records the source with its vectors pending
+  (a `sources.vectors` flag). `smriti_write` reports "saved; indexed for
+  keyword search; vectors pending (<reason>)".
+- Pending vectors are filled by the service when it next starts, by the
+  next successful `index_file`, and by any `index_tree` run, so recovery
+  doesn't wait for, or depend on, a nightly task. `smriti status` shows
+  the pending count and the service's state.
+
+*Who uses it.* `search()` and `index_file()` in every long-lived process
+(the MCP server, `smriti read`, hooks), through `_get_embedding_provider()`.
+`index_tree()` (the nightly, `smriti index`) keeps an in-process model: it
+embeds thousands of chunks in one short-lived process. Both go through the
+identity checks. `SMRITI_EMBED_SERVICE=0` turns the service off.
 
 | # | Change | Acceptance |
 |---|---|---|
-| H10.1 | `smriti.embed`: service, client, `RemoteEmbedding`, the handshake, the lock, idle exit, version check. `smriti embed serve`, `status` and `stop`. | Tests with the stub provider: round trip; identical vectors to in-process; second service exits; a wrong key is refused; version mismatch restarts; idle exit. |
-| H10.2 | `_get_embedding_provider()` returns `RemoteEmbedding` in long-lived processes; `index_tree` stays in-process; the off switch. | An MCP server's memory after a search stays under 100 MB, and `torch`/`onnxruntime` are never imported in it (test). Service down: search is keyword-only and a write still succeeds (tests). |
-| H10.3 | Docs: README (what runs), ARCHITECTURE, SECURITY (the pipe and its key), the off switch. | Doc facts regenerated. |
+| H10.0 | Size it: memory and latency of MiniLM through ONNX vs PyTorch, and their vector agreement. | Numbers recorded here; they decide only the service's own runtime, not whether there is a service. |
+| H10.1 | Embedding identity: defined, recorded with the first vectors, checked inside `index_file`'s transaction and against search's snapshot; `sources.vectors` and pending-vector repair. | Tests: a migration between embedding and commit (equal and different dimensions) is caught; first-write bootstrap persists the identity; a restart with another provider installed refuses to mix. |
+| H10.2 | `smriti.embed`: runtime directory, key, lock, TCP service with mutual HMAC, framing and bounds, per-connection deadlines, drain, idle exit, discovery. `smriti embed serve`, `status` and `stop`. | Tests: round trip; vectors identical to in-process; a wrong key is refused both ways; an impostor on the port is detected; stalled handshake and partial frames time out without blocking others; simultaneous cold starts give one service; idle exit racing a request; drain on an index identity change; mixed client versions coexist; a foreign-owned or world-writable runtime directory is refused. |
+| H10.3 | Wire `_get_embedding_provider()` to the service in long-lived processes; degraded results and statuses through MCP and `smriti status`. | An MCP server stays under 100 MB after searches and writes, never importing `torch` or `onnxruntime` (test). Outage: a write is saved and keyword-searchable at once, the read says keyword-only, and vectors fill in on recovery without a nightly (tests). With the real model (`needs_model`): vector fidelity and first-search latency under 1 s with the service warm. |
+| H10.4 | `oslock`'s lock files move to the private runtime directory. | Tests; no behaviour change on Windows. |
+| H10.5 | Docs: README (what runs), ARCHITECTURE, SECURITY (the endpoint, its key, the trust boundary), the off switch. | Doc facts regenerated. |
 
-Out of scope, recorded: the Codex plugin starts a fresh copy of every MCP
-server for each conversation and never ends them. That leak is the
-plugin's to fix (report upstream); H10 makes each copy cost about 20 MB
-instead of about 1 GB.
+### Cross-review dispositions (round 1, Codex adversarial review)
+
+1. *Bind every embedding to the index identity of its transaction* [high]:
+   **accepted**. Embedding identity, checked inside the write transaction
+   and against the search snapshot (H10.1).
+2. *Any-client restart creates a version-skew restart loop* [high]:
+   **accepted, differently**. Restarts follow the index's recorded
+   identity, which all clients share, not any client's version; differing
+   code rotates in at idle exit; an incompatible protocol degrades and
+   never stops the service.
+3. *A bounded startup wait does not bound an embedding call* [high]:
+   **accepted**. `multiprocessing.connection` authenticates with blocking
+   calls; the transport becomes loopback TCP with socket timeouts, own
+   framing and mutual HMAC, per-connection deadlines and bounded frames and
+   batches; queries ahead of write batches.
+4. *Empty-index startup has no durable provider authority* [medium]:
+   **accepted**. The identity is persisted with the first vectors, whoever
+   writes them.
+5. *Protected runtime storage and endpoint ownership* [medium]:
+   **accepted**. A private per-user runtime directory with verified
+   ownership; mutual authentication defeats squatting; `oslock` moves
+   there too (H10.4).
+6. *Fallback hides loss of recall and read-after-write visibility*
+   [medium]: **accepted**. Keyword indexing at once, vectors pending and
+   repaired without a nightly, degraded states reported by MCP and status.
+7. *Benchmark MiniLM ONNX before committing to the service* (next steps):
+   **partly rejected**. Benchmarked as sizing (H10.0), but ONNX alone still
+   costs about 250 MB per process, multiplied by every session, so it
+   doesn't replace the service.
 
 ## H11. From outside review #4 (B and B+, at `f1319a1`)
 
