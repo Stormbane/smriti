@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from smriti.core.safe_names import UnsafeName, safe_name
-from smriti.mcp_server import handle_message
+from smriti.mcp.server import handle_message
 
 TRAVERSAL = ["../escape", "..", "a/b", "a\\b", "/etc", "C:x", "~x", ".hidden", "x\ny",
              "..\\..\\escape", "proj/../../escape", ".", "CON", "nul.txt", "trailing.", "",

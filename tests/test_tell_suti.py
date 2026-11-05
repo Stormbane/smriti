@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from smriti import mcp_server
+from smriti.mcp.server import handle_message
+from smriti.mcp.tools import TOOLS, outbox
 from smriti.daylog import notify
 from smriti.daylog.config import DaylogConfig, load_config
 from smriti.daylog.notify import Delivery, NotifyError, parse_channels, send
@@ -21,8 +22,8 @@ def _no_real_sender(monkeypatch: pytest.MonkeyPatch) -> None:
     def _refuse(text: str, level: str) -> Delivery:
         raise AssertionError("tell_suti reached the real sender")
 
-    monkeypatch.setattr(mcp_server, "_default_tell_suti_sender", _refuse)
-    monkeypatch.setattr(mcp_server, "TELL_SUTI_SENDER", None)
+    monkeypatch.setattr(outbox, "_default_tell_suti_sender", _refuse)
+    monkeypatch.setattr(outbox, "TELL_SUTI_SENDER", None)
 
 
 class _Recorder:
@@ -36,7 +37,7 @@ class _Recorder:
 
 
 def _call(arguments: dict) -> dict:
-    response = mcp_server.handle_message({
+    response = handle_message({
         "jsonrpc": "2.0", "id": 7, "method": "tools/call",
         "params": {"name": "tell_suti", "arguments": arguments},
     })
@@ -46,7 +47,7 @@ def _call(arguments: dict) -> dict:
 
 class TestTellSutiTool:
     def test_listed_with_schema(self) -> None:
-        tools = {t["name"]: t for t in mcp_server.TOOLS}
+        tools = {t.name: t.listing() for t in TOOLS}
         assert "tell_suti" in tools
         schema = tools["tell_suti"]["inputSchema"]
         assert schema["required"] == ["text"]
@@ -54,19 +55,19 @@ class TestTellSutiTool:
 
     def test_uses_injected_sender_and_reports_channels(self) -> None:
         rec = _Recorder()
-        out = mcp_server.handle_tell_suti({"text": "  test  "}, sender=rec)
+        out = outbox.handle_tell_suti({"text": "  test  "}, sender=rec)
         assert rec.calls == [("test", "message")]
         assert out == "Delivered via telegram, app-push (level=message)."
 
     def test_level_passes_through(self) -> None:
         rec = _Recorder(channels=("app-push",))
-        out = mcp_server.handle_tell_suti({"text": "disk full", "level": "ERROR"}, sender=rec)
+        out = outbox.handle_tell_suti({"text": "disk full", "level": "ERROR"}, sender=rec)
         assert rec.calls == [("disk full", "error")]
         assert "app-push" in out
 
     def test_dispatch_uses_module_sender(self, monkeypatch: pytest.MonkeyPatch) -> None:
         rec = _Recorder()
-        monkeypatch.setattr(mcp_server, "TELL_SUTI_SENDER", rec)
+        monkeypatch.setattr(outbox, "TELL_SUTI_SENDER", rec)
         result = _call({"text": "hello from a session"})
         assert not result.get("isError")
         assert "telegram" in result["content"][0]["text"]
@@ -81,13 +82,13 @@ class TestTellSutiTool:
         self, monkeypatch: pytest.MonkeyPatch, arguments: dict,
     ) -> None:
         rec = _Recorder()
-        monkeypatch.setattr(mcp_server, "TELL_SUTI_SENDER", rec)
+        monkeypatch.setattr(outbox, "TELL_SUTI_SENDER", rec)
         result = _call(arguments)
         assert result["isError"] is True
         assert rec.calls == []
 
     def test_nothing_delivered_is_an_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(mcp_server, "TELL_SUTI_SENDER", _Recorder(channels=()))
+        monkeypatch.setattr(outbox, "TELL_SUTI_SENDER", _Recorder(channels=()))
         result = _call({"text": "anyone there?"})
         assert result["isError"] is True
         assert "not delivered" in result["content"][0]["text"]
@@ -96,7 +97,7 @@ class TestTellSutiTool:
         def _boom(text: str, level: str) -> Delivery:
             raise NotifyError("not delivered (exit 1): telegram: error")
 
-        monkeypatch.setattr(mcp_server, "TELL_SUTI_SENDER", _boom)
+        monkeypatch.setattr(outbox, "TELL_SUTI_SENDER", _boom)
         result = _call({"text": "hi"})
         assert result["isError"] is True
         assert "exit 1" in result["content"][0]["text"]

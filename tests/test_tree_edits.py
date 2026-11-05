@@ -52,7 +52,7 @@ def test_parallel_entries_to_one_day_all_survive() -> None:
 
 
 def test_parallel_todos_all_land() -> None:
-    from smriti.mcp_server import handle_add_todo
+    from smriti.mcp.tools.projects import handle_add_todo
 
     todo = tree_root() / "mirrors" / "demo" / "ai" / "todo.md"
     todo.parent.mkdir(parents=True)
@@ -64,17 +64,19 @@ def test_parallel_todos_all_land() -> None:
 
 
 def test_racing_feature_opens_create_one_spec() -> None:
-    from smriti.mcp_server import handle_record_feature
+    from smriti.mcp.server import handle_message
 
     (tree_root() / "mirrors" / "demo" / "ai").mkdir(parents=True)
-    replies = _together(6, lambda i: handle_record_feature({
-        "project": "demo", "slug": "same", "title": f"T{i}", "goal": "g", "plan": "p"}))
-    opened = [r for r in replies if str(r).startswith("Opened")]
+    replies = _together(6, lambda i: handle_message({
+        "jsonrpc": "2.0", "id": i, "method": "tools/call",
+        "params": {"name": "smriti_record_feature", "arguments": {
+            "project": "demo", "slug": "same", "title": f"T{i}", "goal": "g", "plan": "p"}}}))
+    opened = [r for r in replies if not r["result"].get("isError")]
     assert len(opened) == 1, replies
 
 
 def test_same_title_same_day_findings_and_decisions_both_survive() -> None:
-    from smriti.mcp_server import handle_record_decision, handle_record_finding
+    from smriti.mcp.tools.projects import handle_record_decision, handle_record_finding
 
     mirror = tree_root() / "mirrors" / "demo"
     mirror.mkdir(parents=True)

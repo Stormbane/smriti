@@ -43,8 +43,12 @@ What is built and live:
   long-running worker.
 - **Eval framework**: JUDGE cases, search cases, cascade cases. `smriti
   eval --real` runs live claude -p.
-- **MCP server**: `mcp_server.py` exposes `smriti_read`, `smriti_write`,
-  `smriti_status` over JSON-RPC stdio.
+- **MCP server**: `smriti/mcp/` serves the memory, project and outbox
+  tools over JSON-RPC stdio. Each tool is a `Tool` (name, schema,
+  handler) in a group module under `mcp/tools/`; a handler refuses by
+  raising `ToolError`, and the server marks every failure `isError`.
+  `python -m smriti.mcp_server` remains the entry point installed
+  configs use.
 - **Metrics**: JSONL at `~/.narada/.smriti/metrics.jsonl` with
   per-operation token/cost/timing.
 

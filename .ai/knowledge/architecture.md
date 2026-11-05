@@ -24,7 +24,8 @@
 src/smriti/
   __init__.py              # package metadata
   cli.py                   # 11 CLI commands (index, read, write, status, watch, sleep, queue, daemon, eval, ingest, metrics)
-  mcp_server.py            # MCP server (smriti_read, smriti_write, smriti_status)
+  mcp/                     # MCP server: server.py (JSON-RPC), tool.py (Tool, ToolError), tools/ by group
+  mcp_server.py            # entry-point shim for installed configs (python -m smriti.mcp_server)
   metrics.py               # structured JSONL event logging with rotation
   watcher.py               # filesystem watcher, queues ingest/route tasks
 

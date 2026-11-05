@@ -125,7 +125,8 @@ def test_writer_and_wake_never_archive_an_unshown_letter(tmp_path: Path,
     """Concurrent writes and wakes: everything archived is exactly what was shown."""
     import threading
 
-    from smriti.mcp_server import handle_write_handoff
+    from smriti.mcp.tool import ToolError
+    from smriti.mcp.tools.memory import handle_write_handoff
 
     root = _root(tmp_path)
     monkeypatch.setenv("SMRITI_ROOT", str(root))
@@ -134,7 +135,10 @@ def test_writer_and_wake_never_archive_an_unshown_letter(tmp_path: Path,
 
     def writer() -> None:
         for i in range(25):
-            handle_write_handoff({"content": f"letter {i}"})
+            try:
+                handle_write_handoff({"content": f"letter {i}"})
+            except ToolError:
+                pass  # a wake held the letter; the refusal is the point
 
     def wake() -> None:
         for _ in range(25):

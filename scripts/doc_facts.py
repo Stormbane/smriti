@@ -5,8 +5,8 @@ Counts, by static parsing (stdlib only; nothing is imported or run):
 - CLI subcommands: ``add_parser("<name>")`` calls on the top-level
   subparsers object in ``src/smriti/cli.py``, plus the nested
   subcommands of any command that has its own subparsers;
-- MCP tools: the ``"name"`` of every entry in ``TOOLS`` in
-  ``src/smriti/mcp_server.py``;
+- MCP tools: the ``name`` of every ``Tool(...)`` in the groups that
+  ``src/smriti/mcp/tools/__init__.py`` joins into ``TOOLS``;
 - test functions: ``test*`` functions at module level and in ``Test*``
   classes under ``tests/`` (pytest collects more items than this,
   because some tests are parametrised).
@@ -33,7 +33,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLI_PATH = REPO_ROOT / "src" / "smriti" / "cli.py"
-MCP_PATH = REPO_ROOT / "src" / "smriti" / "mcp_server.py"
+MCP_TOOLS_DIR = REPO_ROOT / "src" / "smriti" / "mcp" / "tools"
 TESTS_DIR = REPO_ROOT / "tests"
 DOC_FILES = ("README.md", "CLAUDE.md", "AGENTS.md")
 
@@ -140,24 +140,37 @@ def cli_commands(path: Path = CLI_PATH) -> tuple[list[str], dict[str, list[str]]
     return top, nested
 
 
-def mcp_tools(path: Path = MCP_PATH) -> list[str]:
-    """Tool names from the module-level ``TOOLS`` list."""
-    tree = _parse(path)
-    for node in tree.body:
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id == "TOOLS" and isinstance(node.value, ast.List)):
-            names: list[str] = []
-            for item in node.value.elts:
-                if not isinstance(item, ast.Dict):
-                    continue
-                for key, value in zip(item.keys, item.values):
-                    if (isinstance(key, ast.Constant) and key.value == "name"
-                            and isinstance(value, ast.Constant)
-                            and isinstance(value.value, str)):
-                        names.append(value.value)
-            return names
-    raise RuntimeError(f"no module-level TOOLS list found in {path}")
+def _module_tools(path: Path) -> ast.Tuple:
+    """The module-level ``TOOLS = (...)`` tuple in ``path``."""
+    for node in _parse(path).body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            target, value = node.target, node.value
+        else:
+            continue
+        if isinstance(target, ast.Name) and target.id == "TOOLS" and isinstance(value, ast.Tuple):
+            return value
+    raise RuntimeError(f"no module-level TOOLS tuple found in {path}")
+
+
+def mcp_tools(tools_dir: Path = MCP_TOOLS_DIR) -> list[str]:
+    """Tool names in ``tools/list`` order.
+
+    ``tools/__init__.py`` joins the groups (``TOOLS = (*memory.TOOLS, ...)``);
+    each group module lists ``Tool(name="...", ...)`` entries.
+    """
+    names: list[str] = []
+    for group in _module_tools(tools_dir / "__init__.py").elts:
+        if not (isinstance(group, ast.Starred) and isinstance(group.value, ast.Attribute)
+                and isinstance(group.value.value, ast.Name)):
+            raise RuntimeError(f"unexpected entry in {tools_dir / '__init__.py'} TOOLS")
+        for entry in _module_tools(tools_dir / f"{group.value.value.id}.py").elts:
+            name = next((kw.value.value for kw in getattr(entry, "keywords", [])
+                         if kw.arg == "name" and isinstance(kw.value, ast.Constant)), None)
+            if isinstance(name, str):
+                names.append(name)
+    return names
 
 
 def _is_test(node: ast.AST) -> bool:
@@ -183,7 +196,7 @@ def count_tests(tests_dir: Path = TESTS_DIR) -> tuple[int, int]:
 
 def collect(repo_root: Path = REPO_ROOT) -> Facts:
     top, nested = cli_commands(repo_root / "src" / "smriti" / "cli.py")
-    tools = mcp_tools(repo_root / "src" / "smriti" / "mcp_server.py")
+    tools = mcp_tools(repo_root / "src" / "smriti" / "mcp" / "tools")
     functions, files = count_tests(repo_root / "tests")
     return Facts(
         commands=tuple(top),
