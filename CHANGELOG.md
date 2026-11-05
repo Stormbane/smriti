@@ -67,6 +67,19 @@ The package version remains 0.1.0; subsequent development is unreleased.
   where the installer recorded a "yes".
 - `smriti_write` and `smriti write` mask credential-shaped strings, as capture
   does, before an entry is saved.
+- Profiles are installed packages, found through the `smriti.profiles`
+  entry-point group, not subpackages of `smriti.profiles`. A missing, ambiguous
+  or broken profile is a `ProfileError` and costs only its own tools and wake
+  sections; the morning still refuses to send.
+- The reference profile (the maintainer's installation) is its own
+  distribution, `smriti-reference` in `profiles/reference/`, and smriti's wheel
+  carries none of its code. That installation needs `pip install -e
+  profiles/reference` beside smriti to keep its profile.
+- The default memory root is `~/.smriti`. With no `SMRITI_ROOT`, an existing
+  `~/.narada` (the default until now) is still used, even beside a `~/.smriti`;
+  `smriti status` shows the root and the rule that chose it, and warns when both
+  exist. Every former hard-coded `~/.narada`, including the recall hook's
+  "don't recall the tree into itself" check, follows that root.
 
 ### Fixed
 
@@ -95,6 +108,8 @@ The package version remains 0.1.0; subsequent development is unreleased.
 - A search no longer waits out its 3 s deadline while the embedding service is
   still loading its model; it falls back to keywords at once.
 - A failed index run reports its real error (the wrapper had no `rollback`).
+- `pip wheel .` builds again: the eval corpus was added to the wheel twice, which
+  current hatchling refuses.
 - A malformed MCP message gets an error instead of ending the server.
 - Session channels are named correctly from a cwd of any platform.
 - Blank Windows Terminal windows taking focus: the backup worker, the logd and

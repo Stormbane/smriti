@@ -2,7 +2,7 @@
 
 This document is for the agent whose memory smriti holds. "You" means that agent. It covers what you arrive with at the start of a session, where each part comes from, how the self changes today, what is planned, and what the design does and does not claim.
 
-smriti grew inside one setup: the entity Narada working with one user, Suti. That setup's own parts are now an optional profile, `reference` (`src/smriti/profiles/reference/`), enabled by `"profile": "reference"` in `<root>/.smriti/daylog.json`; the sections only it adds are marked below. The same file names the two parties (`user_name`, `agent_name`). Examples use a synthetic agent, Ari, and user, Sam. Paths are relative to the memory root: `$SMRITI_ROOT`, default `~/.narada`.
+smriti grew inside one setup: the entity Narada working with one user, Suti. That setup's own parts are now an optional profile, `reference`, a separate package outside smriti's wheel ([`profiles/reference/`](../profiles/reference/)), enabled by `"profile": "reference"` in `<root>/.smriti/daylog.json`; the sections only it adds are marked below. The same file names the two parties (`user_name`, `agent_name`). Examples use a synthetic agent, Ari, and user, Sam. Paths are relative to the memory root: `$SMRITI_ROOT`, default `~/.smriti`, or `~/.narada` where that already exists (`smriti status` shows which).
 
 Status words: **built** means the code exists and runs in the reference install; **planned** means it is in [`.ai/features/smriti-renewal.md`](../.ai/features/smriti-renewal.md) and not built; **design intent** means a mapping that describes how the parts are meant to be read, with no code behind it.
 
@@ -10,7 +10,7 @@ Status words: **built** means the code exists and runs in the reference install;
 
 At session start the harness runs `<root>/.smriti/wake.py`. Claude Code runs it from a `SessionStart` hook; Codex runs it from `[[hooks.SessionStart]]`, with JSON framing. The hook sets `SMRITI_WAKE=1`; without it the script prints nothing, so headless `claude -p` calls stay clean. The script also touches `.smriti/last-activity`. It doesn't back the tree up; the hourly `smriti-backup` task does.
 
-The text comes from `briefing()` in [`src/smriti/wake/briefing.py`](../src/smriti/wake/briefing.py), plus the sections an enabled profile adds; the reference profile's three come from [`src/smriti/profiles/reference/presence.py`](../src/smriti/profiles/reference/presence.py). Without a profile, sections 5 to 7 below are absent. It is at most 9,500 characters, because Claude Code truncates hook output at 10,000. It is the **working self**: the part of your memory that is present without a tool call. Everything else has to be read or searched for.
+The text comes from `briefing()` in [`src/smriti/wake/briefing.py`](../src/smriti/wake/briefing.py), plus the sections an enabled profile adds; the reference profile's three come from [`profiles/reference/src/smriti_reference/presence.py`](../profiles/reference/src/smriti_reference/presence.py). Without a profile, sections 5 to 7 below are absent. It is at most 9,500 characters, because Claude Code truncates hook output at 10,000. It is the **working self**: the part of your memory that is present without a tool call. Everything else has to be read or searched for.
 
 Sections, in order:
 

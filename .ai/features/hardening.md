@@ -305,6 +305,44 @@ rejection sound (66 sessions at 250 MB is still about 16.5 GB).
 | H11.10 | A search falls back to keyword-only at once while the embedding service reports "starting", instead of waiting out its 3 s deadline on every query during a cold start. | A test with a starting service. |
 | H11.9 | `oslock`'s lock files move from the shared temp directory to the private per-user runtime directory (H10), through a transition that holds both the old and the new lock until no process with the old code can be running. | An old/new-process contention test for `edit_lock` and the day-log writer lock. |
 
+### H11.6 design
+
+- **The reference profile is its own distribution**, in this repo:
+  `profiles/reference/`, `smriti-reference` 0.2.0 (package `smriti_reference`,
+  `dependencies = ["smriti"]`), registering `reference = "smriti_reference:PROFILE"`
+  in the `smriti.profiles` entry-point group. Moved with `git mv`; only import paths
+  change, so tool names, descriptions, the persona and the wake sections are the same
+  bytes. Its tests move with it, with a conftest that isolates the memory root as the
+  core's does. Generic checks stay in core.
+- **Profiles load through entry points.** `load_profile(name)` keeps the name check,
+  then takes the one entry point called *name* in `smriti.profiles`. None, two or
+  more (the error names the packages), any exception while loading (chained), or an
+  object that is not a `Profile`: each is a `ProfileError`. The callers keep their
+  outcomes: the MCP server serves the core's tools, the wake shows one line, the
+  morning fails visibly. An entry point is code from the same Python environment,
+  so the trust boundary is unchanged; nothing is loaded from the memory tree.
+- **The core's tests don't need the reference package.** They install a synthetic
+  profile, `sample` (Ari and Sam), through real dist-info metadata in a temporary
+  site directory (`tests/_profiles.py`); the server-subprocess test gets it through
+  PYTHONPATH. A core test checks that `src/smriti` has no `profiles/reference` and
+  no import of `smriti_reference`; CI builds the core wheel and fails on any member
+  named `reference`. Building it found the wheel already failing with current
+  hatchling (the eval corpus added twice); fixed first.
+- **A neutral default root.** `tree_root()` is `SMRITI_ROOT` (or `NARADA_ROOT`); else
+  `~/.narada` if it is a directory, which wins even beside a `~/.smriti`, so an
+  existing install never switches roots unasked; else `~/.smriti`.
+  `tree_root_source()` names the rule; `smriti status` prints it, and warns when both
+  directories exist and no variable chooses. Every hard-coded `~/.narada` in `src/`
+  and `scripts/` asks `tree_root()` at call time; the deployed `backup.py` and
+  `narada-p.sh` default to the tree they are deployed in. Legacy identifiers stay:
+  the qmd collection `narada`, the day-log's old speaker words, the `narada/`
+  template directory, `narada-p.sh`.
+- **The reference install's switch-over**: install `profiles/reference` (editable,
+  `--no-deps`) into the environment that runs smriti when its checkout moves to this
+  code. Without it the profile is missing: core tools only, a one-line wake note,
+  and a morning that refuses to send. Its root doesn't move (`~/.narada` exists, and
+  the hooks set `SMRITI_ROOT`).
+
 ## Status
 
 Updated as phases land. Each phase had a Codex diff review, fixes for every
@@ -426,3 +464,8 @@ a recheck.
   `XDG_RUNTIME_DIR` (cron) resolves another, which the old file still covers for
   now. Old/new process contention tests for `edit_lock` and the writer lock fail
   against a plain move.
+- **H11.6 implemented** (2026-11-06, branch `hardening/h11d`; the Codex diff review
+  is still to come). The reference profile is `smriti-reference` in
+  `profiles/reference/`, loaded by entry point; smriti's wheel has none of it, and
+  the core's suite passes without it installed. The default root is `~/.smriti`,
+  with an existing `~/.narada` kept; `smriti status` names the rule.

@@ -12,10 +12,12 @@ From a clone, create and activate a virtual environment, then install:
 python -m venv .venv
 # POSIX: source .venv/bin/activate
 # PowerShell: .venv\Scripts\Activate.ps1
-python -m pip install -e ".[read,dev]"
+python -m pip install -e ".[read,dev]" -e profiles/reference
 ```
 
-The base package has no runtime dependencies. Put new optional dependencies in
+The second package is the reference profile (`profiles/reference/`, the
+maintainer's installation), installed for its own tests; smriti runs and its own
+tests pass without it. The base package has no runtime dependencies. Put new optional dependencies in
 the appropriate extra. Read [the conventions](.ai/knowledge/conventions.md) before
 introducing a new pattern.
 
@@ -27,7 +29,7 @@ tests exercise this checkout rather than a different editable install.
 For the deterministic CI mode, no embedding model is required:
 
 ```sh
-PYTHONPATH=src SMRITI_EMBED_PROVIDER=stub HF_HUB_OFFLINE=1 python -m pytest -q --ignore=tests/test_perf.py
+PYTHONPATH=src SMRITI_EMBED_PROVIDER=stub HF_HUB_OFFLINE=1 python -m pytest -q --ignore=tests/test_perf.py tests profiles/reference/tests
 ```
 
 In PowerShell:
@@ -36,7 +38,7 @@ In PowerShell:
 $env:PYTHONPATH = "src"
 $env:SMRITI_EMBED_PROVIDER = "stub"
 $env:HF_HUB_OFFLINE = "1"
-python -m pytest -q --ignore=tests/test_perf.py
+python -m pytest -q --ignore=tests/test_perf.py tests profiles/reference/tests
 ```
 
 The stub hashes words into normalised 384-dimensional vectors. It tests indexing
@@ -58,8 +60,8 @@ pytest command. The selected provider needs its model installed or cached. Unset
 `slow` performance guards are excluded by default; run them with `pytest -m slow`.
 
 **Tests must never touch the real memory tree.** The autouse fixture in
-`tests/conftest.py` redirects both memory-root variables to a temporary directory
-and resets metrics. Use `tmp_path` and explicit roots for new tests; mock external
+`tests/conftest.py` (and its copy in `profiles/reference/tests/conftest.py`)
+redirects both memory-root variables to a temporary directory and resets metrics. Use `tmp_path` and explicit roots for new tests; mock external
 services and side effects. Some legacy configuration lint tests inspect locally
 installed harness configuration and skip when absent; use a disposable home when
 you must avoid reading your own configuration, preserving a separate model cache
@@ -68,9 +70,9 @@ only for real-model runs.
 Before submitting:
 
 ```sh
-python -m ruff check src tests scripts
-python -m mypy --strict src/smriti
-python -m mypy --strict --platform linux src/smriti
+python -m ruff check src tests scripts profiles
+python -m mypy --strict src/smriti profiles/reference/src
+python -m mypy --strict --platform linux src/smriti profiles/reference/src
 python scripts/doc_facts.py --write
 ```
 

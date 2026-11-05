@@ -1,11 +1,11 @@
 # CLAUDE.md
 
-Orientation for an agent working on this repo. Claude Code loads this file; Codex loads [`AGENTS.md`](AGENTS.md), which says the same thing. Keep the two identical apart from this line. Status as of 2026-11-05.
+Orientation for an agent working on this repo. Claude Code loads this file; Codex loads [`AGENTS.md`](AGENTS.md), which says the same thing. Keep the two identical apart from this line. Status as of 2026-11-06.
 
 ## What smriti is
 
 smriti gives one AI agent persistent memory and a continuous self across sessions and harnesses (Claude Code, Codex).
-The memory is a tree of plain markdown files on local disk (`$SMRITI_ROOT`, default `~/.narada`), searched through a local SQLite index; the nightly sends each day's log to an LLM CLI, and backups push to a git remote you choose.
+The memory is a tree of plain markdown files on local disk (`$SMRITI_ROOT`, default `~/.smriti`, or `~/.narada` where that already exists), searched through a local SQLite index; the nightly sends each day's log to an LLM CLI, and backups push to a git remote you choose.
 It grew inside one setup (the entity Narada and its user Suti, the maintainer) and is being generalised: alpha, Windows-first, one maintainer; CI runs lint, strict types and the tests on Windows, Linux and macOS.
 
 ## Read this first
@@ -38,8 +38,9 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 
 **Roles and profiles** (hardening H5):
 - The day-log's speakers are roles, `user` and `agent`; `user_name` and `agent_name` in `<root>/.smriti/daylog.json` (default "User", "Agent") name them in the render, the prompts and the core tools. Old logs' `"suti"`/`"narada"` are read as the roles, with turn ids unchanged.
-- The reference installation's specifics are the optional profile `smriti.profiles.reference`, enabled by `"profile": "reference"` in the same file: the MCP tools `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift` and `smriti_resolve_outbox`, the wake's `HANDS`, `SUTI NOW` and `ACROSS SURFACES` sections, and the morning persona. Without a profile, none of these exist.
-- The day boundary follows the system's time zone (DST included); `SMRITI_DAY_UTC_OFFSET` or daylog.json's `timezone` overrides it. Still coupled: the default root `~/.narada`.
+- The reference installation's specifics are the optional profile `reference`, its own package outside smriti's wheel (`profiles/reference/`, the distribution `smriti-reference`, found through the `smriti.profiles` entry-point group; hardening H11.6), enabled by `"profile": "reference"` in the same file: the MCP tools `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift` and `smriti_resolve_outbox`, the wake's `HANDS`, `SUTI NOW` and `ACROSS SURFACES` sections, and the morning persona. Without a profile, none of these exist, and smriti's own package carries no profile code.
+- The day boundary follows the system's time zone (DST included); `SMRITI_DAY_UTC_OFFSET` or daylog.json's `timezone` overrides it.
+- The root is `SMRITI_ROOT` (or the legacy `NARADA_ROOT`); else `~/.narada` where it is a directory (the default before 0.2, so an existing install keeps its tree, even beside a `~/.smriti`); else `~/.smriti`. `smriti status` names the rule that chose it.
 
 ## Facts
 
@@ -62,7 +63,7 @@ src/smriti/
   embed/                 embedding identity; the embedding service, its client, protocol and runtime dir
   daylog/                capture adapters, logd, render, digest, rollups, nightly, morning, schedule
   wake/                  briefing.py: the wake briefing, with a hook for a profile's sections
-  profiles/              optional profiles (tools, wake sections, morning prompt); reference/ is the maintainer's installation
+  profiles/              the profile seam: installed profiles, found by entry point (tools, wake sections, morning prompt)
   witness.py, backup.py  tamper-evidence; the backup trigger
   integrations/          claude_code, codex, hermes installers; shared hooks; the managed agent-doc block
   llm/                   providers: claude_cli, codex_cli, anthropic_api, openai_api, ollama
@@ -75,13 +76,15 @@ memory_template/         skeleton for a new memory root
 narada/                  wake.py, backup.py, narada-p.sh, copied into <root>/.smriti/ by the installer
 project_template/        skeleton for a project that uses smriti
 tests/                   pytest; conftest.py points SMRITI_ROOT at a temp dir
+profiles/reference/      the reference profile (the maintainer's installation): its own package, smriti-reference, with its tests
 ```
 
 ## Dev commands
 
 ```bash
 pip install -e ".[read,dev]"                      # editable install: the installer reads templates from the checkout
-python -m pytest -q --ignore=tests/test_perf.py   # perf guards are marked slow and excluded by default
+pip install -e profiles/reference                 # the reference profile, for its own tests (the core runs without it)
+python -m pytest -q --ignore=tests/test_perf.py tests profiles/reference/tests  # perf guards are marked slow and excluded by default
 ruff check <files>                                # line length 100, bugbear, blind excepts
 mypy <files>                                      # strict
 python scripts/doc_facts.py --write               # refresh the generated counts in README.md, CLAUDE.md, AGENTS.md
@@ -92,7 +95,7 @@ Tests import `smriti` from wherever it is installed. In a second checkout or wor
 
 ## Rules
 
-- Python 3.11+. `ruff` and `mypy --strict` are the standard. Ruff checks `E4`, `E7`, `E9` and `F`, plus `E501` (line length 100), `B` (bugbear) and `BLE` (blind excepts); vendored code is exempt from the last three. `ruff check src tests scripts` passes, and CI enforces `mypy --strict` on the whole package on every OS (vendored code excepted).
+- Python 3.11+. `ruff` and `mypy --strict` are the standard. Ruff checks `E4`, `E7`, `E9` and `F`, plus `E501` (line length 100), `B` (bugbear) and `BLE` (blind excepts); vendored code is exempt from the last three. `ruff check src tests scripts profiles` passes, and CI enforces `mypy --strict` on the whole package and the reference profile on every OS (vendored code excepted), and checks that smriti's wheel has no reference code.
 - Narrow an `except Exception` to what can be raised. Keep one only where any failure must be survived (a top-level handler, a hook, a non-critical step), with `# noqa: BLE001 — <reason>`; it still logs the failure or records it in a status the caller sees.
 - No runtime dependencies in the base install (`dependencies = []`). Optional ones go in extras: `read`, `api`, `codex`, `private`, `witness`, `dev`.
 - Check `.ai/knowledge/conventions.md` before introducing a new pattern.

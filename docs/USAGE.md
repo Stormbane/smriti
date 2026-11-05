@@ -29,7 +29,7 @@ Run::
 This sets up:
 
 - `[features] codex_hooks = true` in `~/.codex/config.toml`.
-- `[[hooks.SessionStart]]` pointing at `~/.narada/.smriti/wake.py`
+- `[[hooks.SessionStart]]` pointing at `<root>/.smriti/wake.py`
   with `SMRITI_WAKE_FRAMING=codex-json`. Codex runs this **before the
   first user turn** and appends the briefing JSON
   (`hookSpecificOutput.additionalContext`) to the developer context.
@@ -228,8 +228,8 @@ from pathlib import Path
 import smriti as _s
 
 agent_md = (Path(_s.__file__).parent / "templates" / "AGENT.md")
-contract = agent_md.read_text(encoding="utf-8").format(memory_rel="~/.narada")
-context = briefing(memory_root=Path.home() / ".narada")
+contract = agent_md.read_text(encoding="utf-8").format(memory_rel="~/.smriti")
+context = briefing(memory_root=Path.home() / ".smriti")  # or briefing(): the default root
 system_prompt = f"{contract}\n\n---\n\n{context}"
 ```
 

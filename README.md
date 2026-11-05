@@ -3,7 +3,7 @@
 
 *smṛti*, Sanskrit: "that which is remembered".
 
-smriti gives one AI agent persistent memory and a continuous self across sessions and harnesses. The agent writes dated notes into a tree of plain markdown files and searches them with a local hybrid index. At the start of every session a hook prints a briefing: who the agent is, how last night went, the current project, the recent journal. In the background a day-log captures each conversation (once you turn capture on), and a nightly job digests it, rolls it up, reindexes the tree and timestamps it. It is all ordinary files on your disk (`~/.narada` by default), kept in git. It works with Claude Code and Codex, through MCP and session hooks.
+smriti gives one AI agent persistent memory and a continuous self across sessions and harnesses. The agent writes dated notes into a tree of plain markdown files and searches them with a local hybrid index. At the start of every session a hook prints a briefing: who the agent is, how last night went, the current project, the recent journal. In the background a day-log captures each conversation (once you turn capture on), and a nightly job digests it, rolls it up, reindexes the tree and timestamps it. It is all ordinary files on your disk (`~/.smriti` by default), kept in git. It works with Claude Code and Codex, through MCP and session hooks.
 
 It is built for one long-lived agent identity, on one machine, working with one person. It grew inside the maintainer's own setup (the agent Narada, the user Suti) and is being generalised. It is alpha software; read [Status and limits](#status-and-limits) before installing.
 
@@ -136,7 +136,7 @@ Then start a new Claude Code session. The briefing appears in the opening contex
 
 **`scripts/install.py`:**
 - **Asks the two [privacy](#privacy) questions** first, or takes the answers from `--capture`/`--no-capture` and `--remote-is-private`/`--remote-not-private`, and ends by saying what is captured, committed and pushed.
-- **Creates the memory root** (`~/.narada` unless `--memory-root` says otherwise; it must be inside your home directory) from [`memory_template/`](memory_template/). It never overwrites existing files.
+- **Creates the memory root** (`~/.smriti` unless `--memory-root` or `SMRITI_ROOT` says otherwise, or `~/.narada` where that already exists; it must be inside your home directory) from [`memory_template/`](memory_template/). It never overwrites existing files.
 - **Copies** `wake.py`, `backup.py` and `narada-p.sh` into `<root>/.smriti/`, and links project mirrors for each project it finds under `--projects-root` (default `C:/Projects`).
 - **For `--harness claude_code`** (the default), also:
   - adds SessionStart, UserPromptSubmit and PostToolUse hooks to `~/.claude/settings.json`;
@@ -148,7 +148,7 @@ Then start a new Claude Code session. The briefing appears in the opening contex
 
 Notes:
 - **Install editable.** The installer copies templates from the checkout, and a wheel doesn't ship them.
-- **The root is `SMRITI_ROOT`, default `~/.narada`.** If you use another root, pass `--memory-root` to the installer and also set `SMRITI_ROOT` in your user environment. The wake hook carries the root, but the CLI and the MCP server read only the environment.
+- **The root is `SMRITI_ROOT`, default `~/.smriti`.** An existing `~/.narada` (the default before 0.2) is used instead when no variable is set, even if a `~/.smriti` appears beside it; `smriti status` shows which root is in use and why, and warns when both exist. If you use another root, pass `--memory-root` to the installer and also set `SMRITI_ROOT` in your user environment. The wake hook carries the root, but the CLI and the MCP server read only the environment.
 - **An existing `~/.claude/CLAUDE.md` without smriti's markers** makes the installer stop before changing anything. Run it once with `--migrate-agent-doc` to convert the file; a `.pre-migrate.bak` copy is kept.
 - **The installer also wires the PostToolUse ambient-recall hook.** It is being retired (see Status and limits); remove the `associative_recall.py` entry from `~/.claude/settings.json` if you don't want it.
 - **The qmd recall daemon.** The installer tries to start it unless `--skip-recall-daemon` is given, and prints a hint when qmd isn't installed. You don't need qmd.
@@ -167,7 +167,7 @@ The witness step needs `pip install -e ".[witness]"` and a memory root that is a
 
 ### Configuration
 
-`<root>/.smriti/daylog.json` is optional; every key has a default. `user_name` and `agent_name` (default `"User"` and `"Agent"`) are the names the day render, the nightly and morning prompts and the core tools use for the two speaker roles. `profile` enables an optional profile, `smriti.profiles.<name>`: one installation's own tools, wake sections and morning persona. With none set, smriti runs its generic core. The repo's one profile, `reference`, is the maintainer's installation, which sets `{"profile": "reference", "user_name": "Suti", "agent_name": "Narada", "morning_web_search": true}`. [`docs/INSTALL.md`](docs/INSTALL.md#configuration-rootsmritidaylogjson) lists every key.
+`<root>/.smriti/daylog.json` is optional; every key has a default. `user_name` and `agent_name` (default `"User"` and `"Agent"`) are the names the day render, the nightly and morning prompts and the core tools use for the two speaker roles. `profile` enables an optional profile: an installed package that registers a `smriti.profiles.Profile` under that name in the `smriti.profiles` entry-point group, and adds one installation's own tools, wake sections and morning persona. With none set, smriti runs its generic core; smriti's own package carries no profile. The repo's one profile, `reference` in [`profiles/reference/`](profiles/reference/), is the maintainer's installation and its own distribution, `smriti-reference` (`pip install -e profiles/reference`), which sets `{"profile": "reference", "user_name": "Suti", "agent_name": "Narada", "morning_web_search": true}`. It is not a template. [`docs/INSTALL.md`](docs/INSTALL.md#configuration-rootsmritidaylogjson) lists every key.
 
 The embedding service reads three environment variables: `SMRITI_EMBED_SERVICE=0` turns it off; `SMRITI_EMBED_IDLE_S` sets its idle exit (default 900 seconds); `SMRITI_RUNTIME_DIR` moves its runtime directory (default `%LOCALAPPDATA%\smriti\run` on Windows, `$XDG_RUNTIME_DIR/smriti` or `~/.cache/smriti/run` elsewhere), which holds its key, lock, discovery file and log and is never inside the memory root. smriti's other locks (file edits, the day-log writer) live there too, in `locks/`; while processes of an earlier release may still run, each is also taken on its old file in the shared temp directory, and `SMRITI_LEGACY_LOCKS=0` stops that once none can.
 
@@ -197,7 +197,7 @@ The embedding service reads three environment variables: `SMRITI_EMBED_SERVICE=0
 | Memory | `smriti_read`, `smriti_write`, `smriti_status` |
 | Project workflow (writes under `mirrors/<project>/`; not indexed) | `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status` |
 | Session handoff | `smriti_write_handoff` (writes `.smriti/handoff-pending.md`; the next wake shows it once, then archives it) |
-| The `reference` profile only (listed when `daylog.json` sets `"profile": "reference"`) | `tell_suti` (sends a real message through `notify_cmd`), `smriti_ask_suti`, `smriti_propose_goal_shift` (both write to `outbox/`; never applied automatically), `smriti_resolve_outbox` |
+| The `reference` profile only (installed from `profiles/reference/`, and listed when `daylog.json` sets `"profile": "reference"`) | `tell_suti` (sends a real message through `notify_cmd`), `smriti_ask_suti`, `smriti_propose_goal_shift` (both write to `outbox/`; never applied automatically), `smriti_resolve_outbox` |
 
 **Hooks:**
 - Claude Code: SessionStart runs `wake.py`; UserPromptSubmit touches `.smriti/last-activity`; PostToolUse on `Read|Edit|Write` runs ambient recall (legacy).
@@ -205,7 +205,7 @@ The embedding service reads three environment variables: `SMRITI_EMBED_SERVICE=0
 
 ## Status and limits
 
-- **One setup, being generalised.** smriti grew inside one person's setup with one agent. That setup's MCP tools, wake sections and morning persona are now the optional `reference` profile, and the core names the two parties from configuration. Still coupled: Windows paths in project discovery and the default root `~/.narada`.
+- **One setup, being generalised.** smriti grew inside one person's setup with one agent. That setup's MCP tools, wake sections and morning persona are now the optional `reference` profile, a separate package outside smriti's wheel; the core names the two parties from configuration, and its default root is `~/.smriti` (an existing `~/.narada` is kept). Still coupled: Windows paths in project discovery.
 - **Removed:** the April 2026 design's deep pipeline (EXTRACT → JUDGE → CROSSLINK, the cognitive cascade, ingest, consolidation, the task queue and its daemon, and the `sleep`, `queue`, `daemon`, `watch`, `ingest` and `merge-concepts` commands) was removed in November 2026; it remains in the git history. When it ran, it never changed a belief or identity file; it lengthened the pages it touched by 88% and destroyed one source file. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes that design.
 - **Legacy:** qmd as a recall backend; the Hermes harness (`--harness hermes`); the PreCompact staging hook; the file-touch ambient-recall hook. The last is off in the reference setup, because research found that 4-11% of its injections helped (plan 2.4).
 - **Retrieval quality** on the reference tree is moderate: 0.67 hit@5 on the MCP path, 0.81 with reranking. The plan targets 0.95.

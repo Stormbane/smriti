@@ -45,7 +45,7 @@
 ## Config
 
 - **Environment variables** for all config overrides: SMRITI_ROOT (or the legacy
-  NARADA_ROOT), SMRITI_LLM_PROVIDER, SMRITI_MODEL, SMRITI_EXECUTOR_MODEL,
+  NARADA_ROOT; unset, the root is `~/.narada` where it exists, else `~/.smriti`), SMRITI_LLM_PROVIDER, SMRITI_MODEL, SMRITI_EXECUTOR_MODEL,
   ANTHROPIC_API_KEY, SMRITI_EMBED_PROVIDER, and for the embedding service
   SMRITI_EMBED_SERVICE (0 turns it off), SMRITI_EMBED_IDLE_S and
   SMRITI_RUNTIME_DIR; SMRITI_LEGACY_LOCKS (0 ends the lock transition, see
@@ -86,7 +86,7 @@
 
 ## Metrics
 
-- **Structured JSONL** at `~/.narada/.smriti/metrics.jsonl`.
+- **Structured JSONL** at `<root>/.smriti/metrics.jsonl`.
 - **snake_case event names**: search_query, index_completed, write_entry,
   index_pages_updated.
 - **Every operation** produces a metrics event. This is not optional.

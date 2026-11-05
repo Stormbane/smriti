@@ -62,8 +62,9 @@ git clone https://github.com/Stormbane/smriti.git
 cd smriti
 pip install -e ".[read]"      # add ,codex / ,witness / ,dev as needed
 
-# 2. The memory root. Default: ~/.narada/ (env SMRITI_ROOT); it must be
-#    inside your home directory. On a fresh machine with an existing tree,
+# 2. The memory root. Default: ~/.smriti/ (env SMRITI_ROOT), or ~/.narada/
+#    where that already exists (the default before 0.2); it must be
+#    inside your home directory. `smriti status` shows which root is used. On a fresh machine with an existing tree,
 #    restore it from backup first; otherwise the installer creates it from
 #    memory_template/.
 
@@ -241,7 +242,7 @@ The core sections, their order and their budgets are fixed in
 ### Smriti CLI (optional, grows over time)
 
 ```bash
-smriti index          # build the search index over ~/.narada/
+smriti index          # build the search index over the memory root
 smriti read "query"   # semantic + keyword search
 smriti write "text"   # write an entry to the memory tree
 smriti nightly        # sleep task: reconcile day-log, render, digest, rollups, reindex
@@ -255,13 +256,13 @@ smriti status         # index stats + day-log capture health
 
 Claude Code transcripts, Codex rollouts and voice transcripts (the default
 sources) are merged in real time into one chronological day-log at
-`~/.narada/log/YYYY/MM/DD.jsonl` by `smriti logd`. The 03:00 `smriti
+`<root>/log/YYYY/MM/DD.jsonl` by `smriti logd`. The 03:00 `smriti
 nightly` run renders each day to markdown, writes an LLM digest
 (`claude -p` primary, `codex exec` fallback — subscription seats only),
 builds week/month/year rollups, and refreshes the indexes. The 07:00
 `smriti morning` run sends one good-morning message (digest
 highlights + world headlines) through the `notify_cmd` configured in
-`~/.narada/.smriti/daylog.json` — at most one per day, fail-closed.
+`<root>/.smriti/daylog.json` — at most one per day, fail-closed.
 Source globs live in the same config file; new transcript directories are
 a config edit, never a code change. See
 `.ai/features/nightly-cycle.md` for the full contract.
@@ -286,7 +287,7 @@ defaults apply, and capture is off.
 | `morning_web_search` | `false` | `true` lets the morning call search the web for headlines, and only that; off, it gets no tools and writes from the digest alone. Search results can carry a prompt injection: see [PRIVACY.md](PRIVACY.md#what-goes-to-an-llm) |
 | `user_name` | `"User"` | The user's display name: the day render, the presence line, the nightly and morning prompts, the core tools' text, the reading list's person file (`people/<name>/<name>.md`) |
 | `agent_name` | `"Agent"` | The agent's display name, used in the same places |
-| `profile` | none | An optional profile, `smriti.profiles.<name>`; see below |
+| `profile` | none | An optional profile: the name an installed package registers in the `smriti.profiles` entry-point group; see below |
 
 The day-log stores each speaker as a role, `user` or `agent`; the names
 above are only how they are shown. Logs written before roles existed
@@ -300,8 +301,16 @@ wake-briefing sections, a morning persona. Without one, smriti runs its
 generic core: the MCP server lists the core tools only, the briefing has
 no profile sections, and the morning message has no persona.
 
+A profile is an installed package, not part of smriti: smriti finds it
+through the `smriti.profiles` entry-point group of the Python environment
+it runs in, and never loads code from the memory tree. A profile that
+fails to load costs only its own tools and sections (the MCP server and
+the wake say so); the morning refuses to send rather than drop a persona.
+
 The only profile in the repo is `reference`, the maintainer's own
-installation (the agent Narada, the user Suti). It adds the `tell_suti`,
+installation (the agent Narada, the user Suti). It is its own
+distribution, `smriti-reference`, in `profiles/reference/`, and smriti's
+wheel carries none of it; install it with `pip install -e profiles/reference`. It adds the `tell_suti`,
 `smriti_ask_suti`, `smriti_propose_goal_shift` and `smriti_resolve_outbox`
 tools, the wake's `HANDS`, `SUTI NOW` and `ACROSS SURFACES` sections, and
 the morning persona. That installation enables it, with the morning's web
@@ -312,8 +321,16 @@ search, with:
  "morning_web_search": true}
 ```
 
-To write your own, add a package under `src/smriti/profiles/<name>/`
-whose `PROFILE` is a `smriti.profiles.Profile`; every hook is optional.
+To write your own, make a package whose module holds a
+`smriti.profiles.Profile` (every hook is optional), register it in its
+`pyproject.toml`, install it beside smriti, and name it in `profile`:
+
+```toml
+[project.entry-points."smriti.profiles"]
+myprofile = "my_profile:PROFILE"
+```
+
+Two installed packages claiming one name is an error, not a choice.
 
 ---
 
@@ -379,7 +396,7 @@ the missing entries.
 **Step 3 -- Mirrors.** Creates junctions in the entity's memory tree:
 
 ```
-~/.narada/mirrors/foo/
+<root>/mirrors/foo/
   auto-memory/  --> ~/.claude/projects/C--Projects-foo/memory/
   knowledge/    --> C:/Projects/foo/.ai/knowledge/
   ai/           --> C:/Projects/foo/.ai/
@@ -398,7 +415,7 @@ python scripts/setup_project.py [project-path] [--memory-root PATH] [--no-templa
 | Flag | Default | Purpose |
 |---|---|---|
 | `project-path` | current directory | The project to wire up |
-| `--memory-root` | `~/.narada` | Entity memory root |
+| `--memory-root` | `$SMRITI_ROOT`, else `~/.narada` if it exists, else `~/.smriti` | Entity memory root |
 | `--no-template` | off | Skip template copy, only create mirrors |
 
 The script is idempotent -- re-run any time.
@@ -516,14 +533,14 @@ alongside the day-log, which is the live capture path.
 Clone/restore the **entity repo first**, then run the harness install:
 
 ```
-git clone <entity-remote> ~/.narada     # identity, memory, .smriti/ hooks
+git clone <entity-remote> ~/.smriti     # identity, memory, .smriti/ hooks
 pip install -e <smriti-checkout>
 python scripts/install.py --harness claude_code   # or codex
 ```
 
 The entity tree is itself a versioned git repository (committed and
 pushed by `backup.py` from the hourly `smriti-backup` task), so entity-level
-hook scripts that live under `~/.narada/.smriti/hooks/` — e.g. a
+hook scripts that live under `<root>/.smriti/hooks/` — e.g. a
 personal session-ending reminder — come back with the clone. Harness
 configs that reference them assume the clone exists; `smriti doctor`
 has a hook-target-exists check that catches the gap.

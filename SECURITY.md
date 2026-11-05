@@ -68,6 +68,11 @@ security backport series or guaranteed response time.
   accidental access, not a malicious operator. Legacy stores can still read a key
   from `private/README.md`: that older format needs manual migration and, if the
   key reached a remote, key rotation and history cleanup.
+- A profile (`"profile"` in `daylog.json`) is code from an installed package,
+  found through the `smriti.profiles` entry-point group of the Python
+  environment smriti runs in; nothing is loaded from the memory tree, so the
+  config can only choose among packages the operator installed. smriti's own
+  wheel carries no profile.
 - `daylog/scrub.py` masks recognised credential patterns before captured turns
   are persisted. This is pattern-based, not comprehensive secret or personal-data
   detection. Unrecognised secrets and ordinary personal information remain; direct
