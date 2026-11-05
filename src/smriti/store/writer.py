@@ -1,13 +1,7 @@
-"""Write new entries into the narada memory tree.
+"""Write new entries into the memory tree.
 
-This is the WRITE step of the smriti pipeline -- simplified for v0.1
-(no JUDGE, no CROSSLINK). The full pipeline is:
-
-    CAPTURE -> EXTRACT -> JUDGE -> WRITE -> CROSSLINK -> INDEX
-
-In v0.1 we go directly:
-
-    write_entry() -> file on disk -> index_tree() on that one file
+``write_entry`` appends the entry to its daily file, indexes that one
+file, and refreshes the ``index.md`` listings of its parent directories.
 
 Entry format
 ------------
@@ -16,23 +10,19 @@ Journal entries use a cascading time structure:
     journal/YYYY/MM/weekN/MM-DD.md
 
 where weekN is the week within the month (week1=days 1-7, week2=8-14,
-week3=15-21, week4=22-28, week5=29-31). Summary files at each level
-(weekN.md, MM.md, YYYY.md) are created by the journal_rollup sleep
-task and updated by cognitive cascade.
+week3=15-21, week4=22-28, week5=29-31).
 
 Non-journal branches use the simpler flat structure:
 
     <branch>/YYYY/MM-DD.md
 
 Multiple writes on the same day append to the same daily file,
-separated by horizontal rules. Concurrency-safe via O_CREAT|O_EXCL
-for creation and O_APPEND for appends.
+separated by horizontal rules, under the file's edit lock.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -181,38 +171,10 @@ def write_entry(
     if reindex:
         _reindex_one(entry_path, root)
 
-    # Structural cascade: update parent index.md files (sync; also enqueues
-    # cognitive_cascade for any updated index files).
+    # Keep the index.md listings of the parent directories current.
     _structural_cascade(entry_path, root)
 
-    # Route through the central classifier for the parked async pipelines
-    # (summarize, ingest/route, journal_rollup, wake_summary). Nothing drains
-    # that queue any more, so this only runs when re-enabled explicitly.
-    # Reindex tasks are skipped because we ran it synchronously above.
-    if _legacy_queue_enabled():
-        try:
-            from smriti.store.queue import enqueue
-            from smriti.store.watch_router import classify_write
-
-            tasks = classify_write(entry_path, root, event_type="created")
-            for task in tasks:
-                if task.type == "reindex":
-                    continue
-                enqueue(task, root=root)
-        except Exception as exc:
-            log.warning("classify_write after write failed: %s", exc)
-
     return entry_path
-
-
-def _legacy_queue_enabled() -> bool:
-    """Whether writes feed the parked deep pipeline's task queue.
-
-    Off by default since 2026-11-04: nothing drains the queue (it had
-    regrown to 145 tasks), and draining it would run unchecked rewrites over
-    project and people notes. Set ``SMRITI_LEGACY_QUEUE=1`` to re-enable.
-    """
-    return os.environ.get("SMRITI_LEGACY_QUEUE", "") == "1"
 
 
 def _append_entry(path: Path, entry_block: str) -> None:
@@ -250,17 +212,12 @@ def _reindex_one(path: Path, root: Path) -> None:
 
 
 def _structural_cascade(path: Path, root: Path) -> None:
-    """Run structural cascade and queue cognitive cascade tasks."""
+    """Regenerate the parent index.md files; a failure never blocks the write."""
     try:
-        from smriti.store.cascade import queue_cognitive_cascade, structural_cascade
+        from smriti.store.cascade import structural_cascade
 
         updated = structural_cascade(path, root)
         if updated:
             log.info("Structural cascade updated %d index files", len(updated))
-        if updated and _legacy_queue_enabled():
-            all_changed = [path] + updated
-            queued = queue_cognitive_cascade(all_changed, root)
-            if queued:
-                log.info("Queued %d cognitive cascade tasks", queued)
     except Exception as exc:
         log.warning("Structural cascade failed: %s", exc)
