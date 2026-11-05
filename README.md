@@ -26,7 +26,7 @@ smriti_write      -> dated markdown + index     voice transcripts -> log/YYYY/MM
 ```
 
 **In a session:**
-- **Write.** `smriti_write(content, branch="journal", title?, source?)` appends a dated entry with frontmatter (`date`, `time`, `branch`, `source`) to `<branch>/YYYY/MM-DD.md`, or `journal/YYYY/MM/weekN/MM-DD.md` for the journal. The file is indexed at once, and each existing `index.md` in its parent directories is regenerated to list it (`smriti.store.index_pages`). When no vectors can be made (the embedding service is down or late), the entry is still indexed for keyword search at once, and the reply says "saved; indexed for keyword search; vectors pending (reason)"; the vectors arrive later without anyone asking.
+- **Write.** `smriti_write(content, branch="journal", title?, source?)` appends a dated entry with frontmatter (`date`, `time`, `branch`, `source`) to `<branch>/YYYY/MM-DD.md`, or `journal/YYYY/MM/weekN/MM-DD.md` for the journal. The file is indexed at once, and each existing `index.md` in its parent directories is regenerated to list it (`smriti.store.index_pages`). When no vectors can be made or stored (the embedding service is down or late, or sqlite-vec isn't installed), the entry is still indexed for keyword search at once, and the reply says "saved; indexed for keyword search; vectors pending (reason)"; the vectors arrive later without anyone asking.
 - **Read.** `smriti_read(query, top_k=5)` runs hybrid search over the tree. A result's score is 0.5 vector similarity (sqlite-vec) + 0.3 keyword (FTS5) + 0.2 trunk distance, the last favouring files near the root. `smriti read` on the CLI also reranks with a cross-encoder; the MCP tool doesn't. A search that couldn't use vectors runs by keyword only and starts with "keyword-only: reason".
 - **Wake.** A SessionStart hook runs `<root>/.smriti/wake.py`, which prints a briefing of at most 9,500 characters. [`docs/SELF.md`](docs/SELF.md) lists its sections and where each comes from.
 
@@ -175,7 +175,7 @@ The embedding service reads three environment variables: `SMRITI_EMBED_SERVICE=0
 - **CLI:** 15 `smriti` subcommands: `backup`, `doctor`, `embed`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `recall`, `status`, `tasks`, `witness`, `write`. Nested: `embed` has `serve`, `status`, `stop`; `recall` has `query`, `status`, `stats`, `index`, `daemon`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 650 test functions in 52 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 653 test functions in 52 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 **CLI.** `smriti --help` lists the commands; each takes `--help`.

@@ -169,10 +169,14 @@ def test_an_outage_degrades_visibly_and_vectors_fill_in_on_recovery_without_a_ni
 
 
 def test_with_the_service_off_status_says_so(tree: Path) -> None:
+    # Without sqlite-vec (macOS's CI Python) no vectors can be stored, so the
+    # tree's two sources, and the new write, are pending and say so.
+    vec = _has_vec()
     status = _call("smriti_status")
-    assert "Embedding service: off" in status and "Vectors pending: 0" in status
-    assert "saved and indexed" in _call("smriti_write", content="Plain in-process write.",
-                                        branch="notes")
+    assert "Embedding service: off" in status
+    assert f"Vectors pending: {0 if vec else 2}" in status
+    wrote = _call("smriti_write", content="Plain in-process write.", branch="notes")
+    assert ("saved and indexed" if vec else "vectors pending (sqlite-vec") in wrote
 
 
 def test_smriti_status_shows_pending_vectors_and_the_service(
@@ -182,7 +186,8 @@ def test_smriti_status_shows_pending_vectors_and_the_service(
     monkeypatch.setenv("SMRITI_EMBED_SERVICE", "1")
     assert main(["status"]) == 0
     out = capsys.readouterr().out
-    assert "Pending:    0 sources" in out and "Embedding:  not running" in out
+    assert f"Pending:    {0 if _has_vec() else 2} sources" in out
+    assert "Embedding:  not running" in out
 
 
 # ── A real MCP server ────────────────────────────────────────────────
@@ -252,8 +257,9 @@ def test_an_mcp_server_stays_small_and_never_loads_a_model(
     assert measured["heavy"] == [], measured["heavy"]  # no model, no runtime, no provider
     if measured["rss"] is not None:
         assert measured["rss"] < 100 * 2**20, measured["rss"]
-    assert "saved and indexed" in texts[2] and "saved and indexed" in texts[4]
     vec = "sqlite-vec is not available" not in texts[5]
+    saved = "saved and indexed" if vec else "vectors pending (sqlite-vec"
+    assert saved in texts[2] and saved in texts[4]
     assert not texts[5].startswith("keyword-only") or not vec, texts[5]
     assert "hens" in texts[5]
     assert "Embedding service: ready" in texts[6]

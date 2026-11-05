@@ -125,6 +125,7 @@ class EmbedService:
                  handshake_s: float = HANDSHAKE_S, request_read_s: float = REQUEST_READ_S,
                  max_connections: int = MAX_CONNECTIONS, queue_max: int = QUEUE_MAX,
                  identity_check_s: float = 1.0, pending_poll_s: float = 2.0,
+                 novec_poll_s: float = 60.0,
                  repair_batch: int = 16, instance: str | None = None,
                  on_state: Callable[[str], None] | None = None,
                  on_drain: Callable[[str], None] | None = None) -> None:
@@ -137,6 +138,8 @@ class EmbedService:
         self.request_read_s = request_read_s
         self.identity_check_s = identity_check_s
         self.pending_poll_s = pending_poll_s
+        self.novec_poll_s = novec_poll_s  # how often to look again while sqlite-vec won't load
+        self.can_store_vectors = True
         self.repair_batch = repair_batch
         self.instance = instance or secrets.token_hex(8)
         self.port = 0
@@ -337,7 +340,8 @@ class EmbedService:
                 "identity": asdict(self.identity), "uptime_s": round(now - self._started, 1),
                 "idle_for_s": round(now - self._last_request, 1), "idle_s": self.idle_s,
                 "queued": self._queue.qsize(), "active": self._active,
-                "pending": self.pending, "stats": asdict(self.stats)}
+                "pending": self.pending, "can_store_vectors": self.can_store_vectors,
+                "stats": asdict(self.stats)}
 
     def _handle_embed(self, request: Frame) -> Frame:
         texts, kind, budget = request.get("texts"), request.get("kind"), request.get("budget_ms")
@@ -410,7 +414,8 @@ class EmbedService:
             self._run_job(job)
         raise _Interrupted
 
-    def _pending_count(self) -> int:
+    def _pending_count(self) -> tuple[int, bool]:
+        """Pending sources, and whether this process can store vectors (sqlite-vec loads)."""
         import sqlite3
 
         from smriti.store.schema import open_readonly, pending_vectors
@@ -420,9 +425,9 @@ class EmbedService:
             conn = open_readonly(self.db)
         except (sqlite3.Error, OSError) as exc:
             log.debug("could not read the pending count: %s", exc)
-            return 0
+            return 0, True
         try:
-            return pending_vectors(conn)
+            return pending_vectors(conn), conn.has_vec
         finally:
             conn.close()
 
@@ -434,7 +439,12 @@ class EmbedService:
         if now < self._next_pending_check:
             return
         self._next_pending_check = now + self.pending_poll_s
-        self.pending = self._pending_count()
+        self.pending, self.can_store_vectors = self._pending_count()
+        if not self.can_store_vectors:
+            # Nothing pending can be filled while sqlite-vec won't load: look
+            # again rarely, and don't spend a write or an embedding on it.
+            self._next_pending_check = now + self.novec_poll_s
+            return
         if not self.pending:
             return
         import sqlite3

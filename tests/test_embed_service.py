@@ -580,10 +580,14 @@ def test_the_key_is_made_once_atomically_and_never_replaced(tmp_path: Path) -> N
 
 
 def test_a_timed_out_write_followed_only_by_reads_ends_with_nothing_pending(
-        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch,
+        tmp_path_factory: pytest.TempPathFactory) -> None:
     """Round 2, finding 3: vectors left pending by a write that timed out must be
     filled even if no write or index run ever follows, only reads."""
     from smriti.store.schema import open_readonly, pending_vectors
+
+    if not _vec_loads(tmp_path_factory.mktemp("probe")):
+        pytest.skip("sqlite-vec can't load here: nothing pending can be filled")
     from smriti.store.search import search_with_status
 
     (root / "a.md").write_text("# A\n\nSome text.\n", encoding="utf-8")
@@ -629,8 +633,12 @@ def test_a_timed_out_write_followed_only_by_reads_ends_with_nothing_pending(
 
 
 def test_a_starting_service_fills_pending_vectors_unasked(
-        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch,
+        tmp_path_factory: pytest.TempPathFactory) -> None:
     from smriti.store.schema import open_readonly, pending_vectors
+
+    if not _vec_loads(tmp_path_factory.mktemp("probe")):
+        pytest.skip("sqlite-vec can't load here: nothing pending can be filled")
 
     class Down(StubEmbedding):
         async def embed(self, texts: list[str]) -> list[list[float]]:
@@ -656,6 +664,58 @@ def test_a_starting_service_fills_pending_vectors_unasked(
     svc = services.start(root, repair_batch=1)  # one source a step
     assert _wait(lambda: pending() == 0, 10)
     assert svc.stats.repaired == 2 and svc.stats.served == 0
+
+
+def _vec_loads(tmp: Path) -> bool:
+    from smriti.store.schema import ensure_schema
+
+    conn = ensure_schema(tmp / "probe.db", None)
+    try:
+        return conn.has_vec
+    finally:
+        conn.close()
+
+
+def test_without_sqlite_vec_the_repair_loop_waits_and_fills_once_it_loads(
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch,
+        tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Codex review of H10, P2: a write without sqlite-vec must stay pending; and
+    while sqlite-vec won't load, the repair loop must not spin on it."""
+    import smriti.store.schema as schema
+    from smriti.store.schema import open_readonly, pending_vectors
+
+    if not _vec_loads(tmp_path_factory.mktemp("probe")):
+        pytest.skip("sqlite-vec can't load here")
+    real_load = schema._load_sqlite_vec
+    monkeypatch.setattr(schema, "_load_sqlite_vec", lambda conn: False)
+    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: StubEmbedding())
+    db = root / ".smriti" / "index.db"
+    (root / "a.md").write_text("# A\n\nWritten on the base install.\n", encoding="utf-8")
+    assert indexer.index_file_result(root / "a.md", root=root, db=db).vectors_pending
+    fills: list[object] = []
+    real_fill = indexer.fill_pending_vectors
+
+    def counting_fill(**kw: Any) -> int:
+        fills.append(kw)
+        return real_fill(**kw)
+
+    monkeypatch.setattr(indexer, "fill_pending_vectors", counting_fill)
+    svc = services.start(root, pending_poll_s=0.02, novec_poll_s=0.8)
+    time.sleep(0.5)  # 25 looks at the 0.02 s poll, had it not backed off
+    assert svc.pending == 1 and not svc.can_store_vectors
+    assert fills == []  # no repair attempted: no write transaction, no embedding
+
+    monkeypatch.setattr(schema, "_load_sqlite_vec", real_load)  # now it loads
+
+    def pending() -> int:
+        conn = open_readonly(db)
+        try:
+            return pending_vectors(conn)
+        finally:
+            conn.close()
+
+    assert _wait(lambda: pending() == 0, 10)
+    assert svc.can_store_vectors and svc.stats.repaired == 1 and len(fills) >= 1
 
 
 # ── Real processes ───────────────────────────────────────────────────

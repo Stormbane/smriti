@@ -505,6 +505,83 @@ def test_a_repair_with_the_wrong_model_writes_nothing(
     assert _pending(tree) == 1 and _vectors(tree, "notes/lantern.md") == []
 
 
+# ── Without sqlite-vec (the base install) ────────────────────────────
+
+
+@pytest.fixture()
+def no_sqlite_vec(tmp_path_factory: pytest.TempPathFactory,
+                  monkeypatch: pytest.MonkeyPatch) -> Any:
+    """sqlite-vec won't load, as in the base install; calling the result installs it."""
+    import smriti.store.schema as schema
+
+    if not _vec_loads(tmp_path_factory.mktemp("probe")):
+        pytest.skip("sqlite-vec can't load here, so it can't be installed mid-test")
+    real = schema._load_sqlite_vec
+    monkeypatch.setattr(schema, "_load_sqlite_vec", lambda conn: False)
+
+    def install() -> None:
+        monkeypatch.setattr(schema, "_load_sqlite_vec", real)
+
+    return install
+
+
+def test_writes_without_sqlite_vec_stay_pending_until_it_is_installed(
+        tmp_path: Path, providers: Providers, no_sqlite_vec: Any,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex review of H10, P2: a write indexed while sqlite-vec was missing was
+    recorded with vectors = 1, so once the read extras were installed every
+    repair skipped it, and it stayed without vectors until edited."""
+    (tmp_path / "notes").mkdir()
+    down, up = tmp_path / "notes" / "down.md", tmp_path / "notes" / "up.md"
+    down.write_text("# Down\n\nWritten while the embedder was down.\n", encoding="utf-8")
+    up.write_text("# Up\n\nWritten with the embedder up.\n", encoding="utf-8")
+
+    providers.current = Down()
+    assert "embedder down" in index_file_result(down, root=tmp_path, db=_db(tmp_path)) \
+        .vectors_pending
+    providers.current = StubEmbedding()  # vectors made, but nowhere to store them
+    assert "sqlite-vec" in index_file_result(up, root=tmp_path, db=_db(tmp_path)) \
+        .vectors_pending
+    assert _pending(tmp_path) == 2
+
+    # Until it is installed, a repair only reads: no write transaction, no embedding.
+    opened: list[Path] = []
+    real_open = indexer.ensure_schema
+    monkeypatch.setattr(indexer, "ensure_schema",
+                        lambda db, *a, **k: opened.append(db) or real_open(db, *a, **k))
+    providers.current = Down()  # an embedding attempt would raise
+    assert fill_pending_vectors(db=_db(tmp_path)) == 0
+    assert opened == [] and _pending(tmp_path) == 2
+
+    no_sqlite_vec()  # pip install smriti[read]
+    providers.current = StubEmbedding()
+    assert fill_pending_vectors(db=_db(tmp_path)) == 2
+    assert _pending(tmp_path) == 0
+    for name in ("down", "up"):
+        assert _vectors(tmp_path, f"notes/{name}.md") == _expected(
+            StubEmbedding(), tmp_path, f"notes/{name}.md")
+
+
+def test_an_index_built_without_sqlite_vec_gets_its_vectors_once_it_is_installed(
+        tmp_path: Path, providers: Providers, no_sqlite_vec: Any) -> None:
+    (tmp_path / "identity.md").write_text("# Identity\n\nAri keeps the lamps lit.\n",
+                                          encoding="utf-8")
+    (tmp_path / "empty.md").write_text("", encoding="utf-8")  # no chunks: nothing pending
+
+    assert index_tree(root=tmp_path, db=_db(tmp_path))["indexed"] == 2
+    assert _pending(tmp_path) == 1
+    # While it is missing, unchanged pending sources aren't embedded again every run.
+    stats = index_tree(root=tmp_path, db=_db(tmp_path))
+    assert (stats["indexed"], stats["skipped"]) == (0, 2)
+
+    no_sqlite_vec()
+    stats = index_tree(root=tmp_path, db=_db(tmp_path))
+    assert (stats["indexed"], stats["skipped"]) == (1, 1)  # the pending one, unchanged
+    assert _pending(tmp_path) == 0
+    assert _vectors(tmp_path, "identity.md") == _expected(StubEmbedding(), tmp_path,
+                                                          "identity.md")
+
+
 # ── The identity itself ──────────────────────────────────────────────
 
 

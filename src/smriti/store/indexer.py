@@ -443,7 +443,8 @@ def index_tree(
         adopted: list[tuple[str, os.stat_result]] = []
         # A source whose vectors are pending is read and embedded again,
         # unchanged or not: this run is one of the ways its vectors arrive.
-        pending = _pending_sources(conn)
+        # Not without sqlite-vec, where its vectors still couldn't be stored.
+        pending = _pending_sources(conn) if conn.has_vec else set()
 
         for sf in scanned_files:
             rel_source = str(sf.path.relative_to(root_resolved)).replace("\\", "/")
@@ -564,6 +565,12 @@ def index_tree(
 
         for (cid, c, rel_source, fpath), vector in to_write:
             _insert_chunk(conn, cid, c, rel_source, trunk_distance(fpath, root), now, vector)
+        if not conn.has_vec:
+            # No vectors were stored: what this run wrote is pending, so the
+            # repairs fill it in once sqlite-vec is installed.
+            for src, _ in written:
+                conn.execute("UPDATE sources SET vectors = 0 WHERE source = ? AND EXISTS "
+                             "(SELECT 1 FROM chunks WHERE source = ?)", (src, src))
 
         stats["indexed"] = sum(1 for src, _ in read_sources if src not in keep)
         stats["chunks"] = len(to_write)
@@ -723,7 +730,12 @@ def _commit_file(db: Path, path: Path, root: Path, rel_source: str, st: os.stat_
             identity: EmbeddingIdentity | None = bind_identity(conn, embedded.identity)
         else:
             identity = recorded_identity(conn)
-        pending = bool(chunks) and embedded is None and conn.has_vec
+        # Pending means "no vectors stored", whatever the reason: without
+        # sqlite-vec even good vectors can't be stored, and a source recorded
+        # as having them would be skipped by every repair once it is installed.
+        pending = bool(chunks) and (embedded is None or not conn.has_vec)
+        if pending and embedded is not None:
+            reason = NO_VEC_REASON
         _delete_source(conn, rel_source)
         _record_source(conn, rel_source, st, vectors=not pending)
         now = datetime.now(timezone.utc).isoformat()
@@ -751,6 +763,24 @@ def _commit_file(db: Path, path: Path, root: Path, rel_source: str, st: os.stat_
         raise
 
 
+NO_VEC_REASON = "sqlite-vec is not available here, so no vectors can be stored"
+
+
+def _can_fill(db: Path) -> bool:
+    """True when the index has pending sources and this process can store vectors.
+
+    Read-only, so a repair loop that asks while sqlite-vec is missing costs a
+    read, never a write transaction or an embedding.
+    """
+    from smriti.store.schema import open_readonly, pending_vectors
+
+    conn = open_readonly(db)
+    try:
+        return conn.has_vec and pending_vectors(conn) > 0
+    finally:
+        conn.close()
+
+
 def _fill_some_pending(db: Path) -> None:
     """After a write that made its vectors, fill a few pending sources too (best effort)."""
     try:
@@ -772,10 +802,12 @@ def fill_pending_vectors(*, db: Path | None = None,
     :class:`StaleEmbedding` when the vectors aren't the index's model, and
     whatever ``embed`` raises. ``busy_ms`` bounds the wait for another
     writer (the service keeps it short, so a repair never holds up queries).
+    Without sqlite-vec nothing can be filled: it returns 0 at once, having
+    only read the index, and the sources stay pending until it is installed.
     """
     if db is None:
         db = smriti_db_path()
-    if not db.exists():
+    if not db.exists() or not _can_fill(db):
         return 0
     conn = ensure_schema(db, None, busy_ms=busy_ms)
     try:
