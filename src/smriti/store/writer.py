@@ -228,7 +228,7 @@ def write_entry_result(
         branch=branch,
         content_bytes=len(content),
         has_title=title is not None,
-        source_hint=source_hint or "",
+        source_hint=source,  # scrubbed: metrics persist too (Codex review of H11.1)
     )
 
     written = Written(entry_path)

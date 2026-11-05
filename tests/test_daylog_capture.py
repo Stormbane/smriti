@@ -175,6 +175,9 @@ def test_a_memory_write_is_scrubbed_as_capture_is(
     [entry] = [p for p in root.rglob("*.md") if p.name != "index.md"]
     text = entry.read_text(encoding="utf-8")
     assert key not in text and token not in text and "hunter2hunter2" not in text
+    # The metrics log persists the source too (Codex review of H11.1).
+    logged = "".join(p.read_text(encoding="utf-8") for p in root.rglob("*.jsonl"))
+    assert "write_entry" in logged and token not in logged
     assert "Sam pasted the key [redacted] by mistake." in text
     assert "# Rotate [redacted]" in text and "source: session with Bearer [redacted]" in text
 

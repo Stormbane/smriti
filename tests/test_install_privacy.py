@@ -1093,3 +1093,17 @@ class TestInstaller:
         assert ("pushed:    the memory tree, with the captured conversations, to "
                 "https://example.com/sam/ari-memory.git, in plaintext") in out
         assert "git-crypt init" in out
+
+
+def test_capture_on_clears_capture_false_beside_custom_sources(tmp_path: Path) -> None:
+    """Codex review of H11.1: with "capture": false next to a custom sources list,
+    --capture returned early and capture stayed off, since false outranks the list."""
+    config = tmp_path / ".smriti" / "daylog.json"
+    config.parent.mkdir(parents=True)
+    custom = [{"name": "notes", "kind": "voice_md", "glob": "voice/*.md"}]
+    config.write_text(json.dumps({"capture": False, "sources": custom, "location": "x"}),
+                      encoding="utf-8")
+    assert privacy.set_capture(tmp_path, True)
+    data = json.loads(config.read_text(encoding="utf-8"))
+    assert "capture" not in data and data["sources"] == custom and data["location"] == "x"
+    assert privacy.capture_sources(tmp_path)  # captures its own sources now
