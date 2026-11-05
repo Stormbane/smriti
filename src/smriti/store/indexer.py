@@ -151,6 +151,15 @@ def _recorded_sources(conn: sqlite3.Connection) -> dict[str, tuple[int, int]]:
     return {r[0]: (r[1], r[2]) for r in rows}
 
 
+def _disk_record(path: Path) -> tuple[int, int] | None:
+    """(mtime_ns, size) of ``path`` now, or None if it's gone."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
 def _record_source(conn: sqlite3.Connection, source: str, st: os.stat_result) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO sources (source, mtime_ns, size) VALUES (?, ?, ?)",
@@ -341,10 +350,16 @@ def index_tree(
         conn.execute("BEGIN IMMEDIATE")
         # Other writers (index_file, behind every smriti_write) may have
         # published sources while this run embedded. Read under the write
-        # lock: a source whose record changed since this run began was
-        # indexed from a newer read than ours, so theirs stays.
+        # lock. A later commit isn't a later read, so the disk decides: a
+        # source someone else re-recorded keeps their chunks when their
+        # record is the file as it is now, or when this run has nothing
+        # for it; otherwise this run's read replaces theirs.
         now_recorded = _recorded_sources(conn)
-        keep = {s for s, rec in now_recorded.items() if rec != recorded.get(s)}
+        ours = {src for src, _ in read_sources}
+        keep = {
+            s for s, rec in now_recorded.items()
+            if rec != recorded.get(s) and (s not in ours or _disk_record(root / s) == rec)
+        }
         if full and conn.has_vec and meta_dim != dim:
             # Every stored vector is the wrong size, so everything goes,
             # including what others published meanwhile; their records go

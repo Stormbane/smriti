@@ -455,6 +455,56 @@ def test_a_run_keeps_what_another_writer_indexed_while_it_embedded(
     assert "newer edit" in mind_text and "this run reads" not in mind_text
 
 
+@pytest.mark.parametrize("full", [True, False])
+def test_an_older_read_that_commits_first_does_not_win(
+        mini_tree: Path, monkeypatch: pytest.MonkeyPatch, full: bool) -> None:
+    """Another writer that read an older version but committed while this run
+    embedded must not keep its stale chunks over this run's newer read."""
+    import os
+    import sqlite3
+    import threading
+
+    import smriti.store.indexer as indexer_mod
+
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+    real = indexer_mod._get_embedding_provider()
+    mind = mini_tree / "mind.md"
+    current = "# Mind\n\nThe current text, which this run reads.\n"
+    mind.write_text(current, encoding="utf-8")
+    as_read = mind.stat()
+
+    def a_slower_writer_with_an_older_read() -> None:
+        mind.write_text("# Mind\n\nAn older text, much longer than the current one.\n",
+                        encoding="utf-8")
+        indexer_mod.index_file(mind, root=mini_tree, db=db_path)
+        mind.write_text(current, encoding="utf-8")  # the disk is back to what the run read
+        os.utime(mind, ns=(as_read.st_atime_ns, as_read.st_mtime_ns))
+
+    class OlderCommitsMidEmbed:
+        model_name, dimension = real.model_name, real.dimension
+        fired = False
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            if not OlderCommitsMidEmbed.fired:
+                OlderCommitsMidEmbed.fired = True
+                writer = threading.Thread(target=a_slower_writer_with_an_older_read)
+                writer.start()
+                writer.join()
+            return await real.embed(texts)
+
+    monkeypatch.setattr(indexer_mod, "_get_embedding_provider", OlderCommitsMidEmbed)
+    index_tree(full=full, root=mini_tree, db=db_path)
+
+    conn = sqlite3.connect(str(db_path))
+    mind_text = " ".join(r[0] for r in conn.execute(
+        "SELECT content FROM chunks WHERE source = 'mind.md'"))
+    conn.close()
+    assert "current text" in mind_text and "older text" not in mind_text
+    monkeypatch.undo()
+    assert index_tree(root=mini_tree, db=db_path)["indexed"] == 0  # recorded as it is on disk
+
+
 def test_only_a_full_reindex_changes_the_vector_dimension(
         mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import sqlite3
