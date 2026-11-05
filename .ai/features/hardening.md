@@ -101,7 +101,16 @@ a recheck.
   `smriti ingest` and `smriti sleep`; nothing runs it.
 - **H4 done** (2026-11-05). Review: one finding (a malformed tool name ended
   the server), fixed; recheck clean.
-- **H5**: next.
+- **H5 done** (2026-11-05). Speakers are roles (user, agent) with names from
+  daylog.json; turn ids and input hashes are unchanged (the old words are
+  hashed for the roles), and an old day renders byte for byte as before. The
+  reference user's four tools, the wake's presence sections and the morning
+  persona are the `reference` profile, on in the maintainer's install by
+  `"profile": "reference"`. Review: no findings.
 - **H6 done** (2026-11-05). Review: an unbounded marker trailer, then a lone
   `\r` that let a heading in the last turn pose as the trailer; both fixed.
-- **H7, H8**: after H5.
+- **H7 done** (2026-11-05; Codex typed core and store, Claude the rest).
+  CI runs `mypy --strict` on core, store, daylog, wake, mcp and profiles on
+  every OS, with mypy pinned; the first Linux run found Windows-only code
+  behind `os.name`/`hasattr` checks that mypy doesn't narrow.
+- **H8**: running.
