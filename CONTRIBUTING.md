@@ -68,6 +68,13 @@ python -m mypy --strict --platform linux src/smriti/core src/smriti/store src/sm
 python scripts/doc_facts.py --write
 ```
 
+Ruff checks pyflakes (`F`) and the `E4`, `E7` and `E9` errors, plus the
+100-character line length (`E501`), bugbear (`B`) and blind excepts (`BLE`);
+vendored code is exempt from the last three. Narrow an `except Exception` to
+the exceptions that can occur. Where any failure must be survived (a top-level
+handler, a hook, a non-critical step), keep it with `# noqa: BLE001 — <reason>`,
+and log the failure or record it in a status the caller sees.
+
 CI type-checks on every OS, so check the other platforms too (`--platform linux`,
 `--platform darwin`, `--platform win32`). Guard platform-only code with
 `sys.platform == "win32"`, which type checkers narrow, rather than `os.name` or

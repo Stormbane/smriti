@@ -16,7 +16,9 @@
 ## Type Checking & Linting
 
 - **mypy strict** mode. Full PEP 484 type hints on all functions.
-- **ruff** with line-length 100, target Python 3.11.
+- **ruff**, target Python 3.11: `E4`, `E7`, `E9`, `F`, plus `E501` (line length
+  100), `B` (bugbear) and `BLE` (blind excepts). Vendored code is exempt from
+  the last three.
 - **Dataclasses** for structured return values (SearchResult, SearchCaseResult, etc.).
 
 ## Dependencies
@@ -33,6 +35,10 @@
   index-page updates, metrics). An index-page error must not block a write.
 - **Log levels**: WARNING for expected failures (missing index, FTS not available).
   ERROR for unexpected. Never swallow silently.
+- **Blind excepts**: narrow `except Exception` to what can actually be raised.
+  Keep one only where any failure must be survived (a top-level handler, a
+  hook, a non-critical step), with `# noqa: BLE001 — <reason>` on the line,
+  and still log the failure or record it in a status the caller sees.
 - **Fallback pattern**: primary method -> secondary (the digest: `claude -p`, then
   `codex exec`). Both paths tested.
 

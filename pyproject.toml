@@ -83,7 +83,19 @@ target-version = "py311"
 
 [tool.ruff.lint]
 # Stated, not inherited: ruff's default rule set changes between releases.
-select = ["E4", "E7", "E9", "F"]
+# E501 enforces the line length; B (bugbear) catches likely bugs; BLE flags
+# blind excepts: narrow one, or keep it with `# noqa: BLE001 — <reason>`.
+select = ["E4", "E7", "E9", "F", "E501", "B", "BLE"]
+
+[tool.ruff.lint.per-file-ignores]
+# Vendored third-party code (memsearch, MIT) stays close to upstream, so it
+# is not restyled: it is exempt from the rules added for our own code only.
+"src/smriti/_vendored/**" = ["E501", "B", "BLE"]
+# Temporary: the installer is being reworked in parallel (H9.11). Its files
+# take these rules when that work merges; remove these three lines then.
+"scripts/install.py" = ["E501", "B", "BLE"]
+"src/smriti/install/**" = ["E501", "B", "BLE"]
+"tests/test_install_privacy.py" = ["E501", "B", "BLE"]
 
 [tool.mypy]
 python_version = "3.11"

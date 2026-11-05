@@ -80,7 +80,7 @@ tests/                   pytest; conftest.py points SMRITI_ROOT at a temp dir
 ```bash
 pip install -e ".[read,dev]"                      # editable install: the installer reads templates from the checkout
 python -m pytest -q --ignore=tests/test_perf.py   # perf guards are marked slow and excluded by default
-ruff check <files>                                # line length 100
+ruff check <files>                                # line length 100, bugbear, blind excepts
 mypy <files>                                      # strict
 python scripts/doc_facts.py --write               # refresh the generated counts in README.md, CLAUDE.md, AGENTS.md
 smriti status                                     # index and day-log health for $SMRITI_ROOT
@@ -90,7 +90,8 @@ Tests import `smriti` from wherever it is installed. In a second checkout or wor
 
 ## Rules
 
-- Python 3.11+. `ruff` (line length 100) and `mypy --strict` are the standard. `ruff check src tests scripts` passes, and CI enforces `mypy --strict` on `core`, `store`, `daylog`, `wake`, `mcp` and `profiles`. The rest of the package (the CLI, integrations, recall, llm, private, eval) still has strict errors, so keep new and touched code there clean.
+- Python 3.11+. `ruff` and `mypy --strict` are the standard. Ruff checks `E4`, `E7`, `E9` and `F`, plus `E501` (line length 100), `B` (bugbear) and `BLE` (blind excepts); vendored code is exempt from the last three. `ruff check src tests scripts` passes, and CI enforces `mypy --strict` on `core`, `store`, `daylog`, `wake`, `mcp` and `profiles`. The rest of the package (the CLI, integrations, recall, llm, private, eval) still has strict errors, so keep new and touched code there clean.
+- Narrow an `except Exception` to what can be raised. Keep one only where any failure must be survived (a top-level handler, a hook, a non-critical step), with `# noqa: BLE001 — <reason>`; it still logs the failure or records it in a status the caller sees.
 - No runtime dependencies in the base install (`dependencies = []`). Optional ones go in extras: `read`, `api`, `codex`, `private`, `witness`, `dev`.
 - Check `.ai/knowledge/conventions.md` before introducing a new pattern.
 - Atomic commits: one logical change per commit.
