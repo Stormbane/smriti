@@ -362,9 +362,9 @@ a recheck.
   stack's stubs reached through huggingface_hub. Left for H11: during a cold start
   each search waits its full 3 s before falling back; it should fall back at once
   while the service says it is starting.
-- **H11**: planned, after H10.
-- **H11.1, H11.5, H11.10 implemented** (2026-11-06, branch `hardening/h11a`; the
-  Codex diff review is still to come). Capture is off unless `daylog.json` says
+- **H11**: in progress. Done: H11.1-H11.5, H11.9, H11.10. Next: H11.6, H11.7, H11.8.
+- **H11.1, H11.5, H11.10 done** (2026-11-06, merged at `498ce0e` after a Codex diff
+  review; its two findings, the capture override and the metrics scrub, fixed). Capture is off unless `daylog.json` says
   `"capture": true` (the default sources; the installer's `--capture` writes it) or
   lists `"sources"`; logd and `smriti status` say why nothing is captured and how to
   turn it on; a malformed daylog.json, which captured everything, now captures
@@ -391,7 +391,7 @@ a recheck.
   the ledger entry before composing; a failed compose releases it, a claim 30 min
   old with no send is taken over under the entry's edit lock, and a run that lost
   its claim doesn't send. A barrier test of two overlapping runs sends once.
-- **H11.4 implemented** (2026-11-06; Codex diff review and recheck done). The
+- **H11.4 done** (2026-11-06, merged at `d8375d1`; Codex diff review and recheck). The
   backup pushes the current branch to its upstream, or to `origin` under the same
   name when it has none, setting the upstream; `needs_push` compares against the
   same ref; a detached HEAD isn't pushed and logs `push_skipped`. Tests on `main`
@@ -406,8 +406,11 @@ a recheck.
   prefix), so the installer names, and keys its answer on, where git really pushes;
   and the remedy names every remote the backup can reach, `origin` included, since
   unsetting the upstream alone falls back to it. The copy deployed in each memory
-  root (`<root>/.smriti/backup.py`) must be redeployed.
-- **H11.9 implemented** (2026-11-06; Codex diff review and recheck done).
+  root (`<root>/.smriti/backup.py`) must be redeployed (the reference install's
+  was, 2026-11-06). Merge review: a remote whose name holds a slash
+  (`team/backup`) was described, and remedied, as a direct URL; the configured
+  remotes now decide.
+- **H11.9 done** (2026-11-06, merged at `d8375d1`; Codex diff review and recheck).
   Named locks live in `<runtime>/locks` (owner-only on POSIX). While
   `oslock.LEGACY_LOCKS` is on, each also takes its old file in
   `<tempdir>/smriti-locks`, always after the private one, so pre-H11.9 processes
