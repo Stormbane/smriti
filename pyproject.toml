@@ -115,6 +115,12 @@ module = ["openai", "openai.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-# Reached only through the vendored embedders; never parse its stubs.
-module = ["numpy", "numpy.*"]
+# The ML stack behind the embedders: never followed. Their stubs track their
+# own releases (numpy 2.4's use 3.12-only syntax), so the check would change
+# with the versions pip picks; smriti treats them as Any at its boundary.
+module = ["numpy", "numpy.*", "huggingface_hub", "huggingface_hub.*", "torch",
+          "torch.*", "transformers", "transformers.*", "sentence_transformers",
+          "sentence_transformers.*", "onnxruntime", "onnxruntime.*", "tokenizers",
+          "tokenizers.*"]
 follow_imports = "skip"
+ignore_missing_imports = true
