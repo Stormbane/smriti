@@ -27,6 +27,15 @@ _DEFAULT_INTERVAL_S = 5.0
 _ERROR_BACKOFF_S = 30.0
 
 
+def _config_stamp(cfg: DaylogConfig) -> tuple[int, int] | None:
+    """daylog.json's (mtime_ns, size), or None when there is none."""
+    try:
+        st = (cfg.root / ".smriti" / "daylog.json").stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
 def _pid_path(cfg: DaylogConfig) -> Path:
     return cfg.log_dir / ".logd.pid"
 
@@ -110,8 +119,15 @@ def run_logd(
     interval_s: float = _DEFAULT_INTERVAL_S,
     max_passes: int | None = None,
 ) -> None:
-    """Run the collection loop (``max_passes`` bounds it for tests)."""
+    """Run the collection loop (``max_passes`` bounds it for tests).
+
+    A config loaded here is reloaded whenever daylog.json changes, so an
+    installer's ``--no-capture`` (or any edit to the sources) reaches a
+    running daemon on its next pass instead of at its next restart.
+    """
+    follow_config = cfg is None
     cfg = cfg or load_config()
+    config_stamp = _config_stamp(cfg)
     passes = 0
     try:
         _pid_path(cfg).parent.mkdir(parents=True, exist_ok=True)
@@ -122,6 +138,10 @@ def run_logd(
     while max_passes is None or passes < max_passes:
         passes += 1
         try:
+            if follow_config and (stamp := _config_stamp(cfg)) != config_stamp:
+                cfg, config_stamp = load_config(cfg.root), stamp
+                log.info("logd: daylog.json changed; now watching %d sources",
+                         len(cfg.sources))
             report = collect_once(cfg)
             if report.appended:
                 log.info(
