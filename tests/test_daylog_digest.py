@@ -270,6 +270,31 @@ def test_a_heading_inside_the_timeline_is_not_the_trailer() -> None:
     assert plan.parts[0].span() == "08:00–09:00"
 
 
+def test_a_heading_in_the_last_turn_stays_in_the_timeline() -> None:
+    """Codex review: only render's own heading starts the trailer, so a heading
+    in the day's final turn is conversation, not markers to be capped."""
+    long_turn = "- `23:00` **Sam:** the plan\n## Steps\n" + "a step of the plan\n" * 3000
+    log_text = f"# Day log\n\n- `08:00` **Ari:** hi\n{long_turn}"
+    plan = digest_mod._plan(log_text)
+    assert plan.trailer == ""
+    assert not plan.coverage.cut
+    assert "## Steps" in "".join(p.text for p in plan.parts)
+
+
+def test_render_indents_every_line_break(tmp_path: Path) -> None:
+    from smriti.daylog.render import render_day
+
+    cfg = DaylogConfig(root=tmp_path, sources=[])
+    append_turns(cfg, [Turn(
+        ts=parse_ts(f"{DAY}T02:00:00Z"), channel="voice", who="suti",  # type: ignore[arg-type]
+        text="one\rtwo\r\nthree\n## four", session="s1")])
+    rendered = render_day(cfg, DAY)
+    assert rendered is not None
+    body = rendered.read_text(encoding="utf-8").split("# Day log", 1)[1]
+    assert [line for line in body.splitlines()[2:] if line] == [
+        "- `12:00` [voice] **Suti:** one", "  two", "  three", "  ## four"]
+
+
 def test_a_failed_part_call_writes_no_digest(tmp_path: Path,
                                              monkeypatch: pytest.MonkeyPatch) -> None:
     class FailsAfterTwo(NotesProvider):

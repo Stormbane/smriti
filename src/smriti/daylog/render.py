@@ -23,6 +23,9 @@ from smriti.daylog.writer import read_day_turns
 
 _HASH_RE = re.compile(r"^input_hash:\s*(\S+)\s*$", re.MULTILINE)
 
+# Starts the section after the timeline; the digest finds it by this line.
+AUTONOMOUS_HEADING = "## Autonomous sessions"
+
 
 def input_hash(turns: list[Turn]) -> str:
     ids = sorted(t.id for t in turns)
@@ -79,11 +82,13 @@ def render_day(cfg: DaylogConfig, day: str) -> Path | None:
         channel = f" [{t.channel}]" if t.channel != last_channel else ""
         last_channel = t.channel
         speaker = "Suti" if t.who == "suti" else "Narada"
-        text = t.text.strip().replace("\r\n", "\n")
+        # Every line break, \r included, so each continuation line is indented
+        # (a lone \r would come back from read_text as an unindented line).
+        text = t.text.strip().replace("\r\n", "\n").replace("\r", "\n")
         indented = text.replace("\n", "\n  ")
         lines.append(f"- `{clock}`{channel} **{speaker}:** {indented}")
     if autonomous:
-        lines += ["", "## Autonomous sessions", ""]
+        lines += ["", AUTONOMOUS_HEADING, ""]
         for group in autonomous:
             start = group[0].ts.astimezone(tz).strftime("%H:%M")
             end = group[-1].ts.astimezone(tz).strftime("%H:%M")

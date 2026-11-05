@@ -29,7 +29,7 @@ from pathlib import Path
 
 from smriti.daylog.config import DaylogConfig
 from smriti.daylog.model import Turn, day_tz
-from smriti.daylog.render import input_hash
+from smriti.daylog.render import AUTONOMOUS_HEADING, input_hash
 from smriti.daylog.writer import read_day_turns
 from smriti.llm import LLMError, LLMRequest, get_provider
 
@@ -94,10 +94,10 @@ _MERGE_SYSTEM = (
 )
 
 # A turn in the rendered log starts with "- `HH:MM`" at column 0; its
-# continuation lines are indented. A "## " heading at column 0 starts
-# the sections after the timeline (the autonomous-session markers).
+# continuation lines are indented. Render's AUTONOMOUS_HEADING, exactly,
+# starts the section after the timeline (the autonomous-session markers):
+# any other heading, even an unindented one, belongs to the turn it is in.
 _TURN_RE = re.compile(r"- `(\d\d:\d\d)`")
-_SECTION_PREFIX = "## "
 
 # No-tools constraint for the compose subprocess. --strict-mcp-config with
 # no --mcp-config drops MCP servers entirely.
@@ -262,11 +262,11 @@ def _plan(log_text: str) -> _Plan:
     whole lines up to ``_MAX_TRAILER_CHARS``, and the rest is cut.
     """
     lines = _lines(log_text)
-    # The trailer starts at the first heading after the last turn, so a
-    # stray heading-like line inside a turn can't pull turns out of order.
+    # The trailer starts at render's heading after the last turn, so neither a
+    # heading inside a turn nor a stray turn-like line can move the boundary.
     last_turn = max((i for i, line in enumerate(lines) if _TURN_RE.match(line)), default=-1)
     tail = next((i for i in range(last_turn + 1, len(lines))
-                 if lines[i].startswith(_SECTION_PREFIX)), len(lines))
+                 if lines[i].rstrip("\r\n") == AUTONOMOUS_HEADING), len(lines))
     full_trailer = "".join(lines[tail:])
     trailer = _whole_lines(full_trailer, _MAX_TRAILER_CHARS)
     by_turn: list[tuple[str, list[str]]] = []  # (clock, lines); the header comes first
