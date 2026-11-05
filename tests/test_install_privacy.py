@@ -370,7 +370,7 @@ class TestRemote:
         out = capsys.readouterr().out
         assert "plaintext" in out and "git-crypt" in out
         record = json.loads(privacy.record_path(root).read_text(encoding="utf-8"))
-        assert record["remote"]["url"] == REMOTE
+        assert record["remote"]["urls"] == [REMOTE]
         assert record["remote"]["private"] is True
 
         again = decide_and_apply(root, interactive=True, read=no_prompt)
@@ -388,6 +388,54 @@ class TestRemote:
 
         assert len(asked) == 1
         assert plan.remote == privacy.Choice(False, privacy.PROMPT)
+
+    @needs_git
+    def test_every_push_url_is_a_destination(
+        self, root: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """`git push origin` pushes to each pushurl, not only the first."""
+        git_repo(root, REMOTE)
+        other = "https://sam:ghp_x@mirror.example.com/sam/ari.git"
+        for push_url in (REMOTE, other):
+            subprocess.run(["git", "-C", str(root), "remote", "set-url", "--add", "--push",
+                            "origin", push_url], check=True)
+        both = f"{REMOTE} and https://mirror.example.com/sam/ari.git"
+
+        state = privacy.inspect_git(root)
+        assert state.remote_urls == (REMOTE, "https://mirror.example.com/sam/ari.git")
+
+        read, asked = answers("y", "n")
+        plan = decide_and_apply(root, interactive=True, read=read)
+        assert asked[1] == f"Are {both} all private repositories that only you can read? [y/n] "
+        out = " ".join(capsys.readouterr().out.split())  # undo the wrapping
+        assert f"every push URL of origin: {both}" in out
+
+        text = privacy.summary(root, plan)
+        assert f"to {both}, in plaintext" in text
+        assert "NOT all private, you said" in text
+        assert "ghp_x" not in text
+        record = json.loads(privacy.record_path(root).read_text(encoding="utf-8"))
+        assert record["remote"]["urls"] == sorted(state.remote_urls)
+
+    @needs_git
+    def test_adding_a_push_url_makes_the_answer_stale(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        decide_and_apply(root, capture=True, remote_private=True)
+        assert decide_and_apply(root).remote == privacy.Choice(True, privacy.KEPT)
+
+        for push_url in (REMOTE, "https://example.com/public/ari.git"):
+            subprocess.run(["git", "-C", str(root), "remote", "set-url", "--add", "--push",
+                            "origin", push_url], check=True)
+
+        plan = decide_and_apply(root)
+        assert plan.remote == privacy.Choice(None, privacy.DEFAULT)
+        text = privacy.summary(root, plan)
+        assert "nobody has said they are all private" in text
+        assert "WARNING: your conversations would go in plaintext" in text
+
+        read, asked = answers("y")
+        assert decide_and_apply(root, interactive=True, read=read).remote.how == privacy.PROMPT
+        assert len(asked) == 1
 
     @needs_git
     def test_no_terminal_and_no_flag_is_not_private(self, root: Path) -> None:
@@ -495,7 +543,7 @@ class TestRemote:
 
         monkeypatch.setattr(privacy.subprocess, "run", broken)
         state = privacy.inspect_git(root)
-        assert state.is_repo and state.remote_url is None and state.error
+        assert state.is_repo and state.remote_urls == () and state.error
 
     def test_credentials_are_removed_from_the_url(self) -> None:
         assert privacy.redact_url("https://sam:ghp_x@example.com/a.git") == (

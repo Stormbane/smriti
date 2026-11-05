@@ -85,6 +85,7 @@ _ANSWERED = (FLAG, PROMPT)
 
 CAPTURE_QUESTION = "Capture conversations into the day-log?"
 REMOTE_QUESTION = "Is {url} a private repository that only you can read?"
+REMOTE_QUESTION_MANY = "Are {urls} all private repositories that only you can read?"
 
 Ask = Callable[[str], str]
 
@@ -98,7 +99,9 @@ class GitState:
     """What the backup would do with the memory tree, as git sees it now."""
 
     is_repo: bool
-    remote_url: str | None = None  # origin's push URL, credentials removed
+    # Every push URL of origin, credentials removed. `git push origin`
+    # pushes to all of them, so each one is a destination.
+    remote_urls: tuple[str, ...] = ()
     log_ignored: bool = False  # git ignores the day-log files capture will write
     # Day-log files git already tracks. An ignore rule doesn't untrack them,
     # and backup.py's `git add -A` keeps committing their changes.
@@ -124,6 +127,23 @@ class GitState:
     def log_encrypted(self) -> bool:
         """Only a verified encryption counts; anything less is reported as plaintext."""
         return self.log_crypt == CRYPT_ENCRYPTED
+
+    @property
+    def destinations(self) -> str:
+        """origin's push URLs, as one phrase ("a", "a and b")."""
+        return _join_words(list(self.remote_urls))
+
+    @property
+    def remote_key(self) -> list[str]:
+        """What a saved answer about the remote is for: every push URL, sorted.
+        Adding, removing or changing one makes the answer stale."""
+        return sorted(self.remote_urls)
+
+
+def _join_words(items: list[str]) -> str:
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
 
 
 # How well git-crypt protects the day-log the backup commits, weakest first.
@@ -249,9 +269,7 @@ def describe_sources(sources: list[SourceSpec]) -> str:
         label = _KIND_LABELS.get(spec.kind, f"{spec.name} ({spec.kind})")
         if label not in labels:
             labels.append(label)
-    if len(labels) <= 1:
-        return "".join(labels)
-    return ", ".join(labels[:-1]) + " and " + labels[-1]
+    return _join_words(labels)
 
 
 def is_existing_install(root: Path) -> bool:
@@ -359,7 +377,8 @@ def inspect_git(root: Path) -> GitState:
     if not (root / ".git").exists():  # backup.py's own test for a repository
         return GitState(is_repo=False)
     try:
-        url = _git(root, "remote", "get-url", "--push", "origin")
+        # --all: with several push URLs, `git push origin` pushes to each.
+        url = _git(root, "remote", "get-url", "--push", "--all", "origin")
         ignored = _git(root, "check-ignore", "--stdin", "-z",  # prints each ignored path
                        stdin="\0".join(_SAMPLE_LOGS) + "\0")
         listed = _git(root, "ls-files", "-z", "--", "log/")
@@ -381,14 +400,17 @@ def inspect_git(root: Path) -> GitState:
         crypt, detail = _log_protection(root, committed, tracked, attrs)
     except (OSError, subprocess.SubprocessError) as exc:
         return GitState(is_repo=True, error=str(exc))
-    remote: str | None = None
-    if url.returncode == 0 and url.stdout.strip():
-        remote = redact_url(url.stdout.strip())
+    urls: list[str] = []
+    if url.returncode == 0:
+        for line in url.stdout.splitlines():
+            redacted = redact_url(line.strip())
+            if redacted and redacted not in urls:
+                urls.append(redacted)
     elif "no such remote" not in url.stderr.lower():
         return GitState(is_repo=True, error=url.stderr.strip() or f"git exited {url.returncode}")
     return GitState(
         is_repo=True,
-        remote_url=remote,
+        remote_urls=tuple(urls),
         log_ignored=log_ignored,
         log_tracked=len(tracked),
         log_untracked=len(untracked),
@@ -464,7 +486,7 @@ def remote_explanation(root: Path, git: GitState) -> str:
             "nor pushes. Skipping this question. If you add a remote later, the tree is "
             f"pushed in plaintext unless you set up git-crypt (see {privacy_doc()})."
         )
-    if git.remote_url is None:
+    if not git.remote_urls:
         return "\n" + _para(
             f"Backup remote: {root} has no remote named origin, so the backup commits on "
             "this machine and pushes nothing. Skipping this question."
@@ -475,11 +497,22 @@ def remote_explanation(root: Path, git: GitState) -> str:
         crypt = f"here {git.crypt_detail}"
     else:
         crypt = "here it isn't set up for log/"
+    where = (
+        f"origin, {git.destinations}"
+        if len(git.remote_urls) == 1
+        else f"every push URL of origin: {git.destinations}"
+    )
     return "\n" + _para(
         f"Backup remote: the hourly backup and the nightly push the memory tree to "
-        f"origin, {git.remote_url}. Git sends files in plaintext unless git-crypt "
+        f"{where}. Git sends files in plaintext unless git-crypt "
         f"encrypts them, and smriti doesn't set git-crypt up ({crypt}). See {privacy_doc()}."
     )
+
+
+def remote_question(git: GitState) -> str:
+    if len(git.remote_urls) == 1:
+        return REMOTE_QUESTION.format(url=git.remote_urls[0])
+    return REMOTE_QUESTION_MANY.format(urls=git.destinations)
 
 
 def git_crypt_steps(root: Path) -> str:
@@ -551,7 +584,7 @@ def decide(
 
     remote: Choice
     recorded = _answer(record, "remote")
-    if git.remote_url is None:
+    if not git.remote_urls:
         remote = Choice(None, SKIPPED)
         if interactive:
             print(remote_explanation(root, git))
@@ -561,13 +594,13 @@ def decide(
         remote = Choice(remote_private, FLAG)
     elif (
         recorded is not None
-        and recorded.get("url") == git.remote_url
+        and recorded.get("urls") == git.remote_key
         and isinstance(recorded.get("private"), bool)
     ):
         remote = Choice(recorded["private"], KEPT)
     elif interactive:
         print(remote_explanation(root, git))
-        answer = ask_yes_no(REMOTE_QUESTION.format(url=git.remote_url), None, read)
+        answer = ask_yes_no(remote_question(git), None, read)
         remote = Choice(answer, PROMPT if answer is not None else DEFAULT)
     else:
         remote = Choice(None, DEFAULT)
@@ -597,7 +630,7 @@ def apply(root: Path, plan: PrivacyPlan, *, now: datetime | None = None) -> list
         dirty = True
     if plan.remote.how in _ANSWERED:
         record["remote"] = {
-            "url": plan.git.remote_url,
+            "urls": plan.git.remote_key,  # the answer covers exactly these
             "private": plan.remote.value,
             "how": plan.remote.how,
             "at": stamp,
@@ -652,7 +685,7 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
                 "earlier are on disk and not yet committed; the next backup commits them "
                 "(delete them, or git-ignore log/, to keep them out)"
             )
-        if git.remote_url is None:
+        if not git.remote_urls:
             lines.append("  pushed:    nothing; there is no remote named origin")
         else:
             if git.log_encrypted:
@@ -661,13 +694,14 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
                 how = "in plaintext unless git-crypt encrypts log/ (unverified)"
             else:
                 how = "in plaintext"
+            many = len(git.remote_urls) > 1
             if plan.remote.value is True:
-                said = "private, you said"
+                said = "all private, you said" if many else "private, you said"
             elif plan.remote.value is False:
-                said = "NOT private, you said"
+                said = "NOT all private, you said" if many else "NOT private, you said"
             else:
-                said = "nobody has said it is private"
-            lines.append(f"  pushed:    {tree}, to {git.remote_url}, {how}")
+                said = "nobody has said " + ("they are all private" if many else "it is private")
+            lines.append(f"  pushed:    {tree}, to {git.destinations}, {how}")
             if git.crypt_detail and conversations:
                 lines.append(f"  git-crypt: {git.crypt_detail}")
             lines.append(f"  remote:    {said}")
