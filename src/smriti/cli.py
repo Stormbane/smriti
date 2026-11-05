@@ -1,4 +1,4 @@
-"""smriti CLI — index and search the narada memory tree.
+"""smriti CLI — index and search the memory tree.
 
 Usage::
 
@@ -344,7 +344,7 @@ def _cmd_metrics(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="smriti",
-        description="Index and search the narada memory tree.",
+        description="Index and search the memory tree.",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose logging"
