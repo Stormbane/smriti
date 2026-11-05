@@ -293,4 +293,6 @@ def test_log_is_bounded(backup: ModuleType, tmp_path: Path,
     for i in range(100):
         backup.log_event(repo, event="push", n=i)
     lines = _log(repo)
-    assert len(lines) <= 30 and lines[-1]["n"] == 99
+    # Bounded in bytes, so the line count depends on the platform's newline.
+    size = (backup.git_dirs(repo)[1] / backup.LOG_NAME).stat().st_size
+    assert size <= 2_000 + 100 and len(lines) >= 10 and lines[-1]["n"] == 99

@@ -19,7 +19,7 @@ import json
 import re
 from pathlib import Path
 
-from smriti.daylog.adapters import ExtractResult, complete_lines
+from smriti.daylog.adapters import ExtractResult, complete_lines, project_of
 from smriti.daylog.model import Turn, parse_ts
 
 _UUID_RE = re.compile(r"([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$")
@@ -47,7 +47,7 @@ class CodexRolloutAdapter:
             if isinstance(obj, dict) and obj.get("type") == "session_meta":
                 cwd = str((obj.get("payload") or {}).get("cwd", "") or "")
                 if cwd:
-                    channel = f"codex:{Path(cwd).name}"
+                    channel = f"codex:{project_of(cwd) or 'unknown'}"
         except (OSError, json.JSONDecodeError):
             pass
         self._channel_cache[key] = channel

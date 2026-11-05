@@ -47,19 +47,15 @@ product, most important first:
       logged as hashes, a wider scrubber, the private-store key in
       `private/.key` (never committed), docstrings that don't overclaim.
       Done 2026-11-05.
-- [ ] **Concurrency:** move `daylog/lock.py` to `smriti.core.oslock` (it
-      still breaks locks by age and releases what it doesn't own); put the
-      read-modify-write MCP handlers (`add_todo`, `resolve_outbox`) and
-      `cascade.structural_cascade`'s `index.md` rewrite under an oslock;
-      have `witness.py` clear `.git/index.lock` only the way `backup.py`
-      does (no git running, lock unchanged), not by age; lock the journal
-      append in `writer.py` (O_APPEND isn't atomic across processes on
-      Windows); track file mtimes in the incremental index; make
-      `index --full` build a new generation and swap (plan 2.2). The
-      private-store counter race is fixed.
-- [ ] **No silent overwrites:** `record_finding` and `record_decision`
-      replace an earlier entry with the same date and title; refuse or
-      suffix instead.
+- [x] **Concurrency:** the day-log writer lock, MCP read-modify-write
+      handlers, `index.md` maintenance and the journal append hold OS locks
+      (`smriti.core.oslock`, `smriti.core.files`); the witness clears
+      `.git/index.lock` only when no git runs and the lock is unchanged; the
+      index records each source's mtime and size as read, a full run commits
+      in one transaction, and a read wins only when it is the file as it is
+      now. Done 2026-11-05 (hardening H1).
+- [x] **No silent overwrites:** same-day, same-title findings and decisions
+      take `-2`, `-3`... Done 2026-11-05 (H1.7).
 - [ ] **Types that match the code:** `ensure_schema` returns `IndexDB`, not
       `sqlite3.Connection`; `search()` takes an `IndexDB`. Then work the
       `mypy --strict` count down. The `mcp_server.py` docstring still says

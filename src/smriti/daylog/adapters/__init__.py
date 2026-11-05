@@ -14,6 +14,7 @@ persisted offset) and returns an :class:`ExtractResult`:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -39,6 +40,16 @@ def complete_lines(blob: bytes) -> tuple[list[bytes], int]:
         return [], 0
     consumed = end + 1
     return blob[:consumed].split(b"\n")[:-1], consumed
+
+
+def project_of(cwd: str) -> str:
+    """The last component of a session's working directory, from any platform.
+
+    Transcripts carry the cwd of the machine that wrote them, so a Windows
+    path must name its project on Linux too (``Path`` there would keep the
+    whole ``C:\\...`` string as one name).
+    """
+    return re.split(r"[\\/]", cwd.rstrip("\\/"))[-1]
 
 
 def get_adapter(kind: str) -> Adapter:

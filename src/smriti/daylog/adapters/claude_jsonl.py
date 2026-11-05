@@ -19,7 +19,7 @@ import json
 import re
 from pathlib import Path
 
-from smriti.daylog.adapters import ExtractResult, complete_lines
+from smriti.daylog.adapters import ExtractResult, complete_lines, project_of
 from smriti.daylog.model import Turn, parse_ts
 
 _WRAPPER_RE = re.compile(
@@ -42,7 +42,7 @@ def channel_for(path: Path, cwd: str) -> str:
     if "chat-sessions" in probe:
         return "telegram"
     if cwd:
-        name = Path(cwd).name or "unknown"
+        name = project_of(cwd) or "unknown"
     else:
         name = path.parent.name
     return f"claude:{name}"

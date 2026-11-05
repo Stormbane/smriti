@@ -128,6 +128,16 @@ def test_claude_adapter_extracts_and_maps_telegram(tmp_path: Path) -> None:
     assert result.errors == 0
 
 
+@pytest.mark.parametrize("cwd,project", [
+    ("C:\\Projects\\smriti", "smriti"), ("C:\\Projects\\smriti\\", "smriti"),
+    ("/home/ari/code/smriti", "smriti"), ("/home/ari/code/smriti/", "smriti"),
+])
+def test_project_of_any_platforms_cwd(cwd: str, project: str) -> None:
+    from smriti.daylog.adapters import project_of
+
+    assert project_of(cwd) == project
+
+
 def test_claude_adapter_channel_from_cwd(tmp_path: Path) -> None:
     path = tmp_path / "s.jsonl"
     result = ClaudeJsonlAdapter().extract(path, _claude_line(cwd="C:\\Projects\\smriti"))
