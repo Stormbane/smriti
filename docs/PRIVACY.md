@@ -71,7 +71,8 @@ git-crypt was set up stays readable in the remote's history.
    no `daylog.json`, or one with neither `"capture": true` nor `"sources"`,
    nothing is captured, and `smriti logd` and `smriti status` say so.
 2. *Is the remote a private repository that only you can read?* Asked
-   only when there is an `origin`.
+   about the remote the backup pushes to (the branch's upstream remote, or
+   `origin`), only when there is one.
 
 `--capture`/`--no-capture` and `--remote-is-private`/`--remote-not-private`
 answer them without a terminal. With neither, a new memory root captures
@@ -85,8 +86,9 @@ has the full rules.
 Do one of these before the backups run (`smriti tasks install`):
 
 - Make the repository private, and keep it that way; with several push
-  URLs (`git remote get-url --push --all origin`), each of them.
-- Or remove the remote: `git -C <root> remote remove origin`. The backup
+  URLs (`git remote get-url --push --all <remote>`, where `<remote>` is
+  the branch's upstream remote or `origin`), each of them.
+- Or remove the remote: `git -C <root> remote remove <remote>`. The backup
   then commits on this machine only.
 - Or set up [git-crypt](https://github.com/AGWA/git-crypt):
 

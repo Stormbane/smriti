@@ -317,6 +317,11 @@ def push_target(cwd: Path) -> tuple[list[str], str] | str:
     of the same name, and the push makes that the upstream. Never a fixed branch
     name: a repo on ``main`` pushed to ``master`` failed on every run. Returns
     the reason instead when there is no branch to push (a detached HEAD).
+
+    The installer's privacy check asks about this same remote through a copy
+    of this rule (``smriti.install.privacy.backup_remote``; this script can't
+    import smriti). Change both; tests/test_backup_destination.py holds them
+    together.
     """
     code, out = run_git(["symbolic-ref", "-q", "HEAD"], cwd, timeout=30)
     ref = out.strip()

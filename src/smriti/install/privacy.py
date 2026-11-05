@@ -3,10 +3,11 @@
 Once capture is on, the day-log copies every conversation the agent has
 (Claude Code transcripts, Codex rollouts, voice transcripts) into the
 memory tree's ``log/``, and the backup commits the tree and pushes it to
-the git remote ``origin``, in plaintext unless git-crypt encrypts it. Only
-a pattern-based credential scrubber stands in between. Capture is off
-until ``daylog.json`` turns it on (:mod:`smriti.daylog.config`), so the
-installer makes the person choose, and says what follows:
+the current branch's upstream remote (``origin`` when it has none), in
+plaintext unless git-crypt encrypts it. Only a pattern-based credential
+scrubber stands in between. Capture is off until ``daylog.json`` turns it
+on (:mod:`smriti.daylog.config`), so the installer makes the person
+choose, and says what follows:
 
 1. Capture conversations into the day-log? "Yes" writes ``"capture": true``
    (the default sources) into ``<root>/.smriti/daylog.json``; "No" writes
@@ -107,9 +108,12 @@ class GitState:
     """What the backup would do with the memory tree, as git sees it now."""
 
     is_repo: bool
-    # Every push URL of origin, credentials removed. `git push origin`
-    # pushes to all of them, so each one is a destination.
+    # Every push URL of the remote the backup pushes to (see backup_remote),
+    # credentials removed. `git push <remote>` pushes to all of them, so each
+    # one is a destination.
     remote_urls: tuple[str, ...] = ()
+    remote: str = "origin"  # that remote: a name, or a URL a branch's upstream names directly
+    no_push: str = ""  # why the backup pushes nothing at all (a detached HEAD), else ""
     log_ignored: bool = False  # git ignores the day-log files capture will write
     # Day-log files git already tracks. An ignore rule doesn't untrack them,
     # and backup.py's `git add -A` keeps committing their changes.
@@ -141,13 +145,14 @@ class GitState:
 
     @property
     def destinations(self) -> str:
-        """origin's push URLs, as one phrase ("a", "a and b")."""
+        """The remote's push URLs, as one phrase ("a", "a and b")."""
         return _join_words(list(self.remote_urls))
 
     @property
     def remote_key(self) -> list[str]:
-        """What a saved answer about the remote is for: every push URL, sorted.
-        Adding, removing or changing one makes the answer stale."""
+        """The URLs a saved answer about the remote is for: every push URL, sorted.
+        Adding, removing or changing one makes the answer stale, and so does a
+        different remote (the answer records ``remote`` beside them)."""
         return sorted(self.remote_urls)
 
 
@@ -436,15 +441,67 @@ def _log_protection(
     return CRYPT_ENCRYPTED, ""
 
 
+def _names_a_location(remote: str) -> bool:
+    """A URL or a path (``host:path``, ``scheme://``, a directory), not a remote's name."""
+    return any(c in remote for c in ":/\\")
+
+
+def backup_remote(root: Path) -> tuple[str | None, str]:
+    """The remote ``backup.py`` pushes to, or (None, why) when it pushes nothing.
+
+    The rule of ``push_target`` in ``narada/.smriti/backup.py``, which is a
+    standalone script and can't import this, so the two are copies that a
+    test holds together: the current branch's upstream remote when it has
+    an upstream (``branch.<b>.remote`` and ``branch.<b>.merge``), otherwise
+    ``origin``; a detached HEAD isn't pushed. Raises SubprocessError when
+    git can't say what HEAD is.
+    """
+    head = _git(root, "symbolic-ref", "-q", "HEAD")
+    ref = head.stdout.strip()
+    if head.returncode == 1:
+        return None, "HEAD is detached"
+    if head.returncode != 0:
+        raise subprocess.SubprocessError(head.stderr.strip() or "git symbolic-ref failed")
+    if not ref.startswith("refs/heads/"):
+        return None, f"HEAD is on {ref}, not a branch"
+    branch = ref[len("refs/heads/"):]
+    remote = _git(root, "config", "--get", f"branch.{branch}.remote")
+    merge = _git(root, "config", "--get", f"branch.{branch}.merge")
+    if (remote.returncode == 0 and merge.returncode == 0
+            and remote.stdout.strip() and merge.stdout.strip()):
+        return remote.stdout.strip(), ""
+    return "origin", ""
+
+
+def _push_urls(root: Path, remote: str) -> list[str]:
+    """Every URL ``git push <remote>`` sends to, credentials removed; [] when none."""
+    # --all: with several push URLs, `git push <remote>` pushes to each.
+    url = _git(root, "remote", "get-url", "--push", "--all", remote)
+    if url.returncode == 0:
+        lines = url.stdout.splitlines()
+    elif "no such remote" not in url.stderr.lower():
+        raise subprocess.SubprocessError(url.stderr.strip() or f"git exited {url.returncode}")
+    elif _names_a_location(remote):
+        lines = [remote]  # an upstream that names a URL or path directly: git pushes there
+    else:
+        lines = []
+    urls: list[str] = []
+    for line in lines:
+        redacted = redact_url(line.strip())
+        if redacted and redacted not in urls:
+            urls.append(redacted)
+    return urls
+
+
 def inspect_git(root: Path) -> GitState:
-    """The repository, its ``origin`` (where ``backup.py`` pushes), and how
-    git treats the day-log: which of it is committed, and whether git-crypt
-    is asked to encrypt it."""
+    """The repository, the remote ``backup.py`` pushes to (:func:`backup_remote`)
+    and its push URLs, and how git treats the day-log: which of it is
+    committed, and whether git-crypt is asked to encrypt it."""
     if not (root / ".git").exists():  # backup.py's own test for a repository
         return GitState(is_repo=False)
     try:
-        # --all: with several push URLs, `git push origin` pushes to each.
-        url = _git(root, "remote", "get-url", "--push", "--all", "origin")
+        remote, no_push = backup_remote(root)
+        urls = _push_urls(root, remote) if remote is not None else []
         ignored = _git(root, "check-ignore", "--stdin", "-z",  # prints each ignored path
                        stdin="\0".join(_SAMPLE_LOGS) + "\0")
         listed = _git(root, "ls-files", "-z", "--", "log/")
@@ -466,17 +523,11 @@ def inspect_git(root: Path) -> GitState:
         crypt, detail = _log_protection(root, committed, tracked, attrs)
     except (OSError, subprocess.SubprocessError) as exc:
         return GitState(is_repo=True, error=str(exc))
-    urls: list[str] = []
-    if url.returncode == 0:
-        for line in url.stdout.splitlines():
-            redacted = redact_url(line.strip())
-            if redacted and redacted not in urls:
-                urls.append(redacted)
-    elif "no such remote" not in url.stderr.lower():
-        return GitState(is_repo=True, error=url.stderr.strip() or f"git exited {url.returncode}")
     return GitState(
         is_repo=True,
         remote_urls=tuple(urls),
+        remote=redact_url(remote) if remote is not None else "origin",
+        no_push=no_push,
         log_ignored=log_ignored,
         log_tracked=len(tracked),
         log_untracked=len(untracked),
@@ -554,10 +605,16 @@ def remote_explanation(root: Path, git: GitState) -> str:
             "nor pushes. Skipping this question. If you add a remote later, the tree is "
             f"pushed in plaintext unless you set up git-crypt (see {privacy_doc()})."
         )
+    if git.no_push:
+        return "\n" + _para(
+            f"Backup remote: in {root}, {git.no_push}, so the backup commits on this machine "
+            "and pushes nothing. Skipping this question. Once a branch is checked out, the "
+            "backup pushes it to its upstream (or to origin); run the installer again then."
+        )
     if not git.remote_urls:
         return "\n" + _para(
-            f"Backup remote: {root} has no remote named origin, so the backup commits on "
-            "this machine and pushes nothing. Skipping this question."
+            f"Backup remote: {root} has no remote named {git.remote}, so the backup commits "
+            "on this machine and pushes nothing. Skipping this question."
         )
     if git.log_encrypted:
         crypt = "here it encrypts log/, but file names and commit messages stay readable"
@@ -565,11 +622,12 @@ def remote_explanation(root: Path, git: GitState) -> str:
         crypt = f"here {git.crypt_detail}"
     else:
         crypt = "here it isn't set up for log/"
-    where = (
-        f"origin, {git.destinations}"
-        if len(git.remote_urls) == 1
-        else f"every push URL of origin: {git.destinations}"
-    )
+    if git.remote in git.remote_urls:  # the upstream names the URL itself
+        where = git.destinations
+    elif len(git.remote_urls) == 1:
+        where = f"{git.remote}, {git.destinations}"
+    else:
+        where = f"every push URL of {git.remote}: {git.destinations}"
     return "\n" + _para(
         f"Backup remote: the hourly backup and the nightly push the memory tree to "
         f"{where}. Git sends files in plaintext unless git-crypt "
@@ -583,11 +641,17 @@ def remote_question(git: GitState) -> str:
     return REMOTE_QUESTION_MANY.format(urls=git.destinations)
 
 
-def git_crypt_steps(root: Path) -> str:
+def git_crypt_steps(root: Path, remote: str = "origin") -> str:
+    stop = (
+        ["    - make the repository private, or stop the branch's upstream naming it:",
+         f'        git -C "{root}" branch --unset-upstream']
+        if _names_a_location(remote)
+        else ["    - make the repository private, or remove the remote:",
+              f'        git -C "{root}" remote remove {remote}']
+    )
     return "\n".join([
         "  To keep the tree unreadable there, before backups run, either:",
-        "    - make the repository private, or remove the remote:",
-        f'        git -C "{root}" remote remove origin',
+        *stop,
         f"    - or set up git-crypt ({GIT_CRYPT_URL}); smriti doesn't do it for you:",
         f'        cd "{root}"',
         "        git-crypt init",
@@ -671,6 +735,8 @@ def decide(
     elif (
         recorded is not None
         and recorded.get("urls") == git.remote_key
+        # Answers recorded before the backup followed the upstream were about origin.
+        and recorded.get("name", "origin") == git.remote
         and isinstance(recorded.get("private"), bool)
     ):
         remote = Choice(recorded["private"], KEPT)
@@ -707,7 +773,8 @@ def apply(root: Path, plan: PrivacyPlan, *, now: datetime | None = None) -> list
             dirty = True
     if plan.remote.how in _ANSWERED:
         record["remote"] = {
-            "urls": plan.git.remote_key,  # the answer covers exactly these
+            "name": plan.git.remote,  # the answer covers exactly this remote
+            "urls": plan.git.remote_key,  # with exactly these URLs
             "private": plan.remote.value,
             "how": plan.remote.how,
             "at": stamp,
@@ -772,7 +839,8 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
             )
             lines.extend(f"               {p}" for p in _shown(git.untracked_files))
         if not git.remote_urls:
-            lines.append("  pushed:    nothing; there is no remote named origin")
+            why = git.no_push or f"there is no remote named {git.remote}"
+            lines.append(f"  pushed:    nothing; {why}")
         else:
             if git.log_encrypted:
                 how = "log/ encrypted by git-crypt, everything else in plaintext"
@@ -801,6 +869,6 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
             "said is private."
         )
     if pushes_plain:
-        lines.append(git_crypt_steps(root))
+        lines.append(git_crypt_steps(root, git.remote))
     lines.extend(f"  note: {notice}" for notice in plan.notices)
     return "\n".join(lines)

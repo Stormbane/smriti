@@ -98,13 +98,14 @@ Once capture is on, `smriti logd` copies every message you type and
 every reply the agent writes, from Claude Code transcripts, Codex rollouts
 and voice transcripts, into `<root>/log/`, masking only strings shaped
 like credentials. The backup commits the tree, `log/` included, and pushes
-it to the remote `origin` in plaintext unless git-crypt encrypts it.
-Capture is therefore off until `<root>/.smriti/daylog.json` turns it on:
-with no such file, or one with neither `"capture": true` nor a `"sources"`
-list, nothing is captured, and `smriti logd` (at start and whenever the
-file changes) and `smriti status` say why and how to turn it on. Until
-hardening H11.1 such an install captured every transcript on the machine.
-The installer asks two questions before it changes anything:
+the current branch to its upstream remote (`origin` when the branch has no
+upstream; nothing on a detached HEAD) in plaintext unless git-crypt
+encrypts it. Capture is therefore off until `<root>/.smriti/daylog.json`
+turns it on: with no such file, or one with neither `"capture": true` nor
+a `"sources"` list, nothing is captured, and `smriti logd` (at start and
+whenever the file changes) and `smriti status` say why and how to turn it
+on. Until hardening H11.1 such an install captured every transcript on
+the machine. The installer asks two questions before it changes anything:
 
 1. **"Capture conversations into the day-log?"** Yes sets
    `"capture": true` in `<root>/.smriti/daylog.json`, which turns on the
@@ -116,10 +117,11 @@ The installer asks two questions before it changes anything:
    `smriti logd` rereads `daylog.json` when it changes, so the choice
    reaches it on its next pass, within a few seconds.
 2. **"Is `<url>` a private repository that only you can read?"** Asked
-   only when the memory root is a git repository with a remote named
-   `origin`; otherwise the installer says there is no remote and skips
-   it. When `origin` has several push URLs, `git push origin` pushes to
-   each, so the question names them all: "Are `<a>` and `<b>` all private
+   only when the memory root is a git repository whose backup remote (the
+   branch's upstream remote, or `origin`) exists and HEAD is on a branch;
+   otherwise the installer says why nothing is pushed and skips it. When
+   that remote has several push URLs, `git push` pushes to each, so the
+   question names them all: "Are `<a>` and `<b>` all private
    repositories that only you can read?" smriti never sets up git-crypt.
    When the answer is no, or nobody answered, the installer prints the
    steps; [PRIVACY.md](PRIVACY.md#what-is-pushed-in-the-clear) has them
@@ -142,7 +144,7 @@ How each question is settled, in order:
 | | Capture | Remote |
 |---|---|---|
 | A flag | The flag | The flag (ignored, with a note, when there is no remote) |
-| Answered before, by a flag or at a prompt | Kept; not asked again | Kept, while `origin` has the same push URLs; adding, removing or changing one asks again |
+| Answered before, by a flag or at a prompt | Kept; not asked again | Kept, while the backup pushes to the same remote with the same push URLs; another upstream remote, or adding, removing or changing a URL, asks again |
 | A terminal (stdin and stdout) | Asked. A new root needs `y` or `n`; on an existing one, Enter keeps what `daylog.json` does now | Asked; needs `y` or `n` |
 | No terminal, no flag, new root | **Off**: `"sources": []`, with a note | Not confirmed private: the summary says so and prints the git-crypt steps |
 | No terminal, no flag, existing root | `daylog.json` is left as it is, with a note saying whether it captures | The same |
