@@ -77,9 +77,11 @@ def ensure_running(cfg: DaylogConfig | None = None) -> bool:
     _ensure_qmd_daemon()
     if _running_pid(cfg):
         return True
+    # A hidden console, not DETACHED_PROCESS: a daemon with no console makes
+    # every console child it runs (git, qmd) open a visible window.
     flags = 0
-    if hasattr(subprocess, "DETACHED_PROCESS"):
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     # Keep a diagnosable trail: the daemon's output goes to a capped log
     # file, not DEVNULL — a 39-hour run that died silently on 2026-09-06
     # left nothing to autopsy. Truncate at spawn if it has grown large.
