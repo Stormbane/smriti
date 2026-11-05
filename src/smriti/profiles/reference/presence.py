@@ -253,7 +253,7 @@ def _broken_server(name: str, spec: dict[str, Any]) -> str | None:
 def hands_section(src: WakeSources) -> str:
     """What this session can do and how, from what is configured."""
     from smriti.daylog.config import load_config
-    from smriti.daylog.notify import notify_command
+    from smriti.profiles.reference.notify import notify_command
 
     servers = src.mcp_servers()
 

@@ -5,7 +5,7 @@ user, Suti, and that setup still runs it every day. This profile holds
 what only makes sense there:
 
 - MCP tools that reach Suti: ``tell_suti`` (a message now, through the
-  installation's fan-out sender), ``smriti_ask_suti`` and
+  installation's fan-out sender, :mod:`.notify`), ``smriti_ask_suti`` and
   ``smriti_propose_goal_shift`` (queued in ``outbox/``), and
   ``smriti_resolve_outbox``. Their names and schemas are the ones the
   installation's prompts already use.

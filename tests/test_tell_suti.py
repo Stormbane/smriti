@@ -12,12 +12,11 @@ from pathlib import Path
 
 import pytest
 
+from smriti.daylog.config import DaylogConfig, load_config
 from smriti.mcp.server import handle_message
 from smriti.mcp.tools import active_tools
-from smriti.daylog import notify
-from smriti.daylog.config import DaylogConfig, load_config
-from smriti.daylog.notify import Delivery, NotifyError, parse_channels, send
-from smriti.profiles.reference import outbox
+from smriti.profiles.reference import notify, outbox
+from smriti.profiles.reference.notify import Delivery, NotifyError, parse_channels, send
 
 
 @pytest.fixture(autouse=True)
