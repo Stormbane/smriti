@@ -349,18 +349,25 @@ Every problem review #4 named is fixed. Opus's five are new, one layer deeper:
 packaging, privacy and module boundaries. All five, and the torn day-log line,
 were checked against the code and hold. Sonnet's first (broad excepts without the
 convention's reason) holds as a gap between the written rule and ruff's, which
-accepts a handler that logs or re-raises. In order:
+accepts a handler that logs or re-raises.
+
+**Invariant** (Suti, 2026-11-06): hardening changes no key function and costs no
+speed. Capture, the nightly, the morning message, the wake, search, writes,
+backups and the MCP tools work for an existing install as they did, and each
+branch is benchmarked against master (MCP startup, cold and warm reads, writes,
+the wake, the CLI read, incremental indexing) before it merges; a slower number
+is a finding. In order:
 
 | # | Change | Acceptance |
 |---|---|---|
 | H12.1 | Credentials are masked on every path into the tree: the project tools (findings and their per-tag stubs, decisions, feature specs, todos), the handoff, and what the digest and rollups write. | A planted credential shape is masked on each path; one test per path. |
 | H12.2 | The nightly's codex fallback is opt-in (`"nightly_fallback": "codex_cli"` in daylog.json, or `SMRITI_NIGHTLY_FALLBACK`), since its sandbox can read the user's files while it reads untrusted transcripts. The reference install turns it on. | Tests for both settings; PRIVACY.md. |
 | H12.3 | Keyword search keeps non-ASCII terms: each term is quoted for FTS5 instead of stripped to `[A-Za-z0-9_]`. | Tests with `café`, Devanagari (`स्मृति`) and CJK queries, keyword-only. |
-| H12.4 | A wheel install runs its installer: the deployed scripts and the memory template move into the package and are read with `importlib.resources`; no `C:/Projects` default (projects are linked only when `--projects-root` is given). | A CI job installs the built wheel in a fresh venv and installs into a temporary home. |
+| H12.4 | A wheel install runs its installer: the deployed scripts and the memory template move into the package and are read with `importlib.resources`. The projects root is recorded at install and reused, in place of a hard-coded `C:/Projects`, so an existing install keeps linking the same projects. | A CI job installs the built wheel in a fresh venv and installs into a temporary home. |
 | H12.5 | One provider-selection rule, used by the indexer and the service (today the env override wins in one and the recorded provider in the other); names used across modules made public (no private imports between packages); `serverInfo.version` from `smriti.__version__`; the `smriti_add_todo` text matches its whole-phrase match; `search_with_status` builds its results once. | A test for the shared rule; a test that no module imports another package's private name; a version test. |
 | H12.6 | The day-log writer repairs a torn last line before appending (a newline first when the file doesn't end in one); the service's counters are locked. | A test with a truncated line: the next turn parses. |
 | H12.7 | Every `except Exception` that stays carries `# noqa: BLE001 — <reason>`, or is narrowed (the API providers to their SDK's error base). | A test that scans `src/` and fails on a broad except without the reason. |
-| H12.8 | The legacy integrations go: the Hermes harness, the qmd recall backend, the PreCompact staging hook and the ambient-recall hook. The reference install still runs a PreCompact capture hook in Claude Code and in Codex, so its own switch-over comes first. | Removed with their tests; doc facts; the reference install's hooks updated. |
+| ~~H12.8~~ | Dropped (Suti, 2026-11-06): removing the legacy integrations would change what the reference install runs (its PreCompact capture hook in Claude Code and Codex). They stay until nothing uses them. | |
 | H12.9 | A weekly CI job runs the `needs_model` tests with the model cached. | The job, green. |
 | H12.10 | Outside review #6. | Grades recorded. |
 
