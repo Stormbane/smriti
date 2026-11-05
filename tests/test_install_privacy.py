@@ -337,7 +337,9 @@ class TestRemote:
 
         assert len(asked) == 1  # capture only
         assert plan.remote == privacy.Choice(None, privacy.SKIPPED)
-        assert "isn't a git repository" in capsys.readouterr().out
+        # Wrapped prose: where a line breaks depends on the path length, so compare
+        # with the wrapping undone (CI on Linux split this phrase across lines).
+        assert "isn't a git repository" in " ".join(capsys.readouterr().out.split())
         text = privacy.summary(root, plan)
         assert "committed: nothing" in text
         assert "pushed:    nothing" in text
@@ -353,7 +355,9 @@ class TestRemote:
 
         assert len(asked) == 1
         assert plan.git == privacy.GitState(is_repo=True)
-        assert "no remote named origin" in capsys.readouterr().out
+        # Wrapped prose: where a line breaks depends on the path length, so compare
+        # with the wrapping undone (CI on Linux split this phrase across lines).
+        assert "no remote named origin" in " ".join(capsys.readouterr().out.split())
         assert "pushed:    nothing; there is no remote named origin" in privacy.summary(root, plan)
 
     @needs_git
