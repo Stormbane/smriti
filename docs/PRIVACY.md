@@ -175,9 +175,12 @@ at the model that reads it. What holds such an instruction:
   (about 560 MB on disk: its tokenizer and an int8 ONNX model) into its
   cache, `~/.cache/huggingface/hub` (`HF_HOME` moves it). No memory text is
   sent, and later loads read the cache without a request.
-  `HF_HUB_OFFLINE=1` forbids every hub request: a model not yet in the cache
-  is then an error instead of a download, and searches and writes work on
-  keywords alone and say so. `HF_HUB_DISABLE_TELEMETRY=1` is the library's
+  `HF_HUB_OFFLINE=1` forbids every hub request. With the default `onnx`
+  provider a cached model still loads, and one not yet cached is an error
+  instead of a download; searches and writes then work on keywords alone and
+  say so. The `local` provider (sentence-transformers 4.1) can't load even a
+  cached model under it, so leave it unset for an index made with `local`.
+  `HF_HUB_DISABLE_TELEMETRY=1` is the library's
   own switch for its telemetry. CI uses a stub embedder and downloads nothing.
 - **The witness** (the `witness` extra) sends a SHA-256, of a small manifest
   naming the nightly commit, to four public OpenTimestamps calendars. Only

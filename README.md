@@ -134,7 +134,7 @@ smriti status
 
 Then start a new Claude Code session. The briefing appears in the opening context, and `smriti_read`, `smriti_write` and `smriti_status` are among the tools.
 
-**The embedding model.** With the `read` extra, the first index, search or write that needs a model downloads `gpahal/bge-m3-onnx-int8` from the Hugging Face Hub into its cache (`~/.cache/huggingface/hub`, or under `HF_HOME`); no memory text is sent, and later loads make no request. Set `HF_HUB_OFFLINE=1` to forbid any request: a model not yet cached is then an error instead of a download, and search and writes fall back to keywords. [`docs/PRIVACY.md`](docs/PRIVACY.md#other-network-requests) lists what else leaves the machine.
+**The embedding model.** With the `read` extra, the first index, search or write that needs a model downloads `gpahal/bge-m3-onnx-int8` from the Hugging Face Hub into its cache (`~/.cache/huggingface/hub`, or under `HF_HOME`); no memory text is sent, and later loads make no request. Set `HF_HUB_OFFLINE=1` to forbid any request: a model not yet cached is then an error instead of a download, and search and writes fall back to keywords. That holds for the default `onnx` provider; an index made with the `local` provider (sentence-transformers) can't load even its cached model under `HF_HUB_OFFLINE=1` (sentence-transformers 4.1), so leave it unset there. [`docs/PRIVACY.md`](docs/PRIVACY.md#other-network-requests) lists what else leaves the machine.
 
 **`scripts/install.py`:**
 - **Asks the two [privacy](#privacy) questions** first, or takes the answers from `--capture`/`--no-capture` and `--remote-is-private`/`--remote-not-private`, and ends by saying what is captured, committed and pushed.
