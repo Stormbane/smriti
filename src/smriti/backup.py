@@ -29,7 +29,7 @@ def trigger(
     Parameters
     ----------
     tag:
-        Short label for the commit message (e.g. "write", "sleep-start").
+        Short label for the commit message (e.g. "write", "nightly").
         Commit messages are never encrypted (even with git-crypt, which
         the installer doesn't set up), so keep tags generic.
     push:

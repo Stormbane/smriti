@@ -1,7 +1,7 @@
 """Pluggable LLM provider interface — model and harness agnostic.
 
-Smriti's cognitive cascade (JUDGE, EXECUTOR, summarize, consolidate)
-runs on whatever LLM the user wires up. The default is the Claude
+Smriti's LLM calls (the nightly digest and the morning message) run
+on whatever LLM the user wires up. The default is the Claude
 Code CLI subscription (no API key needed); set ``ANTHROPIC_API_KEY``
 to use the Anthropic SDK directly with prompt caching; set
 ``SMRITI_LLM_PROVIDER=openai_api`` and ``OPENAI_API_KEY`` to run on

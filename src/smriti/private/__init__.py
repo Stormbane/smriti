@@ -16,8 +16,8 @@ privacy is what makes shared content a gift rather than a leak.
 - Audit log at `private/.audit.log` records FAILURES only (write
   failed, decrypt failed, missing key). Never records successful
   operations. Never records content.
-- Audit log is pruned during smriti's sleep cycle (consolidation),
-  not per wake
+- Audit log pruning (`prune_default`) is for a periodic pass, never
+  per wake; no scheduled pass calls it yet
 - Read path requires a runtime `ConsentToken` issued by the identity
   core — operator-facing paths refuse private content unconditionally
 

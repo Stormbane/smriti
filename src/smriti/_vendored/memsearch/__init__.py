@@ -6,10 +6,10 @@ Original license: MIT — see `LICENSE` in this directory, also
 preserved at the smriti repository root `NOTICE.md`.
 
 These modules are **utilities** — file chunking, cross-encoder
-reranking, file watching, path scanning, embedding providers.
-They are deliberately boundary-free: smriti's own identity,
-JUDGE step, cascade, and dream generation are built separately
-and do not depend on memsearch's philosophy or data model.
+reranking, path scanning, embedding providers. They are
+deliberately boundary-free: smriti's own identity and memory
+model are built separately and do not depend on memsearch's
+philosophy or data model.
 
 smriti does NOT vendor memsearch's `core.py`, `store.py`,
 `compact.py`, `cli.py`, or `config.py` — those encode memsearch's

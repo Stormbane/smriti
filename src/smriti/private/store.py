@@ -269,10 +269,9 @@ class PrivateStore:
     def iter_paths(self) -> list[Path]:
         """List all encrypted file paths under the private tree.
 
-        Does NOT decrypt — this is safe for the operator to call. Used by
-        the audit/pruning sleep cycle to check for tamper evidence
-        (mtime / atime changes) and to list what's there without seeing
-        what's in it.
+        Does NOT decrypt — this is safe for the operator to call, for
+        example to check for tamper evidence (mtime / atime changes) and
+        to list what's there without seeing what's in it.
         """
         if not self.private_root.exists():
             return []

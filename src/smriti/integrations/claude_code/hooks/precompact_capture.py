@@ -10,10 +10,9 @@ Entity namespace is derived from the working directory:
     C:\\Projects\\narada-memory     → events entity = "narada-memory-narada"
     ...and so on
 
-This matches smriti's `events/{entity}/` namespace layout. When smriti
-v0.1 lands, the staging tree at ~/.claude/narada-staging-events/
-migrates to ~/.narada/memory/events/ with one `mv`, and the cascade
-picks up the accumulated turns as a bulk ingest.
+This matches smriti's `events/{entity}/` namespace layout, so the staging
+tree at ~/.claude/narada-staging-events/ can be moved into the memory
+tree with one `mv`. Nothing ingests it automatically.
 
 Design principles:
     - Defensive. A PreCompact hook failure must NOT block the user's

@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from smriti.integrations.hermes import install as hermes_install
-from smriti.store import wake_summary
 
 
 @pytest.fixture
@@ -42,21 +41,3 @@ def test_install_delivers_core_and_hermes_overlay_and_replaces_hardlink(
     assert os.stat(soul).st_ino != os.stat(
         memory_root / ".smriti" / "wake-context.md"
     ).st_ino
-
-
-def test_wake_rebuild_refreshes_live_hermes_delivery(
-    hermes_tree: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    memory_root, soul = hermes_tree
-    identity = memory_root / "identity.md"
-    identity.write_text("# Identity\nChanged source identity.\n", encoding="utf-8")
-
-    def executor(_prompt: str) -> tuple[str, object]:
-        return "# Rebuilt core\nThe synchronized identity.\n", object()
-
-    rebuilt = wake_summary.rebuild(memory_root, executor_fn=executor)
-
-    assert rebuilt == memory_root / ".smriti" / "wake-context.md"
-    delivered = soul.read_text(encoding="utf-8")
-    assert "The synchronized identity." in delivered
-    assert "You are Narada's receptionist." in delivered

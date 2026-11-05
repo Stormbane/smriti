@@ -4,13 +4,13 @@
 Quietly commits — and optionally pushes — the SMRITI_ROOT git repo.
 Called from:
   - SessionEnd hook      -> --push
-  - smriti sleep start   -> --push
+  - smriti nightly       -> the witness step (commit, then --push)
   - smriti wake          -> --push
   - smriti_write path    -> (commit only)
 
 If the repo uses git-crypt (recommended; the installer doesn't set it up),
 content is encrypted but commit messages are NOT. Keep tags generic
-(session-end / sleep / wake / write) so metadata leaks nothing.
+(session-end / nightly / witness / wake / write) so metadata leaks nothing.
 
 Best-effort: failures exit 0 and the next trigger catches up. Every outcome
 is appended to ``.git/smriti-backup.jsonl`` (inside .git, so the log never

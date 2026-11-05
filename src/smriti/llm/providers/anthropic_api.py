@@ -101,7 +101,7 @@ class AnthropicApiProvider:
         return out
 
 
-# Same cost table as the legacy api_backend; keep in sync if rates move.
+# USD per million tokens: (input, output, cache read). Update if rates move.
 _RATES = {
     "claude-haiku-4-5-20251001": (0.80, 4.0, 0.08),
     "claude-sonnet-4-6-20250514": (3.0, 15.0, 0.30),

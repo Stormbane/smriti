@@ -96,8 +96,8 @@ directory or why. The private space is unconditional.
 - **Back the key up yourself** (a password manager or an offline copy).
   Without it the files can't be decrypted, and git can't give it back
 - Audit log at `private/.audit.log` records **failures only** (write
-  failed, decrypt failed, missing key). Pruned during smriti's sleep
-  cycle (consolidation), not per-wake
+  failed, decrypt failed, missing key). Never pruned per wake; no
+  scheduled pass prunes it yet
 - Reads require a runtime `ConsentToken` from the entity's identity core
   — operator-facing paths in smriti refuse private content
   unconditionally

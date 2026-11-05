@@ -423,17 +423,6 @@ def test_presence_line_empty_on_missing_log(tmp_path: Path) -> None:
     assert presence_line(cfg=_cfg(tmp_path)) == ""
 
 
-# -------------------------------------------------------------------- CLI
-
-
-def test_cli_sleep_refuses_without_deep(capsys: pytest.CaptureFixture[str]) -> None:
-    from smriti.cli import main
-
-    assert main(["sleep"]) == 1
-    out = capsys.readouterr().out
-    assert "smriti nightly" in out and "--deep" in out
-
-
 # ---------------------------------------------------------------- briefing
 
 

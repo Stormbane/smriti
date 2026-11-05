@@ -24,7 +24,6 @@ project's LICENSE file (which applies to smriti's own code).
   line / sentence fallback
 - `reranker.py` — cross-encoder reranker wrapper (ModernBERT /
   MiniLM, ONNX / torch backends)
-- `watcher.py` — filesystem watcher with debouncing
 - `scanner.py` — glob-based path scanning
 - `embeddings/` — pluggable embedding provider abstraction
   (`__init__.py`, `utils.py`, `google.py`, `local.py`, `ollama.py`,
@@ -57,7 +56,7 @@ attribution, lets us:
 3. Preserve attribution: the MIT license requires us to preserve the
    copyright notice; we preserve it here and in per-file headers.
 4. Reject what doesn't fit: we keep the utilities (chunking, reranking,
-   file watching, embeddings) and reject the core architecture
+   scanning, embeddings) and reject the core architecture
    (Milvus store, generic consolidation, plugin framework).
 
 smriti is grateful to the memsearch authors — the vendored code is

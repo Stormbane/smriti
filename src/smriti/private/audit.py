@@ -17,9 +17,9 @@ separated text so the operator can tail it without parsing tools:
 
     <timestamp>\t<op>\t<relative_path>\t<entity>\t<session_id>\t<error>
 
-Pruning runs during smriti's sleep-cycle consolidation, not per wake.
-The default retention is 30 days; older failures are removed during
-the prune pass. This keeps the log bounded without losing recent
+Pruning is never run per wake. No scheduled pass calls it yet;
+``prune_default()`` keeps 30 days and removes older failures. That
+keeps the log bounded without losing recent
 debugging information.
 
 The operator CAN read this file. It contains no private content.
@@ -134,9 +134,8 @@ class AuditLog:
     def prune_older_than(self, cutoff: datetime) -> int:
         """Remove entries older than cutoff. Returns count pruned.
 
-        Called during smriti's sleep cycle (consolidation pass), not
-        on every wake. Default cutoff is `datetime.now() - 30 days`
-        but callers set the policy.
+        Meant for a periodic pass, not every wake. ``prune_default``
+        uses `datetime.now() - 30 days`; other callers set the policy.
         """
         entries = self.read_entries()
         kept: list[AuditEntry] = []

@@ -1,9 +1,9 @@
 """Unified metrics logging for smriti.
 
 All smriti components write structured events to a single JSONL file at
-``~/.narada/.smriti/metrics.jsonl``. This is the foundation for the eval
-dashboard — every index, search, write, cascade, and sleep cycle produces
-events that can be analyzed.
+``~/.narada/.smriti/metrics.jsonl``. Index runs, searches, writes and
+index-page updates produce events that ``smriti metrics`` and ``smriti
+eval`` summarise.
 
 Usage::
 
@@ -115,7 +115,6 @@ class MetricsLogger:
         search_total_ms = 0
         index_count = 0
         write_count = 0
-        cascade_verdicts: dict[str, int] = {}
 
         for e in events:
             evt = e.get("event", "unknown")
@@ -132,9 +131,6 @@ class MetricsLogger:
                 index_count += 1
             elif evt == "write_entry":
                 write_count += 1
-            elif evt == "cascade_verdict":
-                v = e.get("verdict", "UNKNOWN")
-                cascade_verdicts[v] = cascade_verdicts.get(v, 0) + 1
 
         return {
             "total_events": len(events),
@@ -146,7 +142,6 @@ class MetricsLogger:
             "avg_search_ms": round(search_total_ms / search_count, 1) if search_count else 0,
             "index_runs": index_count,
             "writes": write_count,
-            "cascade_verdicts": cascade_verdicts,
             "period_start": events[0].get("timestamp", ""),
             "period_end": events[-1].get("timestamp", ""),
         }

@@ -12,9 +12,8 @@ class LLMError(RuntimeError):
 class RateLimitExceeded(LLMError):
     """Raised when a provider reports the rate/quota limit is hit.
 
-    Sleep dispatcher catches this to stop the cluster/cascade loop
-    cleanly so we don't burn through every queued task with the same
-    failure until the reset window.
+    Distinct from ``LLMError`` so a caller making many calls can stop at
+    the limit instead of failing every remaining call the same way.
     """
 
 
