@@ -13,11 +13,17 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
 
 from smriti.llm.types import LLMError, LLMRequest, LLMResponse, RateLimitExceeded
+
+if sys.platform == "win32":
+    _CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW
+else:
+    _CREATE_NO_WINDOW = 0
 
 log = logging.getLogger(__name__)
 
@@ -128,14 +134,14 @@ class ClaudeCliProvider:
                 raise LLMError(f"cannot write the system prompt file: {exc}") from exc
             cmd.extend(["--system-prompt-file", str(sys_file)])
 
-        def _spawn() -> subprocess.CompletedProcess:
+        def _spawn() -> subprocess.CompletedProcess[str]:
             return subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout,
                 input=stdin_text, env=env, cwd=workdir,
                 encoding="utf-8", errors="replace",
                 # hidden console: from a windowless caller (pythonw task,
                 # daemon) claude and every shell it runs would otherwise flash
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                creationflags=_CREATE_NO_WINDOW,
             )
 
         try:
@@ -182,7 +188,7 @@ class ClaudeCliProvider:
             elapsed_ms=elapsed_ms,
         )
 
-    def _raise_for_failure(self, result: subprocess.CompletedProcess) -> None:
+    def _raise_for_failure(self, result: subprocess.CompletedProcess[str]) -> None:
         stderr = (result.stderr or "")[:500]
         stdout_full = result.stdout or ""
         stdout = stdout_full[:500]

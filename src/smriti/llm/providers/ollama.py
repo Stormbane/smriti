@@ -6,12 +6,14 @@ No external dependencies — uses stdlib ``urllib``.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
 import time
 import urllib.error
 import urllib.request
+from typing import Any, cast
 
 from smriti.llm.types import LLMError, LLMRequest, LLMResponse, RateLimitExceeded
 
@@ -29,7 +31,7 @@ class OllamaProvider:
     def is_available(self) -> bool:
         try:
             with urllib.request.urlopen(f"{self._base}/api/tags", timeout=1) as r:
-                return r.status == 200
+                return cast(http.client.HTTPResponse, r).status == 200
         except (urllib.error.URLError, TimeoutError, OSError):
             return False
 
@@ -40,7 +42,7 @@ class OllamaProvider:
 
     def call(self, request: LLMRequest) -> LLMResponse:
         model = request.model or self.default_model()
-        body: dict = {
+        body: dict[str, Any] = {
             "model": model,
             "messages": [],
             "stream": False,

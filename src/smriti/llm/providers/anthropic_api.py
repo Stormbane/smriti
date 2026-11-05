@@ -9,6 +9,10 @@ from __future__ import annotations
 import logging
 import os
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from anthropic import Anthropic
 
 from smriti.llm.types import LLMError, LLMRequest, LLMResponse, RateLimitExceeded
 
@@ -19,9 +23,9 @@ class AnthropicApiProvider:
     name = "anthropic_api"
 
     def __init__(self) -> None:
-        self._client = None
+        self._client: Anthropic | None = None
 
-    def _get_client(self):
+    def _get_client(self) -> Anthropic | None:
         if self._client is not None:
             return self._client
         try:

@@ -9,6 +9,12 @@ from __future__ import annotations
 import logging
 import os
 import time
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from openai import OpenAI
+    from openai.types.chat import ChatCompletionMessageParam
+    from openai.types.chat.completion_create_params import CompletionCreateParamsNonStreaming
 
 from smriti.llm.types import LLMError, LLMRequest, LLMResponse, RateLimitExceeded
 
@@ -19,9 +25,9 @@ class OpenAIApiProvider:
     name = "openai_api"
 
     def __init__(self) -> None:
-        self._client = None
+        self._client: OpenAI | None = None
 
-    def _get_client(self):
+    def _get_client(self) -> OpenAI | None:
         if self._client is not None:
             return self._client
         try:
@@ -32,7 +38,7 @@ class OpenAIApiProvider:
         if not key:
             return None
         base_url = os.environ.get("OPENAI_BASE_URL")  # optional override
-        kwargs: dict = {"api_key": key}
+        kwargs: dict[str, Any] = {"api_key": key}
         if base_url:
             kwargs["base_url"] = base_url
         self._client = openai.OpenAI(**kwargs)
@@ -54,13 +60,16 @@ class OpenAIApiProvider:
             )
 
         model = request.model or self.default_model()
-        messages: list[dict] = []
+        messages: list[ChatCompletionMessageParam] = []
         if request.system:
             messages.append({"role": "system", "content": request.system})
         for m in request.turns():
-            messages.append({"role": m.role, "content": m.content})
+            # Both Message roles have this shape; mypy cannot select a TypedDict union.
+            messages.append(cast("ChatCompletionMessageParam", {
+                "role": m.role, "content": m.content,
+            }))
 
-        kwargs: dict = {
+        kwargs: CompletionCreateParamsNonStreaming = {
             "model": model,
             "messages": messages,
             "max_tokens": request.max_tokens,

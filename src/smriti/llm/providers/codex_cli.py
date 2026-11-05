@@ -17,9 +17,15 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import time
 
 from smriti.llm.types import LLMError, LLMRequest, LLMResponse, RateLimitExceeded
+
+if sys.platform == "win32":
+    _CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW
+else:
+    _CREATE_NO_WINDOW = 0
 
 log = logging.getLogger(__name__)
 
@@ -70,7 +76,7 @@ class CodexCliProvider:
                 cmd, capture_output=True, text=True, timeout=timeout,
                 input=prompt, encoding="utf-8", errors="replace",
                 env={**os.environ, "SMRITI_INTERNAL": "1"},
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                creationflags=_CREATE_NO_WINDOW,
             )
         except FileNotFoundError as exc:
             raise LLMError("codex CLI not found. Is Codex installed?") from exc

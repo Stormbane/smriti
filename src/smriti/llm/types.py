@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 class LLMError(RuntimeError):
@@ -25,7 +26,7 @@ class Message:
     ``LLMRequest.system`` so prompt caching keeps working.
     """
 
-    role: str
+    role: Literal["user", "assistant"]
     content: str
 
 
