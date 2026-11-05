@@ -1,0 +1,594 @@
+"""The installer's privacy questions (hardening H9.11).
+
+Capture copies every conversation into the memory tree, and the backup
+pushes the tree in plaintext unless git-crypt is set up, so the installer
+makes the person choose. These pin the choice's effect on daylog.json,
+the flags that answer it without a terminal, the safe default when nobody
+can answer, the treatment of an existing install, and the summary.
+
+Everything runs in temp directories with a temp HOME; no test touches a
+real memory root or harness config.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import io
+import json
+import shutil
+import subprocess
+import sys
+from collections.abc import Callable, Iterator
+from datetime import datetime, timezone
+from pathlib import Path
+from types import ModuleType
+
+import pytest
+
+from smriti.install import core, privacy
+
+HAS_GIT = shutil.which("git") is not None
+needs_git = pytest.mark.skipif(not HAS_GIT, reason="git is not installed")
+
+REMOTE = "git@example.com:sam/ari-memory.git"
+NOW = datetime(2026, 11, 5, 9, 0, tzinfo=timezone.utc)
+
+
+# ── Helpers ─────────────────────────────────────────────────────────
+
+
+@pytest.fixture()
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A temp HOME, so the installer's home-directory checks and defaults
+    never reach the real one."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(core, "HOME", home)
+    return home
+
+
+@pytest.fixture()
+def root(home: Path) -> Path:
+    return home / ".ari"
+
+
+def write_daylog(root: Path, data: object) -> Path:
+    path = privacy.daylog_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    return path
+
+
+def read_daylog(root: Path) -> object:
+    return json.loads(privacy.daylog_path(root).read_text(encoding="utf-8"))
+
+
+def git_repo(root: Path, url: str | None = None) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    if url is not None:
+        subprocess.run(["git", "-C", str(root), "remote", "add", "origin", url], check=True)
+
+
+def no_prompt(_question: str) -> str:
+    raise AssertionError("asked a question it shouldn't have")
+
+
+def answers(*replies: str) -> tuple[Callable[[str], str], list[str]]:
+    """A fake input(): returns ``replies`` in order, records each prompt."""
+    asked: list[str] = []
+    queue = list(replies)
+
+    def read(prompt: str) -> str:
+        asked.append(prompt)
+        if not queue:
+            raise EOFError
+        return queue.pop(0)
+
+    return read, asked
+
+
+def decide_and_apply(root: Path, **kwargs: object) -> privacy.PrivacyPlan:
+    kwargs.setdefault("capture", None)
+    kwargs.setdefault("remote_private", None)
+    kwargs.setdefault("interactive", False)
+    kwargs.setdefault("read", no_prompt)
+    plan = privacy.decide(root, **kwargs)  # type: ignore[arg-type]
+    privacy.apply(root, plan, now=NOW)
+    return plan
+
+
+# ── Capture: daylog.json ────────────────────────────────────────────
+
+
+class TestCaptureChoice:
+    def test_no_capture_writes_empty_sources_and_keeps_other_keys(self, root: Path) -> None:
+        before = {
+            "user_name": "Sam",
+            "agent_name": "Ari",
+            "notify_cmd": ["notify", "--to", "sam"],
+            "location": "Lisbon, Portugal",
+            "extra_sources": [{"name": "notes", "kind": "voice_md", "glob": "/x/*.md"}],
+        }
+        write_daylog(root, before)
+
+        plan = decide_and_apply(root, capture=False)
+
+        assert plan.capture == privacy.Choice(False, privacy.FLAG)
+        after = read_daylog(root)
+        assert after == {**before, "sources": []}
+
+    def test_no_capture_creates_daylog_when_missing(self, root: Path) -> None:
+        decide_and_apply(root, capture=False)
+        assert read_daylog(root) == {"sources": []}
+        assert privacy.capture_sources(root) == []
+
+    def test_capture_removes_empty_sources_and_keeps_other_keys(self, root: Path) -> None:
+        write_daylog(root, {"sources": [], "profile": "x", "user_name": "Sam"})
+
+        decide_and_apply(root, capture=True)
+
+        assert read_daylog(root) == {"profile": "x", "user_name": "Sam"}
+        kinds = {spec.kind for spec in privacy.capture_sources(root)}
+        assert kinds == {"claude_jsonl", "codex_rollout", "voice_md"}
+
+    def test_capture_leaves_custom_sources_alone(self, root: Path) -> None:
+        custom = {"sources": [{"name": "mine", "kind": "claude_jsonl", "glob": "/a/*.jsonl"}]}
+        path = write_daylog(root, custom)
+        before = path.read_bytes()
+
+        decide_and_apply(root, capture=True)
+
+        assert path.read_bytes() == before
+
+    def test_a_flag_matching_the_file_rewrites_nothing(self, root: Path) -> None:
+        path = write_daylog(root, {"sources": [], "user_name": "Sam"})
+        before = path.read_bytes()
+
+        decide_and_apply(root, capture=False)
+
+        assert path.read_bytes() == before
+
+    def test_extra_sources_still_captured_after_no_capture(self, root: Path) -> None:
+        write_daylog(root, {"extra_sources": [
+            {"name": "phone", "kind": "voice_md", "glob": "/phone/*.md"},
+        ]})
+        plan = decide_and_apply(root, capture=False)
+
+        text = privacy.summary(root, plan)
+        assert "captured:  voice transcripts" in text
+
+    def test_malformed_daylog_is_refused_before_any_question(self, root: Path) -> None:
+        path = privacy.daylog_path(root)
+        path.parent.mkdir(parents=True)
+        path.write_text('{"user_name": "Sam",', encoding="utf-8")
+
+        with pytest.raises(privacy.PrivacyConfigError, match="isn't valid JSON"):
+            privacy.decide(root, capture=False, remote_private=None,
+                           interactive=True, read=no_prompt)
+        assert path.read_text(encoding="utf-8") == '{"user_name": "Sam",'
+
+    def test_a_json_array_is_refused(self, root: Path) -> None:
+        write_daylog(root, [1, 2])
+        with pytest.raises(privacy.PrivacyConfigError, match="isn't a JSON object"):
+            privacy.decide(root, capture=None, remote_private=None, interactive=False)
+
+
+class TestNoTerminal:
+    def test_fresh_root_without_flag_captures_nothing(self, root: Path) -> None:
+        plan = decide_and_apply(root)
+
+        assert plan.capture == privacy.Choice(False, privacy.DEFAULT)
+        assert read_daylog(root) == {"sources": []}
+        text = privacy.summary(root, plan)
+        assert "captured:  nothing" in text
+        assert "capture is OFF: there was no terminal" in text
+        assert "--capture" in text
+
+    def test_existing_daylog_is_kept_byte_for_byte(self, root: Path) -> None:
+        path = write_daylog(root, {"user_name": "Sam", "agent_name": "Ari", "profile": "x"})
+        before = path.read_bytes()
+
+        plan = decide_and_apply(root)
+
+        assert plan.capture == privacy.Choice(True, privacy.KEPT)
+        assert path.read_bytes() == before
+        assert "capture is on because .smriti/daylog.json says so" in privacy.summary(root, plan)
+
+    def test_existing_daylog_with_capture_off_stays_off(self, root: Path) -> None:
+        path = write_daylog(root, {"sources": [], "user_name": "Sam"})
+        before = path.read_bytes()
+
+        plan = decide_and_apply(root)
+
+        assert plan.capture == privacy.Choice(False, privacy.KEPT)
+        assert path.read_bytes() == before
+
+    def test_existing_install_without_daylog_keeps_its_defaults(self, root: Path) -> None:
+        """An install from before the question, which has been capturing."""
+        (root / ".smriti").mkdir(parents=True)
+        (root / ".smriti" / "wake.py").write_text("# smriti wake\n", encoding="utf-8")
+
+        plan = decide_and_apply(root)
+
+        assert plan.capture == privacy.Choice(True, privacy.KEPT)
+        assert not privacy.daylog_path(root).exists()
+        assert "there is no .smriti/daylog.json" in privacy.summary(root, plan)
+
+    def test_a_default_is_not_an_answer(self, root: Path) -> None:
+        """The next run with a terminal still asks."""
+        decide_and_apply(root)
+        read, asked = answers("y")
+
+        plan = decide_and_apply(root, interactive=True, read=read)
+
+        assert plan.capture == privacy.Choice(True, privacy.PROMPT)
+        assert len(asked) == 1
+        assert "sources" not in read_daylog(root)  # type: ignore[operator]
+
+    def test_is_interactive_is_false_without_a_terminal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+        assert privacy.is_interactive() is False
+        monkeypatch.setattr(sys, "stdin", None)
+        assert privacy.is_interactive() is False
+
+
+class TestPrompts:
+    def test_fresh_root_needs_an_explicit_answer(
+        self, root: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        read, asked = answers("", "maybe", "n")
+
+        plan = decide_and_apply(root, interactive=True, read=read)
+
+        assert plan.capture == privacy.Choice(False, privacy.PROMPT)
+        assert asked[0] == f"{privacy.CAPTURE_QUESTION} [y/n] "
+        assert len(asked) == 3
+        out = " ".join(capsys.readouterr().out.split())  # undo the wrapping
+        assert "Claude Code transcripts, Codex rollouts and voice transcripts" in out
+        assert f"into {root / 'log'}" in out
+        assert "The backup commits them" in out and "pushes them" in out
+        assert read_daylog(root) == {"sources": []}
+
+    def test_existing_root_offers_its_current_state(self, root: Path) -> None:
+        write_daylog(root, {"user_name": "Sam"})
+        read, asked = answers("")
+
+        plan = decide_and_apply(root, interactive=True, read=read)
+
+        assert asked == [f"{privacy.CAPTURE_QUESTION} [Y/n] "]
+        assert plan.capture == privacy.Choice(True, privacy.PROMPT)
+        assert read_daylog(root) == {"user_name": "Sam"}
+
+    def test_end_of_input_falls_back_to_the_safe_default(self, root: Path) -> None:
+        read, _ = answers()
+        plan = decide_and_apply(root, interactive=True, read=read)
+        assert plan.capture == privacy.Choice(False, privacy.DEFAULT)
+
+    def test_an_answer_is_recorded_and_not_asked_again(self, root: Path) -> None:
+        read, _ = answers("n")
+        decide_and_apply(root, interactive=True, read=read)
+
+        record = json.loads(privacy.record_path(root).read_text(encoding="utf-8"))
+        assert record["capture"] == {
+            "enabled": False, "how": "prompt", "at": "2026-11-05T09:00:00+00:00",
+        }
+
+        plan = decide_and_apply(root, interactive=True, read=no_prompt)
+        assert plan.capture == privacy.Choice(False, privacy.KEPT)
+
+    def test_a_flag_overrides_a_recorded_answer(self, root: Path) -> None:
+        read, _ = answers("n")
+        decide_and_apply(root, interactive=True, read=read)
+
+        decide_and_apply(root, capture=True, interactive=True, read=no_prompt)
+
+        assert "sources" not in read_daylog(root)  # type: ignore[operator]
+
+
+# ── The backup remote ───────────────────────────────────────────────
+
+
+class TestRemote:
+    def test_no_repository_skips_the_question(
+        self, root: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        read, asked = answers("y")
+
+        plan = decide_and_apply(root, interactive=True, read=read)
+
+        assert len(asked) == 1  # capture only
+        assert plan.remote == privacy.Choice(None, privacy.SKIPPED)
+        assert "isn't a git repository" in capsys.readouterr().out
+        text = privacy.summary(root, plan)
+        assert "committed: nothing" in text
+        assert "pushed:    nothing" in text
+
+    @needs_git
+    def test_repository_without_origin_skips_the_question(
+        self, root: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        git_repo(root)
+        read, asked = answers("y")
+
+        plan = decide_and_apply(root, interactive=True, read=read)
+
+        assert len(asked) == 1
+        assert plan.git == privacy.GitState(is_repo=True)
+        assert "no remote named origin" in capsys.readouterr().out
+        assert "pushed:    nothing; there is no remote named origin" in privacy.summary(root, plan)
+
+    @needs_git
+    def test_remote_is_asked_and_recorded(
+        self, root: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        git_repo(root, REMOTE)
+        read, asked = answers("y", "y")
+
+        plan = decide_and_apply(root, interactive=True, read=read)
+
+        assert asked[1] == f"{privacy.REMOTE_QUESTION.format(url=REMOTE)} [y/n] "
+        assert plan.remote == privacy.Choice(True, privacy.PROMPT)
+        out = capsys.readouterr().out
+        assert "plaintext" in out and "git-crypt" in out
+        record = json.loads(privacy.record_path(root).read_text(encoding="utf-8"))
+        assert record["remote"]["url"] == REMOTE
+        assert record["remote"]["private"] is True
+
+        again = decide_and_apply(root, interactive=True, read=no_prompt)
+        assert again.remote == privacy.Choice(True, privacy.KEPT)
+
+    @needs_git
+    def test_a_new_remote_is_asked_again(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        decide_and_apply(root, capture=True, remote_private=True)
+        subprocess.run(["git", "-C", str(root), "remote", "set-url", "origin",
+                        "https://example.com/sam/other.git"], check=True)
+        read, asked = answers("n")
+
+        plan = decide_and_apply(root, interactive=True, read=read)
+
+        assert len(asked) == 1
+        assert plan.remote == privacy.Choice(False, privacy.PROMPT)
+
+    @needs_git
+    def test_no_terminal_and_no_flag_is_not_private(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        write_daylog(root, {"user_name": "Sam"})
+
+        plan = decide_and_apply(root)
+
+        assert plan.remote == privacy.Choice(None, privacy.DEFAULT)
+        assert "remote" not in privacy.read_record(root)
+        text = privacy.summary(root, plan)
+        assert "nobody has said it is private" in text
+        assert "git-crypt init" in text
+
+    def test_remote_flag_without_a_remote_is_ignored_with_a_note(self, root: Path) -> None:
+        plan = decide_and_apply(root, capture=False, remote_private=True)
+        assert plan.remote == privacy.Choice(None, privacy.SKIPPED)
+        assert "ignored: there is no remote" in privacy.summary(root, plan)
+
+    @needs_git
+    def test_git_crypt_and_ignore_rules_are_read_from_the_repository(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        (root / ".gitattributes").write_text(
+            "log/** filter=git-crypt diff=git-crypt\n", encoding="utf-8"
+        )
+        assert privacy.inspect_git(root) == privacy.GitState(
+            is_repo=True, remote_url=REMOTE, log_encrypted=True
+        )
+        (root / ".gitignore").write_text("log/\n", encoding="utf-8")
+        assert privacy.inspect_git(root).log_ignored is True
+
+    @needs_git
+    def test_covering_only_the_jsonl_is_not_enough(self, root: Path) -> None:
+        """The day's render, DD.md, holds the same turns."""
+        git_repo(root, REMOTE)
+        (root / ".gitattributes").write_text(
+            "log/**/*.jsonl filter=git-crypt diff=git-crypt\n", encoding="utf-8"
+        )
+        (root / ".gitignore").write_text("log/**/*.jsonl\n", encoding="utf-8")
+        state = privacy.inspect_git(root)
+        assert state.log_encrypted is False
+        assert state.log_ignored is False
+
+    def test_git_that_cannot_run_is_reported(
+        self, root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (root / ".git").mkdir(parents=True)
+
+        def broken(*_args: object, **_kwargs: object) -> object:
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(privacy.subprocess, "run", broken)
+        state = privacy.inspect_git(root)
+        assert state.is_repo and state.remote_url is None and state.error
+
+    def test_credentials_are_removed_from_the_url(self) -> None:
+        assert privacy.redact_url("https://sam:ghp_x@example.com/a.git") == (
+            "https://example.com/a.git"
+        )
+        assert privacy.redact_url("https://ghp_x@example.com/a.git") == (
+            "https://example.com/a.git"
+        )
+        assert privacy.redact_url(REMOTE) == REMOTE
+
+
+# ── The summary ─────────────────────────────────────────────────────
+
+
+class TestSummary:
+    @needs_git
+    def test_names_what_is_pushed_where_and_how(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+
+        plan = decide_and_apply(root, capture=True, remote_private=False)
+        text = privacy.summary(root, plan)
+
+        sources = "Claude Code transcripts, Codex rollouts and voice transcripts"
+        assert f"captured:  {sources}, copied into {root / 'log'}" in text
+        assert "committed: the memory tree, with the captured conversations" in text
+        assert (f"pushed:    the memory tree, with the captured conversations, to {REMOTE}, "
+                "in plaintext") in text
+        assert "NOT private, you said" in text
+        assert "WARNING: your conversations would go in plaintext" in text
+        assert "git-crypt init" in text
+
+    @needs_git
+    def test_a_private_remote_gets_no_warning(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        plan = decide_and_apply(root, capture=True, remote_private=True)
+        text = privacy.summary(root, plan)
+        assert "private, you said" in text
+        assert "WARNING" not in text
+        assert "git-crypt init" not in text
+
+    @needs_git
+    def test_capture_off_still_says_the_tree_is_pushed(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        plan = decide_and_apply(root, capture=False, remote_private=False)
+        text = privacy.summary(root, plan)
+        assert "captured:  nothing" in text
+        assert f"pushed:    the memory tree, to {REMOTE}, in plaintext" in text
+        assert "WARNING" not in text  # no conversations go
+
+    @needs_git
+    def test_git_crypt_over_the_day_log_is_named(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        (root / ".gitattributes").write_text(
+            "log/** filter=git-crypt diff=git-crypt\n", encoding="utf-8"
+        )
+        plan = decide_and_apply(root, capture=True, remote_private=False)
+        text = privacy.summary(root, plan)
+        assert "log/ encrypted by git-crypt, everything else in plaintext" in text
+        assert "WARNING" not in text
+
+    @needs_git
+    def test_a_git_ignored_day_log_is_not_called_pushed(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        (root / ".gitignore").write_text("log/\n", encoding="utf-8")
+        plan = decide_and_apply(root, capture=True, remote_private=False)
+        text = privacy.summary(root, plan)
+        assert "log/ is git-ignored, so not the conversations" in text
+        assert "WARNING" not in text
+
+
+# ── scripts/install.py ──────────────────────────────────────────────
+
+
+@pytest.fixture()
+def installer() -> ModuleType:
+    path = Path(__file__).resolve().parents[1] / "scripts" / "install.py"
+    spec = importlib.util.spec_from_file_location("smriti_install_script", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture()
+def no_tty(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """stdin is not a terminal, and input() must never be called."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    monkeypatch.setattr("builtins.input", no_prompt)
+    yield
+
+
+def run_installer(installer: ModuleType, root: Path, *flags: str) -> int:
+    argv = [
+        "--harness", "none",
+        "--memory-root", str(root),
+        "--projects-root", str(root.parent / "no-projects"),
+        "--skip-recall-daemon",
+        *flags,
+    ]
+    result = installer.main(argv)
+    assert isinstance(result, int)
+    return result
+
+
+@pytest.mark.usefixtures("no_tty")
+class TestInstaller:
+    def test_no_capture_flag_without_a_terminal(
+        self, installer: ModuleType, root: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert run_installer(installer, root, "--no-capture") == 0
+
+        assert read_daylog(root) == {"sources": []}
+        assert (root / ".smriti" / "wake.py").exists()  # the core install ran
+        out = capsys.readouterr().out
+        assert "captured:  nothing" in out
+        assert out.rstrip().endswith("pushed:    nothing")  # the summary is last
+
+    def test_capture_flag_without_a_terminal(
+        self, installer: ModuleType, root: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert run_installer(installer, root, "--capture") == 0
+
+        assert not privacy.daylog_path(root).exists()
+        record = json.loads(privacy.record_path(root).read_text(encoding="utf-8"))
+        assert record["capture"]["enabled"] is True
+        assert record["capture"]["how"] == "flag"
+        out = capsys.readouterr().out
+        assert "Claude Code transcripts, Codex rollouts and voice transcripts" in out
+
+    def test_no_flag_and_no_terminal_captures_nothing(
+        self, installer: ModuleType, root: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert run_installer(installer, root) == 0
+
+        assert read_daylog(root) == {"sources": []}
+        assert "capture is OFF: there was no terminal" in capsys.readouterr().out
+
+    def test_rerun_keeps_an_existing_daylog(
+        self, installer: ModuleType, root: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        path = write_daylog(root, {"user_name": "Sam", "agent_name": "Ari",
+                                   "notify_cmd": ["notify"]})
+        before = path.read_bytes()
+
+        assert run_installer(installer, root) == 0
+
+        assert path.read_bytes() == before
+        assert "capture is on because" in capsys.readouterr().out
+
+    def test_malformed_daylog_refuses_before_any_change(
+        self, installer: ModuleType, root: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        path = privacy.daylog_path(root)
+        path.parent.mkdir(parents=True)
+        path.write_text("{not json", encoding="utf-8")
+
+        assert run_installer(installer, root, "--no-capture") == 1
+
+        assert "REFUSED before any change" in capsys.readouterr().err
+        assert path.read_text(encoding="utf-8") == "{not json"
+        assert not (root / ".smriti" / "wake.py").exists()
+        assert not (root / "identity.md").exists()
+
+    def test_contradictory_flags_are_rejected(self, installer: ModuleType, root: Path) -> None:
+        with pytest.raises(SystemExit) as exc:
+            run_installer(installer, root, "--capture", "--no-capture")
+        assert exc.value.code == 2
+        with pytest.raises(SystemExit):
+            run_installer(installer, root, "--remote-is-private", "--remote-not-private")
+
+    @needs_git
+    def test_summary_names_what_is_pushed(
+        self, installer: ModuleType, root: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        git_repo(root, "https://sam:ghp_secret@example.com/sam/ari-memory.git")
+
+        assert run_installer(installer, root, "--capture", "--remote-not-private") == 0
+
+        out = capsys.readouterr().out
+        assert "ghp_secret" not in out
+        assert "captured:  Claude Code transcripts, Codex rollouts and voice transcripts" in out
+        assert ("pushed:    the memory tree, with the captured conversations, to "
+                "https://example.com/sam/ari-memory.git, in plaintext") in out
+        assert "git-crypt init" in out

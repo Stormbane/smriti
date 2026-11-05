@@ -18,6 +18,12 @@ Run on a fresh machine after ``pip install -e .``::
     python scripts/install.py
     python scripts/install.py --harness none
     python scripts/install.py --harness claude_code --skip-settings
+    python scripts/install.py --no-capture --remote-is-private
+
+Before changing anything it asks two privacy questions (capture
+conversations into the day-log? is the backup remote private?), or takes
+the answers from flags; see ``src/smriti/install/privacy.py``. Its last
+lines say what is captured, what is committed and where it is pushed.
 
 Re-runnable: idempotent, never deletes existing user files.
 """
@@ -29,6 +35,7 @@ import importlib
 import sys
 from pathlib import Path
 
+from smriti.install import privacy
 from smriti.install.core import (
     DEFAULT_MEMORY_ROOT,
     DEFAULT_PROJECTS_ROOT,
@@ -39,7 +46,7 @@ from smriti.install.core import (
 KNOWN_HARNESSES = ("claude_code", "codex", "hermes", "none")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--memory-root",
@@ -84,7 +91,41 @@ def main() -> int:
              "(~/.claude/CLAUDE.md or ~/.codex/AGENTS.md) to the "
              "smriti:managed marker form, with a .pre-migrate.bak backup",
     )
-    args = parser.parse_args()
+    capture = parser.add_mutually_exclusive_group()
+    capture.add_argument(
+        "--capture",
+        dest="capture",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Capture conversations (Claude Code, Codex and voice transcripts) "
+             "into <root>/log/, which the backup commits and pushes",
+    )
+    capture.add_argument(
+        "--no-capture",
+        dest="capture",
+        action="store_const",
+        const=False,
+        help='Capture nothing: set "sources": [] in <root>/.smriti/daylog.json, '
+             "keeping its other keys",
+    )
+    remote = parser.add_mutually_exclusive_group()
+    remote.add_argument(
+        "--remote-is-private",
+        dest="remote_private",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Say the memory root's backup remote (origin) is a private repository",
+    )
+    remote.add_argument(
+        "--remote-not-private",
+        dest="remote_private",
+        action="store_const",
+        const=False,
+        help="Say origin is not private; the installer prints how to set up git-crypt",
+    )
+    args = parser.parse_args(argv)
 
     memory_root = Path(args.memory_root).expanduser()
     projects_root = Path(args.projects_root).expanduser()
@@ -111,15 +152,39 @@ def main() -> int:
                       "was modified.", file=sys.stderr)
                 return 1
 
+    # The privacy questions come before any change too, so that a refusal
+    # (an unreadable daylog.json) or a Ctrl-C at a prompt leaves nothing done.
+    try:
+        plan = privacy.decide(
+            memory_root,
+            capture=args.capture,
+            remote_private=args.remote_private,
+            interactive=privacy.is_interactive(),
+        )
+    except privacy.PrivacyConfigError as exc:
+        print(f"REFUSED before any change: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\ninterrupted before any change.", file=sys.stderr)
+        return 130
+
     try:
         run_core(memory_root, projects_root, skip_recall_daemon=args.skip_recall_daemon)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    try:
+        for change in privacy.apply(memory_root, plan):
+            print(f"[privacy] {change}")
+    except (OSError, privacy.PrivacyConfigError) as exc:
+        print(f"error: couldn't record the privacy choices: {exc}", file=sys.stderr)
+        return 1
+
     if harness == "none":
         print("\ndone (core-only). To wire into an agent harness, "
               "re-run with --harness=<name> or write your own integration.")
+        print(privacy.summary(memory_root, plan))
         return 0
 
     # Dispatch to per-harness installer.
@@ -157,6 +222,7 @@ def main() -> int:
           "SMRITI_RECALL_THRESHOLD, SMRITI_RECALL_QMD_URL, SMRITI_RECALL_NO_HTTP.")
     print("LLM provider:  SMRITI_LLM_PROVIDER={anthropic_api|claude_cli|openai_api|ollama}.")
     print("optional: `smriti recall index` to (re)build the qmd index for ~/.narada.")
+    print(privacy.summary(memory_root, plan))
     return 0
 
 
