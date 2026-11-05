@@ -391,7 +391,7 @@ a recheck.
   the ledger entry before composing; a failed compose releases it, a claim 30 min
   old with no send is taken over under the entry's edit lock, and a run that lost
   its claim doesn't send. A barrier test of two overlapping runs sends once.
-- **H11.4 implemented** (2026-11-06; Codex diff review done, recheck pending). The
+- **H11.4 implemented** (2026-11-06; Codex diff review and recheck done). The
   backup pushes the current branch to its upstream, or to `origin` under the same
   name when it has none, setting the upstream; `needs_push` compares against the
   same ref; a detached HEAD isn't pushed and logs `push_skipped`. Tests on `main`
@@ -401,9 +401,13 @@ a recheck.
   (`privacy.backup_remote`, a copy, since the script can't import smriti; a test
   holds them together on eight repositories and checks that a real push lands
   where the installer said), and keys the saved answer on that remote's name and
-  URLs. The copy deployed in each memory root (`<root>/.smriti/backup.py`) must be
-  redeployed.
-- **H11.9 implemented** (2026-11-06; Codex diff review done, recheck pending).
+  URLs. Recheck (two P2s, fixed): an upstream that names a URL directly is resolved
+  through git's `pushInsteadOf`/`insteadOf` rules (pushInsteadOf first, longest
+  prefix), so the installer names, and keys its answer on, where git really pushes;
+  and the remedy names every remote the backup can reach, `origin` included, since
+  unsetting the upstream alone falls back to it. The copy deployed in each memory
+  root (`<root>/.smriti/backup.py`) must be redeployed.
+- **H11.9 implemented** (2026-11-06; Codex diff review and recheck done).
   Named locks live in `<runtime>/locks` (owner-only on POSIX). While
   `oslock.LEGACY_LOCKS` is on, each also takes its old file in
   `<tempdir>/smriti-locks`, always after the private one, so pre-H11.9 processes
