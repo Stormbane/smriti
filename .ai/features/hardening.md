@@ -140,4 +140,13 @@ a recheck.
   behind `os.name`/`hasattr` checks that mypy doesn't narrow.
 - **H8 done** (2026-11-05). Review #3 at `3074a41`: Opus B- (was C+), Sonnet B
   (was B-). The findings are H9.
-- **H9**: planned.
+- **H9.1-H9.11 done** (2026-11-05). Codex reviewed each branch; real findings
+  fixed with regression tests: a missing crypto extra left an empty key that
+  blocked the store; the day zone ignored an explicit root; the installer
+  missed a running logd (logd now follows daylog.json), trusted a git-crypt
+  attribute without its filter, trusted ignore rules over tracked and waiting
+  files, sampled too few log outputs and only one push URL. CI now runs ruff
+  with E501, B and BLE, and `mypy --strict` on the whole package, on every OS;
+  getting there found numpy's and the Anthropic SDK's stubs differing by
+  version from the development machine's.
+- **H9.12** (outside review #4): next.
