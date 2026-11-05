@@ -145,9 +145,18 @@ defaults.
 
 The answers are recorded in `<root>/.smriti/privacy.json` (when, how,
 and the remote's URL without credentials), and the installer's last lines
-say what is captured, what is committed, and where and how it is pushed,
-reading git's ignore and git-crypt rules for `log/`. The backup and the
-nightly push only once `smriti tasks install` has scheduled them.
+say what is captured, what is committed, and where and how it is pushed.
+For that it asks git which `log/` files are ignored and which are already
+tracked: an ignore rule doesn't untrack a day committed before it, and
+each backup's `git add -A` keeps committing its changes. The day-log is
+reported encrypted only when every committed day-log file is marked
+`filter=git-crypt`, the clone has `filter.git-crypt.clean` and `.smudge`
+configured, and `git-crypt status` reports each tracked day encrypted. A
+`.gitattributes` line alone isn't enough: git passes a filter it has no
+configuration for straight through. Without `git-crypt` on PATH the
+protection is "unverified", and the summary still warns about plaintext.
+The backup and the nightly push only once `smriti tasks install` has
+scheduled them.
 
 ### Selecting a harness
 

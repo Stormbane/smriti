@@ -30,8 +30,10 @@ security backport series or guaranteed response time.
 - Backups commit the tree and can push it to a git remote you choose, in plaintext
   unless git-crypt encrypts it. Use a private remote. We recommend git-crypt for
   sensitive memory backups, but **the installer does not set up git-crypt**: it asks
-  whether the remote is private, reports whether git-crypt covers the day-log, and
-  prints the setup steps when the remote isn't confirmed private. Git filenames,
+  whether the remote is private, reports the day-log as encrypted only when the
+  git-crypt filter is configured and `git-crypt status` confirms it (a
+  `.gitattributes` line alone encrypts nothing), and prints the setup steps when the
+  remote isn't confirmed private. Git filenames,
   commit messages, and other metadata remain visible even when file contents are
   encrypted. [`docs/PRIVACY.md`](docs/PRIVACY.md#what-is-pushed-in-the-clear) lists
   what is pushed in the clear.

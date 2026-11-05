@@ -93,7 +93,14 @@ Do one of these before the backups run (`smriti tasks install`):
   ```
 
   A new clone needs `git-crypt unlock <key file>` before its files can be
-  read, `wake.py` included.
+  read, `wake.py` included. Until then the clone has no git-crypt filter
+  configured, and git commits files marked `filter=git-crypt` in
+  plaintext, because it passes an unconfigured filter straight through.
+  The same goes for a `.gitattributes` copied into a tree where
+  `git-crypt init` never ran. A day committed before git-crypt was set up
+  stays plaintext in the index until `git-crypt status -f` re-stages it.
+  The installer reports the day-log as encrypted only when the filter is
+  configured and `git-crypt status` confirms every tracked day.
 
 If the tree was already pushed in plaintext, encrypting from now on
 doesn't remove the old commits: rotate to a fresh remote, or rewrite the
