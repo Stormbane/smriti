@@ -6,7 +6,7 @@ Orientation for an agent working on this repo. Codex loads this file; Claude Cod
 
 smriti gives one AI agent persistent memory and a continuous self across sessions and harnesses (Claude Code, Codex).
 The memory is a tree of plain markdown files on local disk (`$SMRITI_ROOT`, default `~/.narada`), searched through a local SQLite index; the nightly sends each day's log to an LLM CLI, and backups push to a git remote you choose.
-It grew inside one setup (the entity Narada and its user Suti, the maintainer) and is being generalised: alpha, Windows-first, one maintainer, no CI.
+It grew inside one setup (the entity Narada and its user Suti, the maintainer) and is being generalised: alpha, Windows-first, one maintainer; CI runs lint, strict types and the tests on Windows, Linux and macOS.
 
 ## Read this first
 
@@ -90,7 +90,7 @@ Tests import `smriti` from wherever it is installed. In a second checkout or wor
 
 ## Rules
 
-- Python 3.11+. `ruff` (line length 100) and `mypy --strict` are the standard. `ruff check src tests scripts` passes (since 2026-11-04); `mypy --strict` doesn't yet (about 209 errors), so keep new and touched code clean.
+- Python 3.11+. `ruff` (line length 100) and `mypy --strict` are the standard. `ruff check src tests scripts` passes, and CI enforces `mypy --strict` on `core`, `store`, `daylog`, `wake`, `mcp` and `profiles`. The rest of the package (the CLI, integrations, recall, llm, private, eval) still has strict errors, so keep new and touched code there clean.
 - No runtime dependencies in the base install (`dependencies = []`). Optional ones go in extras: `read`, `api`, `codex`, `private`, `witness`, `dev`.
 - Check `.ai/knowledge/conventions.md` before introducing a new pattern.
 - Atomic commits: one logical change per commit.

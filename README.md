@@ -189,7 +189,7 @@ The witness step needs `pip install -e ".[witness]"` and a memory root that is a
   - capture records no gaps;
   - the identity summary is loaded without being accepted, and goes stale.
 - **Data flow:** the tree and the index are local files. The nightly digest sends each day's conversation log (up to 248,000 characters: four parts of 60,000 and 8,000 of autonomous-session markers) to the configured LLM CLI. Backups push to your git remote, the witness sends a hash to public timestamp calendars, and the morning message uses web search. The optional private store keeps its encryption key in plain text in `private/README.md`; the index skips `private/`. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
-- **Engineering:** there is no CI. `ruff` and `mypy --strict` don't pass across the tree yet. Linux and macOS are untested.
+- **Engineering:** CI runs `ruff`, `mypy --strict` and the tests on Windows, Linux and macOS with Python 3.11 and 3.12, with a deterministic stub embedder, so no model is downloaded. Strict types are enforced on `core`, `store`, `daylog`, `wake`, `mcp` and `profiles`; the rest of the package isn't strict yet. Day-to-day use is on Windows; on macOS the CI's Python can't load sqlite-vec, so search there is keyword-only.
 
 The plan, with measurements, is [`.ai/features/smriti-renewal.md`](.ai/features/smriti-renewal.md).
 
