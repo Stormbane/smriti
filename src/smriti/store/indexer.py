@@ -16,7 +16,7 @@ import sqlite3
 import struct
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from smriti._vendored.memsearch.chunker import chunk_markdown, compute_chunk_id
 from smriti._vendored.memsearch.scanner import scan_paths
@@ -205,6 +205,33 @@ def _delete_source(conn: IndexDB, source: str) -> None:
             "SELECT rowid FROM chunks WHERE source = ?)",
             (source,),
         )
+
+
+def _insert_chunk(conn: IndexDB, cid: str, chunk: Any, source: str, distance: int,
+                  indexed_at: str, vector: list[float]) -> None:
+    """Insert one chunk and its vector: the one insert path for index_tree and index_file."""
+    conn.execute(
+        """INSERT OR REPLACE INTO chunks
+           (id, source, heading, heading_level, content,
+            start_line, end_line, content_hash, trunk_distance, indexed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (cid, source, chunk.heading, chunk.heading_level, chunk.content,
+         chunk.start_line, chunk.end_line, chunk.content_hash, distance, indexed_at),
+    )
+    if not conn.has_vec:
+        return
+    rowid = conn.execute("SELECT rowid FROM chunks WHERE id = ?", (cid,)).fetchone()[0]
+    # Guard against orphaned vec rows: INSERT OR REPLACE on chunks frees a
+    # rowid without any trigger cleaning its chunks_vec row (vec0 has no
+    # triggers), and crash-era partial commits left such orphans behind.
+    # When SQLite recycles one of those rowids the plain INSERT hits "UNIQUE
+    # constraint failed on chunks_vec" — which crashed every incremental
+    # index from mid-July until 2026-09-06. Delete-then-insert is idempotent.
+    conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
+    conn.execute(
+        "INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)",
+        (rowid, _serialize_f32(vector)),
+    )
 
 
 def index_tree(
@@ -413,44 +440,7 @@ def index_tree(
                    if chunk[2] not in keep]
 
         for (cid, c, rel_source, fpath), vector in pending:
-            dist = trunk_distance(fpath, root)
-            conn.execute(
-                """INSERT OR REPLACE INTO chunks
-                   (id, source, heading, heading_level, content,
-                    start_line, end_line, content_hash, trunk_distance, indexed_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    cid,
-                    rel_source,
-                    c.heading,
-                    c.heading_level,
-                    c.content,
-                    c.start_line,
-                    c.end_line,
-                    c.content_hash,
-                    dist,
-                    now,
-                ),
-            )
-            # Get the rowid for vec0 insertion
-            rowid = conn.execute(
-                "SELECT rowid FROM chunks WHERE id = ?", (cid,)
-            ).fetchone()[0]
-
-            if conn.has_vec:
-                # Guard against orphaned vec rows: INSERT OR REPLACE on
-                # chunks frees a rowid without any trigger cleaning its
-                # chunks_vec row (vec0 has no triggers), and crash-era
-                # partial commits left such orphans behind. When SQLite
-                # recycles one of those rowids the plain INSERT hits
-                # "UNIQUE constraint failed on chunks_vec" — which
-                # crashed every incremental index from mid-July until
-                # 2026-09-06. Delete-then-insert is idempotent.
-                conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
-                conn.execute(
-                    "INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)",
-                    (rowid, _serialize_f32(vector)),
-                )
+            _insert_chunk(conn, cid, c, rel_source, trunk_distance(fpath, root), now, vector)
 
         stats["indexed"] = sum(1 for src, _ in read_sources if src not in keep)
         stats["chunks"] = len(pending)
@@ -557,27 +547,11 @@ def index_file(path: Path, *, root: Path | None = None, db: Path | None = None) 
         _record_source(conn, rel_source, st)
         now = datetime.now(timezone.utc).isoformat()
         dist = trunk_distance(path, root)
-        for i, c in enumerate(chunks):
+        for c, vector in zip(chunks, embeddings, strict=True):
             cid = compute_chunk_id(
                 c.source, c.start_line, c.end_line, c.content_hash, provider.model_name
             )
-            conn.execute(
-                """INSERT OR REPLACE INTO chunks
-                   (id, source, heading, heading_level, content,
-                    start_line, end_line, content_hash, trunk_distance, indexed_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (cid, rel_source, c.heading, c.heading_level, c.content,
-                 c.start_line, c.end_line, c.content_hash, dist, now),
-            )
-            rowid = conn.execute(
-                "SELECT rowid FROM chunks WHERE id = ?", (cid,)
-            ).fetchone()[0]
-            if conn.has_vec:
-                conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
-                conn.execute(
-                    "INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)",
-                    (rowid, _serialize_f32(embeddings[i])),
-                )
+            _insert_chunk(conn, cid, c, rel_source, dist, now, vector)
         conn.commit()
         conn.close()
         return len(chunks)
