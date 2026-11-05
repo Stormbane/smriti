@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 import tempfile
 import time
 from collections.abc import Iterator
@@ -27,7 +28,7 @@ def lock_path(name: str, scope: str) -> Path:
     return Path(tempfile.gettempdir()) / "smriti-locks" / f"{digest}-{name}.lock"
 
 
-if os.name == "nt":
+if sys.platform == "win32":
     import msvcrt
 
     def _try_lock(fd: int) -> None:
