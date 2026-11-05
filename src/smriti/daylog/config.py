@@ -5,12 +5,21 @@ directories — e.g. the phone-app -> prana brain server work — are a
 config edit, never a code change. Overrides live in
 ``<tree>/.smriti/daylog.json``:
 
-    {"sources": [{"name": "...", "kind": "claude_jsonl", "glob": "..."}],
+    {"capture": true,
      "notify_cmd": ["...", "..."],
      "user_name": "Sam", "agent_name": "Ari"}
 
-``sources`` REPLACES the defaults when present; ``extra_sources``
-appends to them. ``kind`` selects the adapter module.
+Capture is off until it is configured (hardening H11.1). Without a
+daylog.json, or with one that names no source, nothing is captured; the
+same goes for a file that can't be read, isn't JSON or isn't an object,
+and :attr:`DaylogConfig.capture_off` says why. ``"capture": true`` turns
+on the default sources (:func:`default_sources`: every Claude Code
+transcript and Codex rollout in the home directory, and the tree's voice
+transcripts). ``sources``, a list of ``{"name", "kind", "glob"}``,
+REPLACES them when present, and ``"sources": []`` captures nothing;
+``extra_sources`` appends to whichever applies. ``"capture": false``
+captures nothing, whatever else the file lists. ``kind`` selects the
+adapter module.
 
 ``user_name`` and ``agent_name`` are the display names of the two
 speaker roles (``smriti.daylog.model.USER`` and ``AGENT``): the day-log
@@ -55,10 +64,16 @@ class DaylogConfig:
     agent_name: str = DEFAULT_AGENT_NAME
     # The optional profile (smriti.profiles.<name>); "" means none.
     profile: str = ""
+    # Why nothing is captured, when nothing is; "" otherwise (see capture_note).
+    capture_off: str = ""
 
     def speaker(self, who: str) -> str:
         """The display name for a turn's role; anything but the user is the agent."""
         return self.user_name if who == USER else self.agent_name
+
+    @property
+    def daylog_path(self) -> Path:
+        return self.root / ".smriti" / "daylog.json"
 
     @property
     def log_dir(self) -> Path:
@@ -113,31 +128,37 @@ def default_sources() -> list[SourceSpec]:
     ]
 
 
+_FILE = ".smriti/daylog.json"
+
+
+def capture_note(cfg: DaylogConfig) -> str:
+    """Capture in a line: the sources it reads, or why it reads none and how to turn it on."""
+    if cfg.sources:
+        return "on: " + ", ".join(dict.fromkeys(spec.name for spec in cfg.sources))
+    why = cfg.capture_off or "no sources are configured"
+    return (f"off: {why}. To turn it on, re-run the installer with --capture, or put "
+            f'"capture": true (the default sources) or a "sources" list in {cfg.daylog_path}')
+
+
 def load_config(root: Path | None = None) -> DaylogConfig:
     root = root or tree_root()
-    cfg = DaylogConfig(root=root, sources=default_sources())
-    override_path = root / ".smriti" / "daylog.json"
+    cfg = DaylogConfig(root=root)
     try:
-        raw = json.loads(override_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        raw = json.loads(cfg.daylog_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        cfg.capture_off = f"there is no {_FILE}"
+        return cfg
+    except OSError as exc:
+        cfg.capture_off = f"{_FILE} can't be read ({exc.strerror or exc})"
+        return cfg
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        cfg.capture_off = f"{_FILE} isn't valid JSON ({exc})"
+        return cfg
+    if not isinstance(raw, dict):
+        cfg.capture_off = f"{_FILE} isn't a JSON object"
         return cfg
 
-    def _parse(items: object) -> list[SourceSpec]:
-        specs: list[SourceSpec] = []
-        if isinstance(items, list):
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                name, kind, pattern = item.get("name"), item.get("kind"), item.get("glob")
-                if isinstance(name, str) and isinstance(kind, str) and isinstance(pattern, str):
-                    specs.append(SourceSpec(name=name, kind=kind, glob=pattern))
-        return specs
-
-    # Key presence, not truthiness: an explicit "sources": [] disables
-    # every default source (diff review P2).
-    if isinstance(raw.get("sources"), list):
-        cfg.sources = _parse(raw.get("sources"))
-    cfg.sources.extend(_parse(raw.get("extra_sources")))
+    cfg.sources, cfg.capture_off = _sources(raw)
     notify = raw.get("notify_cmd")
     if isinstance(notify, list) and all(isinstance(x, str) for x in notify):
         cfg.notify_cmd = notify
@@ -153,3 +174,46 @@ def load_config(root: Path | None = None) -> DaylogConfig:
     if isinstance(profile, str):
         cfg.profile = profile.strip()
     return cfg
+
+
+def _sources(raw: dict[str, object]) -> tuple[list[SourceSpec], str]:
+    """What daylog.json captures: the sources, and why there are none when there are none.
+
+    Nothing unless the file says so: capturing every transcript on the
+    machine was the default until H11.1, so an install that never chose
+    copied them all.
+    """
+    capture = raw.get("capture")
+    if capture is False:
+        return [], f'{_FILE} says "capture": false'
+    listed = raw.get("sources")
+    # Key presence, not truthiness: an explicit "sources": [] disables
+    # every default source (diff review P2).
+    if isinstance(listed, list):
+        sources = _parse(listed)
+    elif capture is True:
+        sources = default_sources()
+    else:
+        sources = []
+    sources += _parse(raw.get("extra_sources"))
+    if sources:
+        return sources, ""
+    if isinstance(listed, list):
+        return [], (f'{_FILE} says "sources": []' if not listed else
+                    f'none of the "sources" in {_FILE} has a string "name", "kind" and "glob"')
+    if "capture" in raw:
+        return [], f'"capture" in {_FILE} is {json.dumps(capture)}, not true'
+    return [], f'{_FILE} neither says "capture": true nor lists "sources"'
+
+
+def _parse(items: object) -> list[SourceSpec]:
+    """The well-formed ``{"name", "kind", "glob"}`` entries of a sources list."""
+    specs: list[SourceSpec] = []
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name, kind, pattern = item.get("name"), item.get("kind"), item.get("glob")
+            if isinstance(name, str) and isinstance(kind, str) and isinstance(pattern, str):
+                specs.append(SourceSpec(name=name, kind=kind, glob=pattern))
+    return specs

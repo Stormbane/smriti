@@ -21,7 +21,7 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 
 **Live** (runs daily in the reference install):
 - `smriti write`, `smriti read`, and the MCP server (`python -m smriti.mcp_server`): dated markdown writes (which also regenerate the parent directories' `index.md` listings), and hybrid search (0.5 vector + 0.3 keyword + 0.2 trunk distance; the CLI also reranks, the MCP path doesn't).
-- Day-log capture: `smriti logd` merges Claude Code transcripts, Codex rollouts and voice transcripts into `log/YYYY/MM/DD.jsonl` (`src/smriti/daylog/`).
+- Day-log capture: `smriti logd` merges Claude Code transcripts, Codex rollouts and voice transcripts into `log/YYYY/MM/DD.jsonl` (`src/smriti/daylog/`). It is off until `<root>/.smriti/daylog.json` says `"capture": true` or lists `"sources"` (hardening H11.1).
 - `smriti nightly` (03:00): reconcile → render → digest (one `claude -p` call per day, `codex exec` as fallback) → week/month/year rollups → index → witness (a git commit plus an OpenTimestamps stamp) → status file.
 - `smriti morning` (07:00): one message a day composed from the digest, from the configured agent to the configured user; a profile can supply its own prompt (the reference profile's carries its persona).
 - The wake briefing: a SessionStart hook prints `smriti.wake.briefing()`, at most 9,500 characters.
@@ -47,7 +47,7 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 - **CLI:** 15 `smriti` subcommands: `backup`, `doctor`, `embed`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `recall`, `status`, `tasks`, `witness`, `write`. Nested: `embed` has `serve`, `status`, `stop`; `recall` has `query`, `status`, `stats`, `index`, `daemon`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 677 test functions in 55 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 691 test functions in 56 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 Regenerate with `python scripts/doc_facts.py --write`; `tests/test_doc_facts.py` fails when this block drifts from the code.

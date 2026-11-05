@@ -106,11 +106,14 @@ notes, captured day logs, digests, or rollups. Ignore rules do not untrack files
 already committed; check existing repositories before enabling remote backups.
 The search index excludes the private store and runtime state.
 
-Capture is chosen at install. `scripts/install.py` asks whether to capture
-conversations, or takes `--capture` / `--no-capture`; with neither a terminal nor a
-flag, a new memory root captures nothing, and an existing one keeps the sources its
-`daylog.json` has. When capture runs, its default sources are Claude Code
-transcripts, Codex rollouts, and voice transcript files. Configure
-`<memory-root>/.smriti/daylog.json` to limit these sources; `"sources": []` (what
-`--no-capture` writes) disables all defaults (`extra_sources` still adds explicit
-sources). There is no blanket anonymisation of captured conversations.
+Capture is off until it is configured, and is chosen at install.
+`<memory-root>/.smriti/daylog.json` turns it on with `"capture": true` (the default
+sources: Claude Code transcripts, Codex rollouts, and voice transcript files) or a
+`"sources"` list of its own; without either, or without the file, nothing is
+captured, and `smriti logd` and `smriti status` say so. `scripts/install.py` asks
+whether to capture conversations, or takes `--capture` (which writes
+`"capture": true`) / `--no-capture` (which writes `"sources": []`); with neither a
+terminal nor a flag, a new memory root captures nothing, and an existing one keeps
+what its `daylog.json` says (`extra_sources` still adds explicit sources). There is
+no blanket anonymisation of captured conversations; captured turns and
+`smriti_write` entries are scrubbed of credential-shaped strings.

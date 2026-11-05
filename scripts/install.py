@@ -99,7 +99,8 @@ def main(argv: list[str] | None = None) -> int:
         const=True,
         default=None,
         help="Capture conversations (Claude Code, Codex and voice transcripts) "
-             "into <root>/log/, which the backup commits and pushes",
+             "into <root>/log/, which the backup commits and pushes: set "
+             '"capture": true in <root>/.smriti/daylog.json (capture is off until it is set)',
     )
     capture.add_argument(
         "--no-capture",

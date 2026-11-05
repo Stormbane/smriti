@@ -24,9 +24,11 @@ first. Whatever git tracks reaches the remote as plain text, unless
 git-crypt encrypts it first. **smriti does not set up git-crypt.** With
 the memory template's `.gitignore`, that is:
 
-- **Your conversations, when capture is on.** `log/YYYY/MM/DD.jsonl` and
-  its render `DD.md` hold every message you typed and every reply the
-  agent wrote in Claude Code, Codex and the voice channel. Tool calls,
+- **Your conversations, when capture is on.** Capture is off until
+  `.smriti/daylog.json` says `"capture": true` or lists `"sources"`.
+  Then `log/YYYY/MM/DD.jsonl` and its render `DD.md` hold every message
+  you typed and every reply the agent wrote in Claude Code, Codex and the
+  voice channel. Tool calls,
   tool output and thinking are dropped. `daylog/scrub.py` masks strings
   shaped like credentials (provider API keys and tokens, JWTs, bearer
   headers, `password=` style assignments, passwords in URLs, private key
@@ -36,7 +38,9 @@ the memory template's `.gitignore`, that is:
   month and year rollups.
 - **Everything written to memory:** `identity.md`, `mind/`, `people/`,
   `open-threads/`, `journal/`, `projects/`, `notes/`, `sources/` and
-  `semantic/`.
+  `semantic/`. What `smriti_write` (or `smriti write`) saves goes through
+  the same credential scrub as captured turns; files edited directly
+  don't.
 - **Configuration and session files under `.smriti/`:** `daylog.json`
   (names, `location`, `notify_cmd`), `privacy.json` (the installer's
   record of your answers), `wake-context.md`, a pending handoff and its
@@ -59,14 +63,17 @@ git-crypt was set up stays readable in the remote's history.
 
 `scripts/install.py` asks before it changes anything:
 
-1. *Capture conversations into the day-log?* No writes `"sources": []`
-   into `<root>/.smriti/daylog.json` and keeps its other keys.
+1. *Capture conversations into the day-log?* Yes writes `"capture": true`
+   into `<root>/.smriti/daylog.json`, no writes `"sources": []`; either
+   keeps its other keys. Capture is off until the file turns it on: with
+   no `daylog.json`, or one with neither `"capture": true` nor `"sources"`,
+   nothing is captured, and `smriti logd` and `smriti status` say so.
 2. *Is the remote a private repository that only you can read?* Asked
    only when there is an `origin`.
 
 `--capture`/`--no-capture` and `--remote-is-private`/`--remote-not-private`
 answer them without a terminal. With neither, a new memory root captures
-nothing, and an existing one keeps its sources. The installer's last
+nothing, and an existing one keeps what its `daylog.json` says. The installer's last
 lines say what is captured, what is committed, and where it is pushed, in
 plaintext or through git-crypt. [INSTALL.md](INSTALL.md#privacy-capture-and-the-backup-remote)
 has the full rules.

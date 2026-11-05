@@ -3,7 +3,7 @@
 
 *smṛti*, Sanskrit: "that which is remembered".
 
-smriti gives one AI agent persistent memory and a continuous self across sessions and harnesses. The agent writes dated notes into a tree of plain markdown files and searches them with a local hybrid index. At the start of every session a hook prints a briefing: who the agent is, how last night went, the current project, the recent journal. In the background a day-log captures each conversation, and a nightly job digests it, rolls it up, reindexes the tree and timestamps it. It is all ordinary files on your disk (`~/.narada` by default), kept in git. It works with Claude Code and Codex, through MCP and session hooks.
+smriti gives one AI agent persistent memory and a continuous self across sessions and harnesses. The agent writes dated notes into a tree of plain markdown files and searches them with a local hybrid index. At the start of every session a hook prints a briefing: who the agent is, how last night went, the current project, the recent journal. In the background a day-log captures each conversation (once you turn capture on), and a nightly job digests it, rolls it up, reindexes the tree and timestamps it. It is all ordinary files on your disk (`~/.narada` by default), kept in git. It works with Claude Code and Codex, through MCP and session hooks.
 
 It is built for one long-lived agent identity, on one machine, working with one person. It grew inside the maintainer's own setup (the agent Narada, the user Suti) and is being generalised. It is alpha software; read [Status and limits](#status-and-limits) before installing.
 
@@ -98,12 +98,14 @@ The wake briefing is the *working self*: the part of memory present without a to
 
 ## Privacy
 
-**You choose at install whether your conversations are captured.** Capture copies every message you type and every reply the agent writes, from Claude Code transcripts, Codex rollouts and voice transcripts, into `<root>/log/`. The backup commits that with the rest of the memory tree and pushes it to the tree's git remote, in plaintext unless you set up git-crypt. Only a scrubber that masks strings shaped like credentials stands in between. So `scripts/install.py` asks two questions before it changes anything:
+**Capture is off until you turn it on.** Capture copies every message you type and every reply the agent writes, from Claude Code transcripts, Codex rollouts and voice transcripts, into `<root>/log/`. The backup commits that with the rest of the memory tree and pushes it to the tree's git remote, in plaintext unless you set up git-crypt. Only a scrubber that masks strings shaped like credentials stands in between. So nothing is captured until `<root>/.smriti/daylog.json` says `"capture": true` (those default sources) or lists `"sources"` of its own; without either, `smriti logd` captures nothing and says so, as does `smriti status`. `scripts/install.py` asks two questions before it changes anything:
 
-1. **Capture conversations into the day-log?** No sets `"sources": []` in `<root>/.smriti/daylog.json`, keeping the file's other keys.
+1. **Capture conversations into the day-log?** Yes sets `"capture": true` in `daylog.json`; no sets `"sources": []`. Either keeps the file's other keys.
 2. **Is the backup remote private?** Asked only when the tree has a remote named `origin`. smriti doesn't set up git-crypt; when the remote isn't confirmed private, the installer prints the steps.
 
-Flags answer them without a terminal: `--capture` or `--no-capture`, and `--remote-is-private` or `--remote-not-private`. With neither a terminal nor a flag, a new memory root captures nothing: capture can be turned on later, and the nightly then reads the transcripts still on disk, but a push can't be taken back. An existing root keeps the sources its `daylog.json` has. The answers are recorded in `<root>/.smriti/privacy.json`, so a rerun doesn't ask again, and the installer's last lines say what is captured, what is committed and where it is pushed. [`docs/INSTALL.md`](docs/INSTALL.md#privacy-capture-and-the-backup-remote) has the details.
+Flags answer them without a terminal: `--capture` or `--no-capture`, and `--remote-is-private` or `--remote-not-private`. With neither a terminal nor a flag, a new memory root captures nothing: capture can be turned on later, and the nightly then reads the transcripts still on disk, but a push can't be taken back. An existing root keeps what its `daylog.json` says, and one that says neither `"capture": true` nor `"sources"` captures nothing (until hardening H11.1 it captured every transcript). The answers are recorded in `<root>/.smriti/privacy.json`, so a rerun doesn't ask again, and the installer's last lines say what is captured, what is committed and where it is pushed. [`docs/INSTALL.md`](docs/INSTALL.md#privacy-capture-and-the-backup-remote) has the details.
+
+**Memory writes are scrubbed too.** `smriti_write` and `smriti write` mask the same credential shapes in an entry's text, title and source before it is saved.
 
 **What leaves the machine:**
 - **Backups** push everything git tracks in the tree: the memory notes, the captured conversations and their renders, the digests and rollups, and `daylog.json`. The template's `.gitignore` keeps out the index, metrics, runtime state and the private store's key. Even with git-crypt, file names, sizes and commit messages stay readable. [`docs/PRIVACY.md`](docs/PRIVACY.md#what-is-pushed-in-the-clear) lists it all.
@@ -175,7 +177,7 @@ The embedding service reads three environment variables: `SMRITI_EMBED_SERVICE=0
 - **CLI:** 15 `smriti` subcommands: `backup`, `doctor`, `embed`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `recall`, `status`, `tasks`, `witness`, `write`. Nested: `embed` has `serve`, `status`, `stop`; `recall` has `query`, `status`, `stats`, `index`, `daemon`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 677 test functions in 55 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 691 test functions in 56 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 **CLI.** `smriti --help` lists the commands; each takes `--help`.

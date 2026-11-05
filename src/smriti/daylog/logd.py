@@ -1,7 +1,9 @@
 """``smriti logd`` — the day-log watcher daemon.
 
 A polling tail over the configured source globs: one collection pass
-every few seconds, forever. Recovery is structural, not heroic — the
+every few seconds, forever. With no source configured (capture is off
+until daylog.json turns it on) a pass reads nothing, and logd says so
+when it starts and whenever daylog.json changes. Recovery is structural, not heroic — the
 pass is idempotent (dedup + persisted marks), so the supervisor can
 kill and restart this process at any moment with no loss and no
 duplicates; anything missed while down is backfilled by the next pass
@@ -19,7 +21,7 @@ from pathlib import Path
 from typing import IO
 
 from smriti.daylog.collect import collect_once
-from smriti.daylog.config import DaylogConfig, load_config
+from smriti.daylog.config import DaylogConfig, capture_note, load_config
 
 log = logging.getLogger(__name__)
 
@@ -30,10 +32,19 @@ _ERROR_BACKOFF_S = 30.0
 def _config_stamp(cfg: DaylogConfig) -> tuple[int, int] | None:
     """daylog.json's (mtime_ns, size), or None when there is none."""
     try:
-        st = (cfg.root / ".smriti" / "daylog.json").stat()
+        st = cfg.daylog_path.stat()
     except OSError:
         return None
     return (st.st_mtime_ns, st.st_size)
+
+
+def _say_what_is_captured(cfg: DaylogConfig, *, changed: bool = False) -> None:
+    """Log the sources being watched, or, loudly, that capture is off and how to turn it on."""
+    now = "daylog.json changed; " if changed else ""
+    if cfg.sources:
+        log.info("logd: %swatching %d sources -> %s", now, len(cfg.sources), cfg.log_dir)
+    else:
+        log.warning("logd: %scapture is %s", now, capture_note(cfg))
 
 
 def _pid_path(cfg: DaylogConfig) -> Path:
@@ -134,14 +145,13 @@ def run_logd(
         _pid_path(cfg).write_text(str(__import__("os").getpid()), encoding="ascii")
     except OSError:
         pass  # keepalive degrades to always-spawn; dedup keeps that safe
-    log.info("logd: watching %d sources -> %s", len(cfg.sources), cfg.log_dir)
+    _say_what_is_captured(cfg)
     while max_passes is None or passes < max_passes:
         passes += 1
         try:
             if follow_config and (stamp := _config_stamp(cfg)) != config_stamp:
                 cfg, config_stamp = load_config(cfg.root), stamp
-                log.info("logd: daylog.json changed; now watching %d sources",
-                         len(cfg.sources))
+                _say_what_is_captured(cfg, changed=True)
             report = collect_once(cfg)
             if report.appended:
                 log.info(

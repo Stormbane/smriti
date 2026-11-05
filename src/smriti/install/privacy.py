@@ -1,23 +1,26 @@
 """The installer's two privacy questions: capture, and the backup remote.
 
-Left to its defaults, the day-log copies every conversation the agent has
+Once capture is on, the day-log copies every conversation the agent has
 (Claude Code transcripts, Codex rollouts, voice transcripts) into the
 memory tree's ``log/``, and the backup commits the tree and pushes it to
 the git remote ``origin``, in plaintext unless git-crypt encrypts it. Only
-a pattern-based credential scrubber stands in between. So the installer
-makes the person choose, and says what follows:
+a pattern-based credential scrubber stands in between. Capture is off
+until ``daylog.json`` turns it on (:mod:`smriti.daylog.config`), so the
+installer makes the person choose, and says what follows:
 
-1. Capture conversations into the day-log? "No" writes ``"sources": []``
-   into ``<root>/.smriti/daylog.json`` and keeps every other key.
+1. Capture conversations into the day-log? "Yes" writes ``"capture": true``
+   (the default sources) into ``<root>/.smriti/daylog.json``; "No" writes
+   ``"sources": []``. Either keeps every other key.
 2. Is the backup remote private? Asked only when there is a remote.
    smriti never sets up git-crypt; it prints the steps instead.
 
 A flag answers a question; otherwise a terminal is asked. With neither, a
 new memory root captures nothing, because capture can be turned on later
 (the nightly then reads the transcripts still on disk) while a push can't
-be taken back; an existing root keeps the sources its ``daylog.json`` has.
-A person's answers are recorded in ``<root>/.smriti/privacy.json``, so a
-rerun doesn't ask again.
+be taken back; an existing root keeps what its ``daylog.json`` says. A
+person's answers are recorded in ``<root>/.smriti/privacy.json``, so a
+rerun doesn't ask again. A "yes" recorded before capture needed saying so
+in ``daylog.json`` (it used to be the default) is written out there.
 
 The installer calls :func:`decide` before it changes anything, then
 :func:`apply` after the core install, and prints :func:`summary` last.
@@ -83,6 +86,9 @@ PROMPT = "prompt"
 KEPT = "kept"
 DEFAULT = "default"
 SKIPPED = "skipped"
+# An answer recorded before H11.1, written into daylog.json: until then a
+# "yes" left daylog.json to the default sources, which now capture nothing.
+RECORDED = "recorded"
 _ANSWERED = (FLAG, PROMPT)
 
 CAPTURE_QUESTION = "Capture conversations into the day-log?"
@@ -270,25 +276,43 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 def set_capture(root: Path, enabled: bool) -> str | None:
     """Make ``daylog.json`` capture, or capture nothing. Returns what changed.
 
-    Only the ``sources`` key is touched. Off sets it to ``[]``, creating the
-    file if needed; on removes an empty ``sources`` so the defaults apply,
-    and leaves a list of the file's own sources alone. ``extra_sources``
-    is never touched, so its sources are still captured either way.
+    Only the ``capture`` and ``sources`` keys are touched, and the file is
+    created if needed. On sets ``"capture": true``, so the default sources
+    apply, and removes an empty ``sources``; a list of the file's own
+    sources is left alone, as it captures already. Off sets ``"sources": []``,
+    which every version of smriti reads as nothing (a logd still running
+    older code included, which would take a missing file or a missing
+    ``sources`` for the defaults), and drops ``"capture": true``.
+    ``extra_sources`` is never touched, so its sources are still captured
+    either way.
     """
     path = daylog_path(root)
-    data = read_daylog(root)
+    data = read_daylog(root) or {}
+    sources = data.get("sources")
+    changes: list[str] = []
     if enabled:
-        if data is None or data.get("sources") != []:
+        if isinstance(sources, list) and sources:
             return None
-        del data["sources"]
+        if sources == []:
+            del data["sources"]
+            changes.append('removed "sources": []')
+        if data.get("capture") is not True:
+            data["capture"] = True
+            changes.append('set "capture": true')
+        if not changes:
+            return None
         _write_json(path, data)
-        return f'removed "sources": [] from {path}, so the default sources apply'
-    if data is not None and data.get("sources") == []:
+        return f"{' and '.join(changes)} in {path}, so the default sources apply"
+    if sources != []:
+        data["sources"] = []
+        changes.append('set "sources": []')
+    if data.get("capture") is True:
+        del data["capture"]
+        changes.append('removed "capture": true')
+    if not changes:
         return None
-    data = {} if data is None else data
-    data["sources"] = []
     _write_json(path, data)
-    return f'set "sources": [] in {path}'
+    return f"{' and '.join(changes)} in {path}"
 
 
 # ── State ───────────────────────────────────────────────────────────
@@ -584,17 +608,29 @@ def decide(
     Raises :class:`PrivacyConfigError` before asking anything when
     ``daylog.json`` can't be edited safely.
     """
-    read_daylog(root)
+    daylog = read_daylog(root)
     record = read_record(root)
     existing = is_existing_install(root)
-    current = bool(capture_sources(root))
+    config = load_config(root)
+    current = bool(config.sources)
     git = inspect_git(root)
     notices: list[str] = []
 
     choice: Choice | None = None
+    answered = _answer(record, "capture")
     if capture is not None:
         choice = Choice(capture, FLAG)
-    elif _answer(record, "capture") is not None:
+    elif (answered is not None and answered.get("enabled") is True
+          and (daylog is None or not {"capture", "sources"} & daylog.keys())):
+        # Answered yes when a daylog.json without "capture" or "sources" (or
+        # none at all) meant the default sources; since H11.1 it means
+        # nothing (or only extra_sources), so the recorded answer is written out.
+        choice = Choice(True, RECORDED)
+        notices.append(
+            'capture is on, as you answered before (.smriti/privacy.json): .smriti/daylog.json '
+            'now says "capture": true, which capture needs since it stopped being the default.'
+        )
+    elif answered is not None:
         choice = Choice(current, KEPT)  # chosen before; daylog.json holds it
     elif interactive:
         print(capture_explanation(root))
@@ -603,13 +639,9 @@ def decide(
             choice = Choice(answer, PROMPT)
     if choice is None and existing:
         choice = Choice(current, KEPT)
-        why = (
-            ".smriti/daylog.json says so"
-            if daylog_path(root).exists()
-            else "there is no .smriti/daylog.json, so the default sources apply"
-        )
+        why = ".smriti/daylog.json says so" if current else config.capture_off
         notices.append(
-            f"capture is {'on' if current else 'off'} because {why}; nobody has chosen it "
+            f"capture is {'on' if current else 'OFF'} because {why}; nobody has chosen it "
             "at install. Pass --capture or --no-capture to choose."
         )
     elif choice is None:
@@ -659,13 +691,14 @@ def apply(root: Path, plan: PrivacyPlan, *, now: datetime | None = None) -> list
     changes: list[str] = []
     record = read_record(root)
     dirty = False
-    if plan.capture.how in (FLAG, PROMPT, DEFAULT):
+    if plan.capture.how in (FLAG, PROMPT, DEFAULT, RECORDED):
         enabled = bool(plan.capture.value)
         change = set_capture(root, enabled)
         if change:
             changes.append(change)
-        record["capture"] = {"enabled": enabled, "how": plan.capture.how, "at": stamp}
-        dirty = True
+        if plan.capture.how != RECORDED:  # that answer is in the record already
+            record["capture"] = {"enabled": enabled, "how": plan.capture.how, "at": stamp}
+            dirty = True
     if plan.remote.how in _ANSWERED:
         record["remote"] = {
             "urls": plan.git.remote_key,  # the answer covers exactly these
@@ -689,14 +722,15 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
     Git is asked again: the core install may have added the template's
     ``.gitignore`` since :func:`decide` looked.
     """
-    sources = capture_sources(root)
+    config = load_config(root)
+    sources = config.sources
     git = inspect_git(root)
     what = describe_sources(sources)
     lines = ["", "privacy:"]
     if sources:
         lines.append(f"  captured:  {what}, copied into {root / 'log'} as you talk")
     else:
-        lines.append('  captured:  nothing ("sources": [] in .smriti/daylog.json)')
+        lines.append(f"  captured:  nothing ({config.capture_off or 'no sources are configured'})")
     lines.append(
         "             (a running smriti logd rereads .smriti/daylog.json when it changes, "
         "on its next pass, within a few seconds)"

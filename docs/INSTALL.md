@@ -94,20 +94,27 @@ or after the smriti repo's `narada/` templates change.
 
 ### Privacy: capture and the backup remote
 
-Left to its defaults, `smriti logd` copies every message you type and
+Once capture is on, `smriti logd` copies every message you type and
 every reply the agent writes, from Claude Code transcripts, Codex rollouts
 and voice transcripts, into `<root>/log/`, masking only strings shaped
 like credentials. The backup commits the tree, `log/` included, and pushes
-it to the remote `origin` in plaintext unless git-crypt encrypts it. The
-installer therefore asks two questions before it changes anything:
+it to the remote `origin` in plaintext unless git-crypt encrypts it.
+Capture is therefore off until `<root>/.smriti/daylog.json` turns it on:
+with no such file, or one with neither `"capture": true` nor a `"sources"`
+list, nothing is captured, and `smriti logd` (at start and whenever the
+file changes) and `smriti status` say why and how to turn it on. Until
+hardening H11.1 such an install captured every transcript on the machine.
+The installer asks two questions before it changes anything:
 
-1. **"Capture conversations into the day-log?"** No sets `"sources": []`
-   in `<root>/.smriti/daylog.json`. Only that key changes: the file's
-   other keys are kept, and `extra_sources` still adds its own sources.
-   Yes removes an empty `"sources": []`, so the defaults apply again; a
-   list of your own sources is left alone. A running `smriti logd`
-   rereads `daylog.json` when it changes, so the choice reaches it on its
-   next pass, within a few seconds.
+1. **"Capture conversations into the day-log?"** Yes sets
+   `"capture": true` in `<root>/.smriti/daylog.json`, which turns on the
+   default sources, and removes an empty `"sources": []`; a list of your
+   own sources is left alone. No sets `"sources": []` (which an older
+   `smriti logd` still running also reads as nothing) and drops
+   `"capture": true`. Only those keys change: the file's other keys are
+   kept, and `extra_sources` still adds its own sources. A running
+   `smriti logd` rereads `daylog.json` when it changes, so the choice
+   reaches it on its next pass, within a few seconds.
 2. **"Is `<url>` a private repository that only you can read?"** Asked
    only when the memory root is a git repository with a remote named
    `origin`; otherwise the installer says there is no remote and skips
@@ -138,15 +145,18 @@ How each question is settled, in order:
 | Answered before, by a flag or at a prompt | Kept; not asked again | Kept, while `origin` has the same push URLs; adding, removing or changing one asks again |
 | A terminal (stdin and stdout) | Asked. A new root needs `y` or `n`; on an existing one, Enter keeps what `daylog.json` does now | Asked; needs `y` or `n` |
 | No terminal, no flag, new root | **Off**: `"sources": []`, with a note | Not confirmed private: the summary says so and prints the git-crypt steps |
-| No terminal, no flag, existing root | `daylog.json` is left as it is, with a note | The same |
+| No terminal, no flag, existing root | `daylog.json` is left as it is, with a note saying whether it captures | The same |
 
 An existing root is one with `.smriti/daylog.json`, `.smriti/wake.py` or
 `log/`. Without a terminal, capture stays off for a new root because it
 can be turned on later (re-run with `--capture`; the nightly then reads
 the transcripts still on disk) while a push can't be taken back. A
+"yes" recorded before H11.1, whose `daylog.json` says neither `"capture"`
+nor `"sources"` (or that has none), relied on the old default; a rerun
+writes `"capture": true` for it, with a note, and asks nothing. A
 `daylog.json` that isn't a JSON object makes the installer stop before
-changing anything: capture would otherwise ignore it and run on the
-defaults.
+changing anything: capture would otherwise ignore it and capture
+nothing.
 
 The answers are recorded in `<root>/.smriti/privacy.json` (when, how,
 and the remote's push URLs without credentials), and the installer's last
@@ -260,12 +270,13 @@ lists every nightly step with what it writes.
 
 One small JSON file in the memory root configures capture, the nightly,
 the morning and the profile. Every key is optional; without the file the
-defaults apply.
+defaults apply, and capture is off.
 
 | Key | Default | What it does |
 |---|---|---|
-| `sources` | Claude Code, Codex, voice transcripts | Capture globs, `[{"name", "kind", "glob"}]`; replaces the defaults. `[]` captures nothing (the installer's `--no-capture`) |
-| `extra_sources` | none | Capture globs added to the defaults |
+| `capture` | off | `true` captures from the default sources: Claude Code transcripts (`~/.claude/projects/*/*.jsonl`), Codex rollouts (`~/.codex/sessions/*/*/*/rollout-*.jsonl`) and voice transcripts (`<root>/heartbeat/voice-transcripts/*/*.md`); the installer's `--capture` sets it. `false` captures nothing, whatever `sources` and `extra_sources` list |
+| `sources` | none | Capture globs, `[{"name", "kind", "glob"}]`; replaces the default sources, `capture` or not. `[]` captures nothing (the installer's `--no-capture`) |
+| `extra_sources` | none | Capture globs added to whichever of the above applies |
 | `notify_cmd` | none | The command `smriti morning` pipes its message to; no command, no morning |
 | `location` | none | Where the user lives, for the morning's local headlines |
 | `user_name` | `"User"` | The user's display name: the day render, the presence line, the nightly and morning prompts, the core tools' text, the reading list's person file (`people/<name>/<name>.md`) |

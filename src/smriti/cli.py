@@ -125,6 +125,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
     if not db_path.exists():
         print("Status:     Not indexed (run 'smriti index')")
+        _print_daylog_status()
         return 0
 
     # Read-only, like smriti read and the MCP server: a status check has no
@@ -159,16 +160,23 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(f"Embedding:  {service_state(root).describe()}")
     except Exception as exc:  # noqa: BLE001 — status must always print
         print(f"Embedding:  unavailable ({exc})")
+    _print_daylog_status()
+    return 0
 
-    # Day-log capture health (per-source; scan recency defines liveness).
+
+def _print_daylog_status() -> None:
+    """Whether capture is on, and then each source's health (scan recency defines liveness)."""
     try:
-        from smriti.daylog.config import load_config as _daylog_config
-        from smriti.daylog.state import DaylogState as _DaylogState
+        from smriti.daylog.config import capture_note, load_config
+        from smriti.daylog.state import DaylogState
 
-        _cfg = _daylog_config()
-        if _cfg.state_path.exists():
+        cfg = load_config()
+        print(f"Capture:    {capture_note(cfg)}")
+        if not cfg.sources:
+            return  # nothing to scan, so nothing is stalled or not started
+        if cfg.state_path.exists():
             print("Day-log:")
-            for name, h in sorted(_DaylogState.load(_cfg.state_path).health().items()):
+            for name, h in sorted(DaylogState.load(cfg.state_path).health().items()):
                 scan = h["scan_age_s"]
                 scanning = "STALLED" if (scan == -1 or float(scan) > 600) else "scanning"
                 print(
@@ -179,7 +187,6 @@ def _cmd_status(args: argparse.Namespace) -> int:
             print("Day-log:    not started (run 'smriti logd')")
     except Exception as exc:  # noqa: BLE001 — status must always print
         print(f"Day-log:    unavailable ({exc})")
-    return 0
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:

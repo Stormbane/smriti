@@ -16,6 +16,8 @@ def test_turning_capture_off_reaches_a_running_daemon(monkeypatch: pytest.Monkey
     """Codex review of H9.11: logd loaded its config once, so the installer's
     --no-capture changed the file but the daemon kept capturing."""
     config = tree_root() / ".smriti" / "daylog.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps({"capture": True}), encoding="utf-8")
     seen: list[int] = []
 
     def collect(cfg: object) -> object:

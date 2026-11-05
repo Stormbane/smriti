@@ -164,9 +164,26 @@ class TestCaptureChoice:
 
         decide_and_apply(root, capture=True)
 
-        assert read_daylog(root) == {"profile": "x", "user_name": "Sam"}
+        assert read_daylog(root) == {"profile": "x", "user_name": "Sam", "capture": True}
         kinds = {spec.kind for spec in privacy.capture_sources(root)}
         assert kinds == {"claude_jsonl", "codex_rollout", "voice_md"}
+
+    def test_capture_says_so_in_daylog_json(self, root: Path) -> None:
+        """H11.1: capture is off unless daylog.json turns it on, so yes writes it there."""
+        write_daylog(root, {"user_name": "Sam"})
+
+        decide_and_apply(root, capture=True)
+
+        assert read_daylog(root) == {"user_name": "Sam", "capture": True}
+        assert {spec.name for spec in privacy.capture_sources(root)} == {
+            "claude", "codex", "voice"}
+
+    def test_no_capture_drops_capture_true(self, root: Path) -> None:
+        write_daylog(root, {"capture": True, "user_name": "Sam"})
+
+        decide_and_apply(root, capture=False)
+
+        assert read_daylog(root) == {"user_name": "Sam", "sources": []}
 
     def test_capture_leaves_custom_sources_alone(self, root: Path) -> None:
         custom = {"sources": [{"name": "mine", "kind": "claude_jsonl", "glob": "/a/*.jsonl"}]}
@@ -222,7 +239,8 @@ class TestNoTerminal:
         assert "--capture" in text
 
     def test_existing_daylog_is_kept_byte_for_byte(self, root: Path) -> None:
-        path = write_daylog(root, {"user_name": "Sam", "agent_name": "Ari", "profile": "x"})
+        path = write_daylog(root, {"user_name": "Sam", "agent_name": "Ari", "profile": "x",
+                                   "capture": True})
         before = path.read_bytes()
 
         plan = decide_and_apply(root)
@@ -230,6 +248,21 @@ class TestNoTerminal:
         assert plan.capture == privacy.Choice(True, privacy.KEPT)
         assert path.read_bytes() == before
         assert "capture is on because .smriti/daylog.json says so" in privacy.summary(root, plan)
+
+    def test_an_existing_daylog_that_never_chose_captures_nothing(self, root: Path) -> None:
+        """H11.1: no "capture" and no "sources" was every transcript on the machine."""
+        path = write_daylog(root, {"user_name": "Sam", "agent_name": "Ari", "profile": "x"})
+        before = path.read_bytes()
+
+        plan = decide_and_apply(root)
+
+        assert plan.capture == privacy.Choice(False, privacy.KEPT)
+        assert path.read_bytes() == before
+        text = " ".join(privacy.summary(root, plan).split())
+        assert ('captured: nothing (.smriti/daylog.json neither says "capture": true nor '
+                'lists "sources")') in text
+        assert "capture is OFF because .smriti/daylog.json neither says" in text
+        assert "--capture" in text
 
     def test_existing_daylog_with_capture_off_stays_off(self, root: Path) -> None:
         path = write_daylog(root, {"sources": [], "user_name": "Sam"})
@@ -240,16 +273,19 @@ class TestNoTerminal:
         assert plan.capture == privacy.Choice(False, privacy.KEPT)
         assert path.read_bytes() == before
 
-    def test_existing_install_without_daylog_keeps_its_defaults(self, root: Path) -> None:
-        """An install from before the question, which has been capturing."""
+    def test_existing_install_without_daylog_captures_nothing(self, root: Path) -> None:
+        """An install from before the question. Until H11.1 it captured every
+        transcript on the machine; now it captures nothing until told to."""
         (root / ".smriti").mkdir(parents=True)
         (root / ".smriti" / "wake.py").write_text("# smriti wake\n", encoding="utf-8")
 
         plan = decide_and_apply(root)
 
-        assert plan.capture == privacy.Choice(True, privacy.KEPT)
+        assert plan.capture == privacy.Choice(False, privacy.KEPT)
         assert not privacy.daylog_path(root).exists()
-        assert "there is no .smriti/daylog.json" in privacy.summary(root, plan)
+        text = privacy.summary(root, plan)
+        assert "captured:  nothing (there is no .smriti/daylog.json)" in text
+        assert "capture is OFF because there is no .smriti/daylog.json" in text
 
     def test_a_default_is_not_an_answer(self, root: Path) -> None:
         """The next run with a terminal still asks."""
@@ -289,14 +325,24 @@ class TestPrompts:
         assert read_daylog(root) == {"sources": []}
 
     def test_existing_root_offers_its_current_state(self, root: Path) -> None:
-        write_daylog(root, {"user_name": "Sam"})
+        write_daylog(root, {"user_name": "Sam", "capture": True})
         read, asked = answers("")
 
         plan = decide_and_apply(root, interactive=True, read=read)
 
         assert asked == [f"{privacy.CAPTURE_QUESTION} [Y/n] "]
         assert plan.capture == privacy.Choice(True, privacy.PROMPT)
-        assert read_daylog(root) == {"user_name": "Sam"}
+        assert read_daylog(root) == {"user_name": "Sam", "capture": True}
+
+    def test_existing_root_that_never_chose_offers_off(self, root: Path) -> None:
+        write_daylog(root, {"user_name": "Sam"})
+        read, asked = answers("")
+
+        plan = decide_and_apply(root, interactive=True, read=read)
+
+        assert asked == [f"{privacy.CAPTURE_QUESTION} [y/N] "]
+        assert plan.capture == privacy.Choice(False, privacy.PROMPT)
+        assert read_daylog(root) == {"user_name": "Sam", "sources": []}
 
     def test_end_of_input_falls_back_to_the_safe_default(self, root: Path) -> None:
         read, _ = answers()
@@ -322,6 +368,69 @@ class TestPrompts:
         decide_and_apply(root, capture=True, interactive=True, read=no_prompt)
 
         assert "sources" not in read_daylog(root)  # type: ignore[operator]
+
+
+def record_a_yes(root: Path, daylog: dict[str, object] | None) -> dict[str, object]:
+    """What a "yes" left behind before H11.1: the answer recorded, and daylog.json
+    as it was (none, for a new root), since the defaults captured then."""
+    if daylog is not None:
+        write_daylog(root, daylog)
+    entry = {"enabled": True, "how": "flag", "at": "2026-11-01T09:00:00+00:00"}
+    path = privacy.record_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"capture": entry}), encoding="utf-8")
+    return entry
+
+
+class TestUpgrade:
+    """H11.1 turned capture off unless daylog.json turns it on. A yes given
+    before then left daylog.json to the defaults, so a rerun writes it out."""
+
+    @pytest.mark.parametrize("daylog,after", [
+        (None, {"capture": True}),
+        ({"user_name": "Sam"}, {"user_name": "Sam", "capture": True}),
+        ({"extra_sources": [{"name": "phone", "kind": "voice_md", "glob": "/p/*.md"}]},
+         {"extra_sources": [{"name": "phone", "kind": "voice_md", "glob": "/p/*.md"}],
+          "capture": True}),
+    ])
+    def test_a_recorded_yes_is_written_out(self, root: Path, daylog: dict[str, object] | None,
+                                           after: dict[str, object]) -> None:
+        entry = record_a_yes(root, daylog)
+        assert {s.name for s in privacy.capture_sources(root)} <= {"phone"}  # off, or extras
+
+        plan = decide_and_apply(root, interactive=True, read=no_prompt)
+
+        assert plan.capture == privacy.Choice(True, privacy.RECORDED)
+        assert read_daylog(root) == after
+        assert {"claude", "codex", "voice"} <= {s.name for s in privacy.capture_sources(root)}
+        record = json.loads(privacy.record_path(root).read_text(encoding="utf-8"))
+        assert record["capture"] == entry  # the person's answer, as they gave it
+        assert 'now says "capture": true' in privacy.summary(root, plan)
+        # And the next run keeps it, asking nothing.
+        assert decide_and_apply(root, read=no_prompt).capture == privacy.Choice(
+            True, privacy.KEPT)
+
+    @pytest.mark.parametrize("daylog", [{"sources": []}, {"capture": False},
+                                        {"sources": [], "user_name": "Sam"}])
+    def test_a_later_edit_to_off_is_kept(self, root: Path, daylog: dict[str, object]) -> None:
+        record_a_yes(root, daylog)
+        path = privacy.daylog_path(root)
+        before = path.read_bytes()
+
+        plan = decide_and_apply(root)
+
+        assert plan.capture == privacy.Choice(False, privacy.KEPT)
+        assert path.read_bytes() == before
+
+    def test_a_recorded_no_stays_no(self, root: Path) -> None:
+        record = {"capture": {"enabled": False, "how": "prompt", "at": "2026-11-01T09:00:00"}}
+        privacy.record_path(root).parent.mkdir(parents=True)
+        privacy.record_path(root).write_text(json.dumps(record), encoding="utf-8")
+
+        plan = decide_and_apply(root)
+
+        assert plan.capture == privacy.Choice(False, privacy.KEPT)
+        assert not privacy.daylog_path(root).exists()
 
 
 # ── The backup remote ───────────────────────────────────────────────
@@ -922,7 +1031,7 @@ class TestInstaller:
     ) -> None:
         assert run_installer(installer, root, "--capture") == 0
 
-        assert not privacy.daylog_path(root).exists()
+        assert read_daylog(root) == {"capture": True}
         record = json.loads(privacy.record_path(root).read_text(encoding="utf-8"))
         assert record["capture"]["enabled"] is True
         assert record["capture"]["how"] == "flag"
@@ -941,7 +1050,7 @@ class TestInstaller:
         self, installer: ModuleType, root: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         path = write_daylog(root, {"user_name": "Sam", "agent_name": "Ari",
-                                   "notify_cmd": ["notify"]})
+                                   "notify_cmd": ["notify"], "capture": True})
         before = path.read_bytes()
 
         assert run_installer(installer, root) == 0
