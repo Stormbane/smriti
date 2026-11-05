@@ -343,6 +343,36 @@ rejection sound (66 sessions at 250 MB is still about 16.5 GB).
   and a morning that refuses to send. Its root doesn't move (`~/.narada` exists, and
   the hooks set `SMRITI_ROOT`).
 
+## H12. From outside review #5 (B- and B+, at `bcec9a2`, v0.2.0)
+
+Every problem review #4 named is fixed. Opus's five are new, one layer deeper:
+packaging, privacy and module boundaries. All five, and the torn day-log line,
+were checked against the code and hold. Sonnet's first (broad excepts without the
+convention's reason) holds as a gap between the written rule and ruff's, which
+accepts a handler that logs or re-raises. In order:
+
+| # | Change | Acceptance |
+|---|---|---|
+| H12.1 | Credentials are masked on every path into the tree: the project tools (findings and their per-tag stubs, decisions, feature specs, todos), the handoff, and what the digest and rollups write. | A planted credential shape is masked on each path; one test per path. |
+| H12.2 | The nightly's codex fallback is opt-in (`"nightly_fallback": "codex_cli"` in daylog.json, or `SMRITI_NIGHTLY_FALLBACK`), since its sandbox can read the user's files while it reads untrusted transcripts. The reference install turns it on. | Tests for both settings; PRIVACY.md. |
+| H12.3 | Keyword search keeps non-ASCII terms: each term is quoted for FTS5 instead of stripped to `[A-Za-z0-9_]`. | Tests with `café`, Devanagari (`स्मृति`) and CJK queries, keyword-only. |
+| H12.4 | A wheel install runs its installer: the deployed scripts and the memory template move into the package and are read with `importlib.resources`; no `C:/Projects` default (projects are linked only when `--projects-root` is given). | A CI job installs the built wheel in a fresh venv and installs into a temporary home. |
+| H12.5 | One provider-selection rule, used by the indexer and the service (today the env override wins in one and the recorded provider in the other); names used across modules made public (no private imports between packages); `serverInfo.version` from `smriti.__version__`; the `smriti_add_todo` text matches its whole-phrase match; `search_with_status` builds its results once. | A test for the shared rule; a test that no module imports another package's private name; a version test. |
+| H12.6 | The day-log writer repairs a torn last line before appending (a newline first when the file doesn't end in one); the service's counters are locked. | A test with a truncated line: the next turn parses. |
+| H12.7 | Every `except Exception` that stays carries `# noqa: BLE001 — <reason>`, or is narrowed (the API providers to their SDK's error base). | A test that scans `src/` and fails on a broad except without the reason. |
+| H12.8 | The legacy integrations go: the Hermes harness, the qmd recall backend, the PreCompact staging hook and the ambient-recall hook. The reference install still runs a PreCompact capture hook in Claude Code and in Codex, so its own switch-over comes first. | Removed with their tests; doc facts; the reference install's hooks updated. |
+| H12.9 | A weekly CI job runs the `needs_model` tests with the model cached. | The job, green. |
+| H12.10 | Outside review #6. | Grades recorded. |
+
+Not doing:
+- **Masking stays pattern-based** (Sonnet 2): it catches credential shapes and
+  says so. A PII framework is out of scope.
+- **The bus factor and the shape of one setup** (Sonnet 3 and 4) aren't code
+  changes. H11.6 took the setup's own code out of the package.
+- **Incident history in comments** (Sonnet 5, Opus on readability): a pass that
+  keeps each comment's rule and moves its story to the commit message belongs
+  with the modules H12 touches, not a sweep of its own.
+
 ## Status
 
 Updated as phases land. Each phase had a Codex diff review, fixes for every
@@ -400,7 +430,9 @@ a recheck.
   stack's stubs reached through huggingface_hub. Left for H11: during a cold start
   each search waits its full 3 s before falling back; it should fall back at once
   while the service says it is starting.
-- **H11**: in progress. Done: H11.1-H11.7, H11.9, H11.10. Next: H11.8.
+- **H11**: done. H11.8: outside review #5 at `bcec9a2` graded B- and B+; its
+  findings are H12.
+- **H12**: planned, awaiting approval.
 - **H11.1, H11.5, H11.10 done** (2026-11-06, merged at `498ce0e` after a Codex diff
   review; its two findings, the capture override and the metrics scrub, fixed). Capture is off unless `daylog.json` says
   `"capture": true` (the default sources; the installer's `--capture` writes it) or
