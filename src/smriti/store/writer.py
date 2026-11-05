@@ -26,6 +26,8 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from smriti.core.frontmatter import one_line
+
 log = logging.getLogger(__name__)
 
 
@@ -136,7 +138,9 @@ def write_entry(
     else:
         entry_path = _flat_path(root, branch, now_local)
 
-    heading = title or f"Entry {now_local.strftime('%Y-%m-%d %H:%M')}"
+    # Folded to one line: a newline in either could forge frontmatter keys.
+    heading = one_line(title or "") or f"Entry {now_local.strftime('%Y-%m-%d %H:%M')}"
+    source = one_line(source_hint or "")
 
     # Build the entry block
     entry_lines = [
@@ -145,8 +149,8 @@ def write_entry(
         f"time: {now_utc.strftime('%H:%M:%S')} UTC",
         f"branch: {branch}",
     ]
-    if source_hint:
-        entry_lines.append(f"source: {source_hint}")
+    if source:
+        entry_lines.append(f"source: {source}")
     entry_lines.append("---")
     entry_lines.append("")
     entry_lines.append(f"# {heading}")

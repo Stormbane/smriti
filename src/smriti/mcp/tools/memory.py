@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from smriti.core.frontmatter import one_line
 from smriti.mcp.tool import Arguments, Tool, ToolError
 
 if TYPE_CHECKING:
@@ -71,8 +72,8 @@ def handle_write(arguments: Arguments) -> str:
     path = write_entry(
         content,
         branch=arguments.get("branch", "journal"),
-        title=arguments.get("title") or None,
-        source_hint=arguments.get("source") or None,
+        title=one_line(arguments.get("title") or "") or None,
+        source_hint=one_line(arguments.get("source") or "") or None,
         reindex=True,
     )
     return f"Written: {path}"
@@ -118,7 +119,7 @@ def handle_write_handoff(arguments: Arguments) -> str:
     from smriti.core.tree import tree_root
 
     content = arguments.get("content", "").strip()
-    summary = arguments.get("summary", "").strip()
+    summary = one_line(arguments.get("summary", ""))
     if not content:
         raise ToolError("content is required.")
 

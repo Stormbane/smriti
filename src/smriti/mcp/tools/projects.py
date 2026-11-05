@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from smriti.core.frontmatter import one_line
 from smriti.mcp.tool import Arguments, Tool, ToolError
+
+# Characters that would end or split the frontmatter's [tag, tag] list.
+_LIST_SYNTAX = str.maketrans("[],", "   ")
 
 
 def _slugify(text: str, max_len: int = 60) -> str:
@@ -55,7 +59,7 @@ def handle_add_todo(arguments: Arguments) -> str:
     topic = arguments.get("topic", "").strip()
     line = arguments.get("line", "").strip()
     kind = arguments.get("kind", "").strip().lower()
-    source = arguments.get("source", "").strip()
+    source = one_line(arguments.get("source", ""))
 
     if not project or not topic or not line or not kind:
         raise ToolError("project, topic, line, and kind are required.")
@@ -108,7 +112,7 @@ def handle_record_finding(arguments: Arguments) -> str:
     from datetime import datetime
 
     project = arguments.get("project", "").strip()
-    title = arguments.get("title", "").strip()
+    title = one_line(arguments.get("title", ""))
     finding = arguments.get("finding", "").strip()
     why_it_matters = arguments.get("why_it_matters", "").strip()
     if not project or not title or not finding or not why_it_matters:
@@ -129,8 +133,10 @@ def handle_record_finding(arguments: Arguments) -> str:
 
     tags = arguments.get("tags") or []
     if isinstance(tags, str):
-        tags = [t.strip() for t in tags.split(",") if t.strip()]
-    source = arguments.get("source", "").strip()
+        tags = tags.split(",")
+    # One line each, and nothing that would end the frontmatter list early.
+    tags = [t for t in (one_line(str(t).translate(_LIST_SYNTAX)) for t in tags) if t]
+    source = one_line(arguments.get("source", ""))
 
     fm_lines = [
         "---",
@@ -223,7 +229,7 @@ def handle_record_decision(arguments: Arguments) -> str:
     from datetime import datetime
 
     project = arguments.get("project", "").strip()
-    title = arguments.get("title", "").strip()
+    title = one_line(arguments.get("title", ""))
     decision = arguments.get("decision", "").strip()
     rationale = arguments.get("rationale", "").strip()
     alternatives = arguments.get("alternatives_considered", "").strip()
@@ -242,7 +248,7 @@ def handle_record_decision(arguments: Arguments) -> str:
     date_str = datetime.now().astimezone().strftime("%Y-%m-%d")
     slug = _slugify(title)
     path = decisions_dir / f"{date_str}-{slug}.md"
-    source = arguments.get("source", "").strip()
+    source = one_line(arguments.get("source", ""))
 
     fm = (
         "---\n"
@@ -276,7 +282,7 @@ def handle_record_feature(arguments: Arguments) -> str:
 
     project = arguments.get("project", "").strip()
     slug = arguments.get("slug", "").strip()
-    title = arguments.get("title", "").strip()
+    title = one_line(arguments.get("title", ""))
     goal = arguments.get("goal", "").strip()
     plan = arguments.get("plan", "").strip()
     if not all([project, slug, title, goal, plan]):

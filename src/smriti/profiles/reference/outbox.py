@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from smriti.core.frontmatter import one_line
 from smriti.mcp.tool import Arguments, Tool, ToolError
 
 if TYPE_CHECKING:
@@ -65,7 +66,7 @@ def handle_ask_suti(arguments: Arguments) -> str:
     context = arguments.get("context", "").strip()
     if not question or not context:
         raise ToolError("question and context are required.")
-    source = arguments.get("source", "").strip()
+    source = one_line(arguments.get("source", ""))
     urgency = arguments.get("urgency", "normal").strip().lower()
     if urgency not in ("low", "normal", "high"):
         urgency = "normal"
@@ -108,10 +109,10 @@ def handle_propose_goal_shift(arguments: Arguments) -> str:
     from smriti.core.files import edit_lock
     from smriti.core.tree import tree_root
 
-    title = arguments.get("title", "").strip()
+    title = one_line(arguments.get("title", ""))
     rationale = arguments.get("rationale", "").strip()
     proposed_change = arguments.get("proposed_change", "").strip()
-    source = arguments.get("source", "").strip()
+    source = one_line(arguments.get("source", ""))
 
     if not title or not rationale or not proposed_change:
         raise ToolError("title, rationale, and proposed_change are required.")
