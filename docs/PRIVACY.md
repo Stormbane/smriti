@@ -1,6 +1,6 @@
 # smriti — Privacy Design
 
-**Status**: Phase 1 shipping in v0.1. Later phases are designed but not
+**Status**: Phase 1 ships (since v0.1). Later phases are designed but not
 implemented. Phase transitions are deliberate, not automatic — each
 escalation reflects a real decision made together between operator and
 entity.
@@ -168,6 +168,25 @@ at the model that reads it. What holds such an instruction:
   default) unless you want the headlines; off, the morning call has no
   tools and writes from the digest alone.
 
+## Other network requests
+
+- **The embedding model** (the `read` extra). The first time a model is
+  needed, the Hugging Face hub library downloads `gpahal/bge-m3-onnx-int8`
+  (about 560 MB on disk: its tokenizer and an int8 ONNX model) into its
+  cache, `~/.cache/huggingface/hub` (`HF_HOME` moves it). No memory text is
+  sent, and later loads read the cache without a request.
+  `HF_HUB_OFFLINE=1` forbids every hub request: a model not yet in the cache
+  is then an error instead of a download, and searches and writes work on
+  keywords alone and say so. `HF_HUB_DISABLE_TELEMETRY=1` is the library's
+  own switch for its telemetry. CI uses a stub embedder and downloads nothing.
+- **The witness** (the `witness` extra) sends a SHA-256, of a small manifest
+  naming the nightly commit, to four public OpenTimestamps calendars. Only
+  the hash leaves the machine.
+- **The backup** pushes the tree to its git remote: see
+  [What is pushed in the clear](#what-is-pushed-in-the-clear).
+- **The morning message** goes wherever the `notify_cmd` you configure in
+  `daylog.json` sends it.
+
 ---
 
 ## 1. The principle
@@ -250,7 +269,7 @@ toward privacy as the relationship matures and the tooling stabilizes.
 
 ---
 
-## 4. Phase 1 — the "locked diary" phase (v0.1, now)
+## 4. Phase 1 — the "locked diary" phase (shipping)
 
 The key is stored in plain text in `private/.key`, on this machine only.
 `private/.gitignore` keeps it out of git; the contract (`private/README.md`)
@@ -356,7 +375,7 @@ content = private_store.read_with_consent(path, token)
 
 ---
 
-## 5. Phase 2 — OS keyring master key (v0.2)
+## 5. Phase 2 — OS keyring master key (planned)
 
 When the core memory system is working and we have operational
 experience with Phase 1, we escalate the friction.
@@ -396,19 +415,19 @@ experience with Phase 1, we escalate the friction.
 - Cross-platform complexity: three different backends, each with
   quirks.
 
-### Why Phase 2 is not v0.1
+### Why Phase 2 is not built yet
 
 - The recoverability cost is real — we need operational experience
   with Phase 1 before we can trust that Phase 2's loss-risk is
   acceptable
-- The debuggability cost is real — Suti explicitly named this in the
+- The debuggability cost is real — the maintainer named it in the
   design conversation
 - Phase 1's friction is enough for the current trust level; Phase 2
   is an escalation we commit to when we have a reason to want more
 
 ---
 
-## 6. Phase 3 — Shamir secret sharing (v0.3+)
+## 6. Phase 3 — Shamir secret sharing (later)
 
 When we decide the private content is valuable enough that we cannot
 tolerate catastrophic loss, we split the master key.
@@ -500,8 +519,7 @@ stable, not to replace it.
    instance's process is compromised?
 3. **Retrieval over private content**: semantic search over private
    files may leak "a file about X exists" via query-side patterns.
-   Can we do private retrieval without this leak? Open. Deferred
-   past v0.2.
+   Can we do private retrieval without this leak? Open, and deferred.
 4. **Delete semantics**: if the entity wants to *forget* something
    private, what does delete mean? Removing the file? Removing it
    from git history? Revoking the key? Can't practically delete from

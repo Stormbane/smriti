@@ -126,13 +126,15 @@ git clone https://github.com/Stormbane/smriti.git
 cd smriti
 pip install -e ".[read]"      # search and embeddings; add codex, witness or dev, e.g. ".[read,codex]"
 python scripts/install.py     # two privacy questions, then memory root, wake files, hooks, MCP server, agent doc
-smriti index                  # the first run downloads the ONNX embedding model
+smriti index                  # the first run downloads the embedding model (about 560 MB)
 smriti write "Sam prefers the command first, then the explanation." --branch people/sam
 smriti read "how does Sam like answers"
 smriti status
 ```
 
 Then start a new Claude Code session. The briefing appears in the opening context, and `smriti_read`, `smriti_write` and `smriti_status` are among the tools.
+
+**The embedding model.** With the `read` extra, the first index, search or write that needs a model downloads `gpahal/bge-m3-onnx-int8` from the Hugging Face Hub into its cache (`~/.cache/huggingface/hub`, or under `HF_HOME`); no memory text is sent, and later loads make no request. Set `HF_HUB_OFFLINE=1` to forbid any request: a model not yet cached is then an error instead of a download, and search and writes fall back to keywords. [`docs/PRIVACY.md`](docs/PRIVACY.md#other-network-requests) lists what else leaves the machine.
 
 **`scripts/install.py`:**
 - **Asks the two [privacy](#privacy) questions** first, or takes the answers from `--capture`/`--no-capture` and `--remote-is-private`/`--remote-not-private`, and ends by saying what is captured, committed and pushed.
