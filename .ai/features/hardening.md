@@ -103,6 +103,67 @@ Considered and kept: `backup.py` keeps its own copies of `pid_alive` and
 must run without smriti importable); the reference profile ships in the
 wheel as the worked example of a profile, off unless configured.
 
+## H10. One embedding model per machine, not one per MCP server
+
+**Why.** Measured 2026-11-05: an MCP server is 19 MB until its first search
+or write, then 1,028 MB, because `_get_embedding_provider()` loads the
+embedding model in-process (the reference index uses the `local` provider,
+MiniLM on PyTorch) and keeps it for the life of the process. Every open
+session runs its own server, and harnesses that leak sessions multiply it:
+66 servers held about 32 GB. The first search in each server also waits
+about 14 s for the model.
+
+**Design.** A per-user embedding service holds the model once; everything
+that embeds a query or a single file asks it.
+
+- `smriti.embed` (new): `service.py` (the server), `client.py`, and
+  `RemoteEmbedding`, an embedding provider with the usual interface
+  (`model_name`, `dimension`, `async embed`) that forwards to the service.
+- Transport: stdlib `multiprocessing.connection` (a named pipe on Windows,
+  a Unix socket elsewhere), messages as JSON through `send_bytes` /
+  `recv_bytes` (never pickle), authenticated by an HMAC handshake with a
+  per-user key in a file only the user can read. The address is derived
+  from the memory root, so two roots get two services.
+- One service per root: it holds an OS lock (`smriti.core.oslock`) for its
+  lifetime; a second one started by a race exits at once.
+- Started on demand: a client that can't connect spawns
+  `python -m smriti embed serve` detached with a hidden console
+  (`CREATE_NO_WINDOW`, not `DETACHED_PROCESS`), then waits for it, bounded.
+- It loads the index's recorded provider (the same selection
+  `_get_embedding_provider` makes), so vectors are exactly the in-process
+  ones; a test compares them.
+- `ping` returns smriti's version, the provider key, model and dimension.
+  A client that finds a different version or provider asks it to stop and
+  starts a fresh one, so an upgrade never serves stale code.
+- It exits after 15 minutes without a request (configurable), giving the
+  memory back to the OS: unloading inside a long-lived process wouldn't,
+  since PyTorch rarely returns its allocations.
+- Calls into the model are serialised; a query embeds in about 20 ms.
+
+**Who uses it.** `search()` and `index_file()`, through
+`_get_embedding_provider()`, in every long-lived process (the MCP server,
+`smriti read`, hooks). `index_tree()` (the nightly and `smriti index`)
+keeps an in-process model: it embeds thousands of chunks in one
+short-lived process that exits after. `SMRITI_EMBED_SERVICE=0` turns the
+service off everywhere (tests, CI, debugging).
+
+**When it isn't there.** If the service can't be reached or started in
+time, search falls back to keyword-only (H9.2 keeps the scores on the same
+scale), and a write's immediate index is skipped with a warning (the
+nightly indexes it); neither blocks. Nothing ever loads the model inside
+an MCP server.
+
+| # | Change | Acceptance |
+|---|---|---|
+| H10.1 | `smriti.embed`: service, client, `RemoteEmbedding`, the handshake, the lock, idle exit, version check. `smriti embed serve`, `status` and `stop`. | Tests with the stub provider: round trip; identical vectors to in-process; second service exits; a wrong key is refused; version mismatch restarts; idle exit. |
+| H10.2 | `_get_embedding_provider()` returns `RemoteEmbedding` in long-lived processes; `index_tree` stays in-process; the off switch. | An MCP server's memory after a search stays under 100 MB, and `torch`/`onnxruntime` are never imported in it (test). Service down: search is keyword-only and a write still succeeds (tests). |
+| H10.3 | Docs: README (what runs), ARCHITECTURE, SECURITY (the pipe and its key), the off switch. | Doc facts regenerated. |
+
+Out of scope, recorded: the Codex plugin starts a fresh copy of every MCP
+server for each conversation and never ends them. That leak is the
+plugin's to fix (report upstream); H10 makes each copy cost about 20 MB
+instead of about 1 GB.
+
 ## Status
 
 Updated as phases land. Each phase had a Codex diff review, fixes for every
@@ -149,4 +210,5 @@ a recheck.
   with E501, B and BLE, and `mypy --strict` on the whole package, on every OS;
   getting there found numpy's and the Anthropic SDK's stubs differing by
   version from the development machine's.
-- **H9.12** (outside review #4): next.
+- **H9.12** (outside review #4): running.
+- **H10**: planned.
