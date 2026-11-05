@@ -106,9 +106,8 @@ def run_search_cases(
 
     try:
         for case in cases:
-            # Search consumes IndexDB; its legacy annotation still says Connection.
             search_results = search(
-                conn,  # type: ignore[arg-type]
+                conn,
                 case.query,
                 top_k=case.k,
                 use_reranker=False,
