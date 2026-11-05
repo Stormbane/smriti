@@ -108,6 +108,7 @@ class Stats:
     served: int = 0  # embed requests answered with vectors
     refused: int = 0  # connections closed on accept: too many at once
     busy: int = 0  # requests refused because the queue was full
+    timed_out: int = 0  # requests answered "timeout": their deadline passed while queued
     dropped: int = 0  # requests whose client gave up before they ran
     auth_failures: int = 0
     repaired: int = 0  # sources whose pending vectors the repair loop filled
@@ -360,6 +361,7 @@ class EmbedService:
             return {"ok": False, "code": "busy", "error": "the embedding queue is full"}
         if not job.done.wait(max(0.0, job.deadline - time.monotonic())):
             job.cancelled = True
+            self.stats.timed_out += 1
             return {"ok": False, "code": "timeout", "error": "the request's deadline passed"}
         self._last_request = time.monotonic()
         if job.vectors is None:

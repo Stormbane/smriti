@@ -321,6 +321,9 @@ def test_a_full_queue_says_busy_and_expired_requests_are_dropped_unrun(
     # The abandoned request still holds its place until the model reaches it.
     assert _wait(lambda: svc._queue.qsize() == 3, 2)
     call("refused", "one too many", 10)
+    # Released only once the service itself has given up on the abandoned one
+    # (its deadline can trail the client's by the time a frame takes to arrive).
+    assert _wait(lambda: svc.stats.timed_out == 1, 5)
     gated.release.set()
     first.join(10)
     for t in queued:
@@ -332,6 +335,40 @@ def test_a_full_queue_says_busy_and_expired_requests_are_dropped_unrun(
     assert all(out[f"q{i}"].vectors == stub([f"queued {i}"]) for i in range(2))
     assert ["abandoned while queued"] not in gated.seen  # dropped, never run
     assert svc.stats.dropped == 1 and svc.stats.busy == 1
+
+
+def test_a_requests_budget_is_what_is_left_when_it_is_sent(
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The client sent the budget it had before connecting, so the service's
+    deadline outlived the client's by the connect and handshake, and it ran
+    work the client had already given up on (seen as a flaky test under load)."""
+    import smriti.embed.client as client_mod
+
+    gated = Gated()
+    services.start(root, gated)
+    first = threading.Thread(target=lambda: ServiceEmbedding(root, spawn=False)
+                             .embed_with_identity(["holds the model"]))
+    first.start()
+    assert gated.entered.wait(5)
+    real_send = client_mod.send_frame
+
+    def slow_handshake(sock: socket.socket, frame: dict[str, Any], deadline: float) -> None:
+        if frame.get("op") == "auth":
+            time.sleep(0.4)  # a handshake slowed by load
+        real_send(sock, frame, deadline)
+
+    monkeypatch.setattr(client_mod, "send_frame", slow_handshake)
+    t0 = time.monotonic()
+    with pytest.raises(EmbeddingUnavailable):
+        ServiceEmbedding(root, spawn=False, write_s=0.6).embed_with_identity(["too late"])
+    monkeypatch.setattr(client_mod, "send_frame", real_send)
+    # After the client's deadline (0.6 s), before the one an early budget gave (1.0 s).
+    time.sleep(max(0.0, 0.8 - (time.monotonic() - t0)))
+    gated.release.set()
+    first.join(10)
+    assert _wait(lambda: len(gated.seen) >= 1, 5)
+    time.sleep(0.1)
+    assert ["too late"] not in gated.seen
 
 
 def test_queries_go_ahead_of_write_batches(root: Path, services: Services) -> None:

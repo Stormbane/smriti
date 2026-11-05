@@ -266,6 +266,12 @@ class ServiceEmbedding:
                 assert isinstance(nonce_s, str)
                 send_frame(sock, {"op": "auth", "proof": client_proof(key, nonce_c, nonce_s)},
                            deadline)
+                if "budget_ms" in request:
+                    # What is left now, after the connect and handshake: a budget
+                    # worked out before them let the service run work for a
+                    # client that had already given up.
+                    request = {**request, "budget_ms": max(
+                        1, int((deadline - time.monotonic()) * 1000))}
                 send_frame(sock, request, deadline)
                 reply = recv_frame(sock, deadline, MAX_FRAME)
             except TimeoutError as exc:
