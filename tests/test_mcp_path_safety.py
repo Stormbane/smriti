@@ -9,7 +9,8 @@ from smriti.core.safe_names import UnsafeName, safe_name
 from smriti.mcp_server import handle_message
 
 TRAVERSAL = ["../escape", "..", "a/b", "a\\b", "/etc", "C:x", "~x", ".hidden", "x\ny",
-             "..\\..\\escape", "proj/../../escape", ".", "CON", "nul.txt", "trailing.", ""]
+             "..\\..\\escape", "proj/../../escape", ".", "CON", "nul.txt", "trailing.", "",
+             "COM¹", "lpt³.md", "CON .txt", "conin$"]
 
 
 @pytest.fixture()

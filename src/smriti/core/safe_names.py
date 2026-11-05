@@ -17,8 +17,11 @@ from __future__ import annotations
 PATH_ARGUMENTS = ("project", "slug", "file")
 
 _RESERVED_CHARS = set('/\\:*?"<>|')
-_DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
-                 *(f"LPT{i}" for i in range(1, 10))}
+# Windows device names, including the superscript-digit aliases (COM¹ ...) it
+# also treats as devices.
+_PORT_DIGITS = [*"123456789", "¹", "²", "³"]
+_DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+                 *(f"COM{d}" for d in _PORT_DIGITS), *(f"LPT{d}" for d in _PORT_DIGITS)}
 
 
 class UnsafeName(ValueError):
@@ -37,7 +40,7 @@ def safe_name(value: object, what: str = "name") -> str:
         problem = "starts with '.' or '~', or ends with '.'"
     elif any(c in _RESERVED_CHARS or ord(c) < 32 for c in name):
         problem = "contains a path separator, ':' or another reserved character"
-    elif name.split(".")[0].upper() in _DEVICE_NAMES:
+    elif name.split(".")[0].rstrip().upper() in _DEVICE_NAMES:  # "CON .txt" is CON too
         problem = "is a reserved device name"
     if problem:
         raise UnsafeName(f"{what} {value!r} {problem}; it must be a single plain name")
