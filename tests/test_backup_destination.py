@@ -366,3 +366,41 @@ def test_changing_a_rewrite_makes_the_saved_answer_stale(tmp_path: Path) -> None
     assert plan.remote == privacy.Choice(None, privacy.DEFAULT)
     assert f"to {PUBLIC}, in plaintext" in privacy.summary(repo, plan)
 
+
+# ── What the summary tells you to do ───────────────────────────────
+
+
+def _steps(text: str) -> str:
+    return text[text.index("To keep the tree unreadable"):]
+
+
+def test_the_remedy_reaches_origin_too_when_the_upstream_is_elsewhere(tmp_path: Path) -> None:
+    # The upstream's remote and origin are the same public repository: unsetting
+    # the upstream, or removing its remote, sends the backup to origin.
+    repo = _fake_remotes(tmp_path)
+    for name in ("origin", "mirror"):
+        _git(repo, "remote", "set-url", name, PUBLIC)
+    _track(repo, "mirror")
+    steps = _steps(privacy.summary(repo, _decide(repo)))
+    assert f'git -C "{repo}" remote remove mirror' in steps
+    assert f'git -C "{repo}" remote remove origin' in steps
+    flat = " ".join(steps.split())
+    assert "alone only sends the backup to origin" in flat
+    assert "every remote it can push to: mirror, the branch's upstream remote, and origin" in flat
+
+
+def test_the_remedy_for_an_upstream_naming_a_url_also_reaches_origin(tmp_path: Path) -> None:
+    repo = _direct_upstream(tmp_path, PUBLIC)
+    _git(repo, "remote", "set-url", "origin", PUBLIC)
+    steps = _steps(privacy.summary(repo, _decide(repo)))
+    assert f'git -C "{repo}" branch --unset-upstream' in steps
+    assert f'git -C "{repo}" remote remove origin' in steps
+    assert "alone only sends the backup to origin" in " ".join(steps.split())
+
+
+def test_the_remedy_when_origin_is_the_destination(tmp_path: Path) -> None:
+    repo = _fake_remotes(tmp_path)
+    steps = _steps(privacy.summary(repo, _decide(repo)))
+    assert f'git -C "{repo}" remote remove origin' in steps
+    assert "remote remove mirror" not in steps and "unset-upstream" not in steps
+    assert "git-crypt init" in steps

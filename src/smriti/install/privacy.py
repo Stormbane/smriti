@@ -696,15 +696,37 @@ def remote_question(git: GitState) -> str:
 
 
 def git_crypt_steps(root: Path, remote: str = "origin") -> str:
-    stop = (
-        ["    - make the repository private, or stop the branch's upstream naming it:",
-         f'        git -C "{root}" branch --unset-upstream']
-        if _names_a_location(remote)
-        else ["    - make the repository private, or remove the remote:",
-              f'        git -C "{root}" remote remove {remote}']
-    )
+    """How to keep the tree unreadable where the backup pushes it (``remote``).
+
+    The backup pushes the branch to its upstream and falls back to ``origin``
+    when the branch has none, so stopping it means removing or repointing
+    every remote it can reach: unsetting the upstream, or removing the
+    upstream's remote, alone only sends it to origin.
+    """
+    git = f'git -C "{root}"'
+    if remote == "origin":
+        stop = [
+            "    - or stop the backup pushing there: remove origin, or repoint it at a",
+            "      private repository (git remote set-url origin <url>):",
+            f"        {git} remote remove origin",
+        ]
+    else:
+        direct = _names_a_location(remote)
+        upstream = (f"the branch's upstream, which names {remote} directly" if direct
+                    else f"{remote}, the branch's upstream remote")
+        stop = [
+            "    - or stop the backup pushing there: remove or repoint (git remote set-url)",
+            f"      every remote it can push to: {upstream},",
+            "      and origin, which the backup falls back to when the branch has no",
+            "      upstream. Unsetting the upstream, or removing its remote, alone only",
+            "      sends the backup to origin:",
+            f"        {git} branch --unset-upstream" if direct
+            else f"        {git} remote remove {remote}",
+            f"        {git} remote remove origin      (if there is one)",
+        ]
     return "\n".join([
-        "  To keep the tree unreadable there, before backups run, either:",
+        "  To keep the tree unreadable there, before backups run, do one of these:",
+        "    - make every repository it is pushed to (above) private;",
         *stop,
         f"    - or set up git-crypt ({GIT_CRYPT_URL}); smriti doesn't do it for you:",
         f'        cd "{root}"',

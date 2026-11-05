@@ -88,8 +88,13 @@ Do one of these before the backups run (`smriti tasks install`):
 - Make the repository private, and keep it that way; with several push
   URLs (`git remote get-url --push --all <remote>`, where `<remote>` is
   the branch's upstream remote or `origin`), each of them.
-- Or remove the remote: `git -C <root> remote remove <remote>`. The backup
-  then commits on this machine only.
+- Or remove, or repoint at a private repository (`git remote set-url`),
+  every remote the backup can push to: the branch's upstream remote, and
+  `origin`, which the backup falls back to when the branch has no
+  upstream. Unsetting the upstream, or removing its remote, alone only
+  sends the backup to `origin`. With both gone (`git -C <root> remote
+  remove <remote>`, and the same for `origin`), the backup commits on this
+  machine only.
 - Or set up [git-crypt](https://github.com/AGWA/git-crypt):
 
   ```bash
