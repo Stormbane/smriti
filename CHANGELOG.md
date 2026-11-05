@@ -58,6 +58,15 @@ The package version remains 0.1.0; subsequent development is unreleased.
 - Backups run hourly from a `smriti-backup` scheduled task (`smriti backup
   --push`), not at every session start and end; a run with nothing new makes no
   network call. The nightly and morning tasks run windowless.
+- Capture is off until `.smriti/daylog.json` turns it on: `"capture": true` for
+  the default sources (the installer's `--capture` writes it), or a `"sources"`
+  list. With no file, or one with neither key, nothing is captured, where every
+  Claude Code transcript and Codex rollout on the machine was; `smriti logd` and
+  `smriti status` say why and how to turn it on. An existing install that relied
+  on the defaults needs `"capture": true` added; an installer rerun writes it
+  where the installer recorded a "yes".
+- `smriti_write` and `smriti write` mask credential-shaped strings, as capture
+  does, before an entry is saved.
 
 ### Fixed
 
@@ -78,6 +87,13 @@ The package version remains 0.1.0; subsequent development is unreleased.
   mtime and size as read; a full re-index commits in one transaction; and a
   writer's read replaces another's only when it is the file as it is now.
 - Same-day, same-title findings and decisions no longer overwrite each other.
+- A write branch's segments follow the same rule as every other path argument
+  (no `.git`, `.smriti/x` or device names); MCP arguments are checked against
+  each tool's input schema (`smriti_read`'s `top_k` is 1 to 50); `smriti status`
+  opens the index read-only; a feature moved to shipped or abandoned is reported
+  as moved.
+- A search no longer waits out its 3 s deadline while the embedding service is
+  still loading its model; it falls back to keywords at once.
 - A failed index run reports its real error (the wrapper had no `rollback`).
 - A malformed MCP message gets an error instead of ending the server.
 - Session channels are named correctly from a cwd of any platform.

@@ -363,3 +363,15 @@ a recheck.
   each search waits its full 3 s before falling back; it should fall back at once
   while the service says it is starting.
 - **H11**: planned, after H10.
+- **H11.1, H11.5, H11.10 implemented** (2026-11-06, branch `hardening/h11a`; the
+  Codex diff review is still to come). Capture is off unless `daylog.json` says
+  `"capture": true` (the default sources; the installer's `--capture` writes it) or
+  lists `"sources"`; logd and `smriti status` say why nothing is captured and how to
+  turn it on; a malformed daylog.json, which captured everything, now captures
+  nothing. `--no-capture` still writes `"sources": []`, which a logd running older
+  code also reads as off. An installer rerun writes `"capture": true` where a "yes"
+  was recorded but daylog.json left it to the old default. `smriti_write` content,
+  title and source are scrubbed. Branch segments follow `safe_name`; MCP arguments
+  are checked against each tool's schema (`top_k` 1..50); `smriti status` opens the
+  index read-only; "Moved" when a feature changes directory. A query falls back to
+  keywords at once while the service says "starting".
