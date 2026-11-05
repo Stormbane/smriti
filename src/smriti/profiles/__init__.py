@@ -17,7 +17,9 @@ Every hook is optional:
 - ``tools``: MCP tools, listed after the core's;
 - ``wake_sections``: wake-briefing sections, placed after the system
   line and before the project files;
-- ``morning_prompt``: the morning message's system prompt.
+- ``morning_prompt``: the morning message's system prompt. The call can
+  search the web only when ``cfg.morning_web_search`` is on, so the prompt
+  should offer headlines only then.
 """
 
 from __future__ import annotations

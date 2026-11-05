@@ -375,3 +375,19 @@ a recheck.
   are checked against each tool's schema (`top_k` 1..50); `smriti status` opens the
   index read-only; "Moved" when a feature changes directory. A query falls back to
   keywords at once while the service says "starting".
+- **H11.2 done** (2026-11-06). Run against Claude Code 2.1.283: the old
+  `--disallowedTools *` did empty the tool list, but the wildcard is undocumented, and
+  18 skills and 54 slash commands stayed. The digest now gets `--strict-mcp-config
+  --tools= --disallowedTools=* --disable-slash-commands`, values attached because
+  `--tools` is variadic: missing its value it took the next flag (`--tools
+  --strict-mcp-config` loaded the account's claude.ai mail and documents
+  connectors). A `needs_cli` test runs the real CLI with each call's flags and a
+  prompt asking for a file, a command and a URL: the digest has no tool, the morning
+  only WebSearch. Morning web search is opt-in, `"morning_web_search": true`; off,
+  the morning gets the digest's flags and a prompt with no headlines. PRIVACY.md and
+  SECURITY.md state what remains: codex's read-only sandbox, and search queries as
+  a way out.
+- **H11.3 done** (2026-11-06). The morning claims its day by an exclusive create of
+  the ledger entry before composing; a failed compose releases it, a claim 30 min
+  old with no send is taken over under the entry's edit lock, and a run that lost
+  its claim doesn't send. A barrier test of two overlapping runs sends once.
