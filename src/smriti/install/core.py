@@ -41,7 +41,7 @@ def is_junction(path: Path) -> bool:
         return bool(path.is_symlink() or os.readlink(path))
     except OSError:
         pass
-    if is_windows():
+    if sys.platform == "win32":  # not is_windows(): type checkers narrow only sys.platform
         FILE_ATTRIBUTE_REPARSE_POINT = 0x400
         attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
         return attrs != -1 and bool(attrs & FILE_ATTRIBUTE_REPARSE_POINT)
