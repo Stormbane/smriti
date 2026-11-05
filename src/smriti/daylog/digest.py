@@ -10,10 +10,13 @@ A day whose rendered log fits in one call (``_MAX_LOG_CHARS``) gets one
 call. A longer day is split at turn boundaries into time-ordered parts
 of at most ``_MAX_LOG_CHARS`` each, at most ``_MAX_PARTS`` of them; one
 call per part writes notes, and a merge call writes the digest from the
-notes. What lies beyond the last part is cut, and the cut is never
-silent: every prompt is told how much of the day it sees and where the
-log was cut, and the digest's frontmatter records ``parts``,
-``chars_seen``, ``chars_total``, ``cut`` and, for a cut day, ``cut_from``.
+notes. What lies beyond the last part is cut, and so are autonomous-
+session markers past ``_MAX_TRAILER_CHARS``. A cut is never silent:
+every prompt is told how much of the day it sees and what was cut, and
+the digest's frontmatter records ``parts``, ``chars_seen``,
+``chars_total`` and ``cut``, plus ``cut_from`` when turns were cut and
+``markers_seen``/``markers_total`` when markers were. ``notes_cut``
+counts the parts whose notes were cut to fit the merge call.
 """
 
 from __future__ import annotations
@@ -39,6 +42,15 @@ log = logging.getLogger(__name__)
 _MAX_LOG_CHARS = 60_000
 _MAX_PARTS = 4
 _MAX_AUTON_CHARS = 8_000
+# The merge call of a long day reads the log's trailing sections (the
+# autonomous-session markers) and every part's notes, each with its own
+# cap, so its input stays within one call's _MAX_LOG_CHARS (plus the
+# autonomous sample). The notes need a cap of their own because the
+# nightly's CLI seats (claude_cli, codex_cli) don't pass max_tokens on:
+# nothing else bounds what a part call writes. A day that fits in one
+# call needs neither cap, since its trailer is inside its _MAX_LOG_CHARS.
+_MAX_TRAILER_CHARS = 8_000
+_MAX_NOTES_CHARS = (_MAX_LOG_CHARS - _MAX_TRAILER_CHARS) // _MAX_PARTS  # 13,000
 
 # The digest's sections, shared by the one-call and the merge prompts.
 _SECTIONS = (
@@ -77,8 +89,8 @@ _MERGE_SYSTEM = (
     "order, plus the day's autonomous sessions and a sample of their activity, "
     "if there were any. Merge them into one digest of the whole day: keep what "
     "mattered most across the day, and treat a thread that one part opens and a "
-    "later part settles as settled. If you are told the log was cut, end with "
-    "one line saying the digest covers the day only up to that time. " + _SECTIONS
+    "later part settles as settled. If you are told part of the log was cut, "
+    "end with one line saying what the digest does not cover. " + _SECTIONS
 )
 
 # A turn in the rendered log starts with "- `HH:MM`" at column 0; its
@@ -153,22 +165,31 @@ class _Coverage:
     parts: int
     chars_seen: int
     chars_total: int
-    cut_from: str = ""  # HH:MM where the cut starts; "" when nothing is cut
+    timeline_cut: bool = False  # turns past the last part were left out
+    cut_from: str = ""  # HH:MM of the first turn left out ("" if none, or unknown)
+    trailer_cut: bool = False  # the end of the trailing sections was left out
+    markers_seen: int = 0  # autonomous-session markers that reached the merge call
+    markers_total: int = 0
 
     @property
     def cut(self) -> bool:
         return self.chars_seen < self.chars_total
 
     def note(self) -> str:
-        """The prompts' line on how much of the day they see, and where it was cut."""
+        """The prompts' line on how much of the day they see, and what was cut."""
         if not self.cut:
             return f"The digest sees the whole day log ({self.chars_total:,} characters)."
-        seen = (f"The digest sees {self.chars_seen:,} of the day log's "
-                f"{self.chars_total:,} characters")
-        if self.cut_from:
-            return (f"{seen}: the log was cut at {self.cut_from}, and nothing after that "
-                    "point reaches the digest.")
-        return f"{seen}: the log was cut, and nothing after that point reaches the digest."
+        reasons: list[str] = []
+        if self.timeline_cut:
+            at = f" at {self.cut_from}" if self.cut_from else ""
+            reasons.append(f"the log was cut{at}, and nothing after that point reaches the digest")
+        if self.markers_seen < self.markers_total:
+            reasons.append(f"only the first {self.markers_seen:,} of its "
+                           f"{self.markers_total:,} autonomous-session markers are included")
+        elif self.trailer_cut:
+            reasons.append("the end of the sections after its timeline is left out")
+        return (f"The digest sees {self.chars_seen:,} of the day log's "
+                f"{self.chars_total:,} characters: " + "; ".join(reasons) + ".")
 
 
 @dataclass(frozen=True)
@@ -207,6 +228,22 @@ def _lines(text: str) -> list[str]:
     return [line for line in lines if line]
 
 
+def _whole_lines(text: str, budget: int) -> str:
+    """The longest run of *text*'s first whole lines that fits in *budget* characters."""
+    kept: list[str] = []
+    size = 0
+    for line in _lines(text):
+        if size + len(line) > budget:
+            break
+        kept.append(line)
+        size += len(line)
+    return "".join(kept)
+
+
+def _is_marker(line: str) -> bool:
+    return line.startswith("- ")
+
+
 def _pieces(text: str, clock: str) -> list[_Block]:
     """One turn as blocks of at most a part's size: whole unless it alone is larger."""
     return [_Block(text[i:i + _MAX_LOG_CHARS], clock)
@@ -218,10 +255,11 @@ def _plan(log_text: str) -> _Plan:
 
     The log is a header, one block per turn (render.py sorts turns by
     time), then trailing sections. Parts are filled with whole turns in
-    order, and only a turn larger than a part is split. The trailing
+    order, and only a turn larger than a part is split. What doesn't fit
+    in the parts is cut, from the first turn left out. The trailing
     sections (the autonomous-session markers) go to the merge call
-    instead of a part, so a cut never drops them. What doesn't fit in
-    the parts is cut, from the first turn left out.
+    instead of a part, so a timeline cut doesn't drop them; they keep
+    whole lines up to ``_MAX_TRAILER_CHARS``, and the rest is cut.
     """
     lines = _lines(log_text)
     # The trailer starts at the first heading after the last turn, so a
@@ -229,7 +267,8 @@ def _plan(log_text: str) -> _Plan:
     last_turn = max((i for i, line in enumerate(lines) if _TURN_RE.match(line)), default=-1)
     tail = next((i for i in range(last_turn + 1, len(lines))
                  if lines[i].startswith(_SECTION_PREFIX)), len(lines))
-    trailer = "".join(lines[tail:])
+    full_trailer = "".join(lines[tail:])
+    trailer = _whole_lines(full_trailer, _MAX_TRAILER_CHARS)
     by_turn: list[tuple[str, list[str]]] = []  # (clock, lines); the header comes first
     for line in lines[:tail]:
         match = _TURN_RE.match(line)
@@ -240,6 +279,7 @@ def _plan(log_text: str) -> _Plan:
 
     groups: list[list[_Block]] = []
     size = 0
+    timeline_cut = False
     cut_from = ""
     blocks = [block for clock, group in by_turn for block in _pieces("".join(group), clock)]
     for index, block in enumerate(blocks):
@@ -250,6 +290,7 @@ def _plan(log_text: str) -> _Plan:
             groups.append([block])
             size = len(block.text)
         else:
+            timeline_cut = True
             cut_from = next((b.clock for b in blocks[index:] if b.clock), "")
             break
 
@@ -259,8 +300,13 @@ def _plan(log_text: str) -> _Plan:
         parts.append(_Part("".join(b.text for b in group),
                            clocks[0] if clocks else "", clocks[-1] if clocks else ""))
     seen = sum(len(p.text) for p in parts) + len(trailer)
-    return _Plan(tuple(parts), trailer,
-                 _Coverage(len(parts), seen, len(log_text), cut_from))
+    return _Plan(tuple(parts), trailer, _Coverage(
+        parts=len(parts), chars_seen=seen, chars_total=len(log_text),
+        timeline_cut=timeline_cut, cut_from=cut_from,
+        trailer_cut=len(trailer) < len(full_trailer),
+        markers_seen=sum(map(_is_marker, _lines(trailer))),
+        markers_total=sum(map(_is_marker, lines[tail:])),
+    ))
 
 
 def _part_prompt(day: str, index: int, part: _Part, plan: _Plan) -> str:
@@ -281,19 +327,38 @@ def _merge_prompt(day: str, notes: list[str], plan: _Plan, autonomous: str) -> s
     return "\n\n".join(sections)
 
 
+def _capped_notes(notes: str) -> tuple[str, bool]:
+    """A part's notes within ``_MAX_NOTES_CHARS``, in whole lines; True if any were cut."""
+    if len(notes) <= _MAX_NOTES_CHARS:
+        return notes, False
+    kept = _whole_lines(notes, _MAX_NOTES_CHARS) or notes[:_MAX_NOTES_CHARS]
+    return (f"{kept.rstrip()}\n[these notes were cut at {len(kept):,} "
+            f"of their {len(notes):,} characters]"), True
+
+
 def _digest_in_parts(day: str, plan: _Plan, autonomous: str,
-                     attempts_log: list[dict[str, str]]) -> str:
-    """One notes call per part, in time order, then one merge call."""
+                     attempts_log: list[dict[str, str]]) -> tuple[str, int]:
+    """One notes call per part, in time order, then one merge call.
+
+    Returns the digest and how many parts' notes were cut to fit the merge.
+    """
     coverage = plan.coverage
     if coverage.cut:
-        log.warning("digest %s: the day log is %d chars; %d parts see %d, cut from %s",
-                    day, coverage.chars_total, coverage.parts, coverage.chars_seen,
-                    coverage.cut_from or "an unknown time")
+        log.warning("digest %s in %d parts: %s", day, coverage.parts, coverage.note())
     else:
         log.info("digest %s: %d chars in %d parts", day, coverage.chars_total, coverage.parts)
-    notes = [compose(_PART_SYSTEM, _part_prompt(day, index, part, plan), attempts_log)
-             for index, part in enumerate(plan.parts, start=1)]
-    return compose(_MERGE_SYSTEM, _merge_prompt(day, notes, plan, autonomous), attempts_log)
+    notes: list[str] = []
+    notes_cut = 0
+    for index, part in enumerate(plan.parts, start=1):
+        text, was_cut = _capped_notes(
+            compose(_PART_SYSTEM, _part_prompt(day, index, part, plan), attempts_log))
+        notes.append(text)
+        notes_cut += was_cut
+    if notes_cut:
+        log.warning("digest %s: the notes of %d parts were cut to %d chars for the merge",
+                    day, notes_cut, _MAX_NOTES_CHARS)
+    digest = compose(_MERGE_SYSTEM, _merge_prompt(day, notes, plan, autonomous), attempts_log)
+    return digest, notes_cut
 
 
 def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]]) -> Path | None:
@@ -310,7 +375,9 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]]) 
     except OSError:
         return None
     autonomous = _autonomous_sample(turns)
+    notes_cut = 0
     if len(log_text) <= _MAX_LOG_CHARS:
+        # One call, the whole log: its trailer is inside the one call's budget.
         user = f"Day log for {day}:\n\n{log_text}"
         if autonomous:
             user += f"\n\nAutonomous activity sample:\n{autonomous}"
@@ -318,7 +385,7 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]]) 
         coverage = _Coverage(1, len(log_text), len(log_text))
     else:
         plan = _plan(log_text)
-        text = _digest_in_parts(day, plan, autonomous, attempts_log)
+        text, notes_cut = _digest_in_parts(day, plan, autonomous, attempts_log)
         coverage = plan.coverage
 
     out = cfg.day_digest(day)
@@ -335,7 +402,12 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]]) 
     ]
     if coverage.cut_from:
         fields.append(f'cut_from: "{coverage.cut_from}"')
-    header = "\n".join([*fields, "generated_by: smriti nightly (digest)", "---", ""])
+    if coverage.markers_seen < coverage.markers_total:
+        fields += [f"markers_seen: {coverage.markers_seen}",
+                   f"markers_total: {coverage.markers_total}"]
+    if notes_cut:
+        fields.append(f"notes_cut: {notes_cut}")
+    header ="\n".join([*fields, "generated_by: smriti nightly (digest)", "---", ""])
     tmp = out.with_name(out.name + ".tmp")
     tmp.write_text(header + text + "\n", encoding="utf-8")
     tmp.replace(out)

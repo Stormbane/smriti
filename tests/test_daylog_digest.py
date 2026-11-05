@@ -59,12 +59,21 @@ def _turn(minute: int, text: str) -> Turn:
     return Turn(ts=ts, channel="claude:proj", who="agent", text=text, session="auto1")
 
 
-def _rendered_day(n_turns: int, turn_chars: int) -> str:
+def _job_marker(k: int) -> str:
+    return f"- [autonomous: claude:job{k:04d}, 12:00–12:05, 3 turns]\n"
+
+
+def _rendered_day(n_turns: int, turn_chars: int, markers: int = 1) -> str:
     """A day log in render.py's format: header, timed turns, autonomous markers.
 
     Each turn has its own minute, so its clock names it; every third turn runs
     over two lines, indented the way render.py indents a multi-line turn.
+    With *markers* > 1 the markers are ``_job_marker(0..markers-1)``.
     """
+    if markers > 1:
+        head = _rendered_day(n_turns, turn_chars)
+        head = head[: head.index("## Autonomous sessions")]
+        return head + "## Autonomous sessions\n\n" + "".join(map(_job_marker, range(markers)))
     lines = ["---", f"date: {DAY}", "input_hash: test", "generated_by: test", "---", "",
              f"# Day log — {DAY}", ""]
     for i in range(n_turns):
@@ -275,3 +284,91 @@ def test_a_failed_part_call_writes_no_digest(tmp_path: Path,
     with pytest.raises(LLMError):
         digest_mod.digest_day(cfg, DAY, [])
     assert not cfg.day_digest(DAY).exists()  # no digest from half a day's notes
+
+
+# One call's input: the log budget, the autonomous sample, and the prompt's own lines.
+_CALL_LIMIT = _BUDGET + digest_mod._MAX_AUTON_CHARS + 1_000
+
+
+def test_thousands_of_markers_stay_within_the_merge_budget(
+    tmp_path: Path, llm: NotesProvider
+) -> None:
+    log_text = _rendered_day(n_turns=200, turn_chars=975, markers=5000)
+    total = len(log_text)
+    cfg = _seed(tmp_path, log_text)
+    out = digest_mod.digest_day(cfg, DAY, [])
+    assert out is not None
+
+    assert len(llm.requests) == 5
+    *part_calls, merge = llm.requests
+    assert all(len(r.user) <= _CALL_LIMIT for r in llm.requests)
+    assert _turn_numbers(part_calls) == list(range(200))  # the timeline is whole
+    # The merge keeps the first markers, as whole lines, within the trailer's budget.
+    kept = [int(k) for k in re.findall(r"claude:job(\d{4})", merge.user)]
+    assert 0 < len(kept) < 5000 and kept == list(range(len(kept)))
+    assert all(_job_marker(k) in merge.user + "\n" for k in kept)
+    dropped = "".join(map(_job_marker, range(len(kept), 5000)))
+
+    meta = _frontmatter(out)
+    assert meta["cut"] == "true" and meta["parts"] == "4"
+    assert meta["markers_seen"] == str(len(kept)) and meta["markers_total"] == "5000"
+    assert meta["chars_total"] == str(total)
+    assert meta["chars_seen"] == str(total - len(dropped))
+    assert "cut_from" not in meta  # no turn was cut
+    note = (f"The digest sees {total - len(dropped):,} of the day log's {total:,} characters: "
+            f"only the first {len(kept):,} of its 5,000 autonomous-session markers are included.")
+    for request in llm.requests:
+        assert note in request.user
+
+
+def test_a_large_trailer_stays_bounded_in_one_call_and_in_parts(
+    tmp_path: Path, llm: NotesProvider
+) -> None:
+    # Under the one-call budget, the markers are part of the whole log, as before.
+    log_text = _rendered_day(n_turns=5, turn_chars=200, markers=1000)
+    assert len(log_text) <= _BUDGET
+    cfg = _seed(tmp_path, log_text)
+    out = digest_mod.digest_day(cfg, DAY, [])
+    assert out is not None
+    assert [r.system for r in llm.requests] == [digest_mod._SYSTEM]
+    assert len(llm.requests[0].user) <= _CALL_LIMIT
+    assert log_text in llm.requests[0].user
+    assert _frontmatter(out)["cut"] == "false"
+
+    # Just past it, the markers alone push the day into parts: still bounded, cut recorded.
+    llm.requests.clear()
+    log_text = _rendered_day(n_turns=5, turn_chars=200, markers=1300)
+    assert len(log_text) > _BUDGET
+    cfg.day_md(DAY).write_text(log_text, encoding="utf-8")
+    out = digest_mod.digest_day(cfg, DAY, [])
+    assert out is not None
+    assert [r.system for r in llm.requests] == [digest_mod._PART_SYSTEM,
+                                                digest_mod._MERGE_SYSTEM]
+    assert all(len(r.user) <= _CALL_LIMIT for r in llm.requests)
+    meta = _frontmatter(out)
+    assert meta["cut"] == "true" and meta["markers_total"] == "1300"
+    assert int(meta["markers_seen"]) < 1300
+
+
+def test_long_part_notes_are_cut_to_fit_the_merge(tmp_path: Path,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    class VerboseProvider(NotesProvider):
+        """A seat that ignores max_tokens and writes about 57k characters every call."""
+
+        def call(self, request: LLMRequest) -> LLMResponse:
+            self.requests.append(request)
+            return LLMResponse(text="## Highlights\n" + "- one more long note line\n" * 2200)
+
+    provider = VerboseProvider()
+    monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: provider)
+    log_text = _rendered_day(n_turns=200, turn_chars=975)
+    cfg = _seed(tmp_path, log_text)
+    out = digest_mod.digest_day(cfg, DAY, [])
+    assert out is not None
+
+    *_, merge = provider.requests
+    assert len(merge.user) <= _CALL_LIMIT
+    assert merge.user.count("[these notes were cut at ") == 4
+    meta = _frontmatter(out)
+    assert meta["notes_cut"] == "4"
+    assert meta["cut"] == "false"  # every character of the log reached a part call
