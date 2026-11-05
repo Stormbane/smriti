@@ -28,7 +28,7 @@ smriti_write      -> dated markdown + index     voice transcripts -> log/YYYY/MM
 - **Read.** `smriti_read(query, top_k=5)` runs hybrid search over the tree. A result's score is 0.5 vector similarity (sqlite-vec) + 0.3 keyword (FTS5) + 0.2 trunk distance, the last favouring files near the root. `smriti read` on the CLI also reranks with a cross-encoder; the MCP tool doesn't.
 - **Wake.** A SessionStart hook runs `<root>/.smriti/wake.py`, which prints a briefing of at most 9,500 characters. [`docs/SELF.md`](docs/SELF.md) lists its sections and where each comes from.
 
-**The day-log.** `smriti logd` watches transcript files and merges every turn into one chronological file per local day. Each turn gets a content-derived id, a speaker, a channel and a time, and credential-shaped strings are masked. Sources are globs in `<root>/.smriti/daylog.json`. The defaults are Claude Code, Codex and a voice-transcript folder.
+**The day-log.** `smriti logd` watches transcript files and merges every turn into one chronological file per local day. Each turn gets a content-derived id, a speaker role (`user` or `agent`), a channel and a time, and credential-shaped strings are masked. Sources are globs in `<root>/.smriti/daylog.json`. The defaults are Claude Code, Codex and a voice-transcript folder. The same file names the two parties (`user_name`, `agent_name`) for the render and the prompts; see [Configuration](#configuration).
 
 **The nightly cycle** (`src/smriti/daylog/nightly.py`). Every step derives from hashed inputs, so a rerun is a no-op. A failed step is recorded in the status file, and the steps after it still run.
 
@@ -42,7 +42,7 @@ smriti_write      -> dated markdown + index     voice transcripts -> log/YYYY/MM
 | witness | Commits the tree through `backup.py`, timestamps a manifest naming HEAD with OpenTimestamps, pushes | `witness/YYYY/<night>.txt` and `.ots` |
 | status | One status document, read by the wake's "while you slept" line | `log/.nightly-status.json` |
 
-**The morning message** (07:00, **experimental**): one message per local day, composed by an LLM from the digest plus a web search for headlines, and sent through the `notify_cmd` configured in `daylog.json`. The ledger entry is written before the send, so a crash means no message, never two. The persona and the recipient are hard-coded to the reference setup.
+**The morning message** (07:00, **experimental**): one message per local day, composed by an LLM from the digest plus a web search for headlines, and sent through the `notify_cmd` configured in `daylog.json`. The ledger entry is written before the send, so a crash means no message, never two. It is written from the configured agent to the configured user, with no persona; a profile can supply its own prompt (the reference profile's carries its agent's persona).
 
 **Backups.** `<root>/.smriti/backup.py` commits and pushes the memory tree at each wake (in the background) and in the nightly witness step. It never kills git, clears stale locks only when no git process is running, and logs to `.git/smriti-backup.jsonl`. You create the git repository and its remote yourself. The reference setup encrypts its remote with git-crypt, but the installer neither sets that up nor checks for it.
 
@@ -139,9 +139,13 @@ smriti nightly                # one run by hand
 smriti tasks install          # schedule logd, nightly and morning
 ```
 
-The witness step needs `pip install -e ".[witness]"` and a memory root that is a git repository; without them the step fails visibly in the status file. The morning message needs a `notify_cmd` in `daylog.json` (or a sender script at `.smriti/hooks/notify_suti.py`).
+The witness step needs `pip install -e ".[witness]"` and a memory root that is a git repository; without them the step fails visibly in the status file. The morning message needs a `notify_cmd` in `daylog.json`.
 
 **Per project:** run `python <path-to-smriti>/scripts/setup_project.py` from the project's directory (or pass the project path as an argument). It copies the `.ai/` template and links the project's mirror. [`docs/INSTALL.md`](docs/INSTALL.md) has the details, and [`docs/USAGE.md`](docs/USAGE.md) covers use from Python.
+
+### Configuration
+
+`<root>/.smriti/daylog.json` is optional; every key has a default. `user_name` and `agent_name` (default `"User"` and `"Agent"`) are the names the day render, the nightly and morning prompts and the core tools use for the two speaker roles. `profile` enables an optional profile, `smriti.profiles.<name>`: one installation's own tools, wake sections and morning persona. With none set, smriti runs its generic core. The repo's one profile, `reference`, is the maintainer's installation, which sets `{"profile": "reference", "user_name": "Suti", "agent_name": "Narada"}`. [`docs/INSTALL.md`](docs/INSTALL.md#configuration-rootsmritidaylogjson) lists every key.
 
 ## Interfaces
 
@@ -168,7 +172,7 @@ The witness step needs `pip install -e ".[witness]"` and a memory root that is a
 | Memory | `smriti_read`, `smriti_write`, `smriti_status` |
 | Project workflow (writes under `mirrors/<project>/`; not indexed) | `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status` |
 | Session handoff | `smriti_write_handoff` (writes `.smriti/handoff-pending.md`; the next wake shows it once, then archives it) |
-| Reference setup only (being moved to a profile, plan 6.3) | `tell_suti` (sends a real message through `notify_cmd`), `smriti_ask_suti`, `smriti_propose_goal_shift` (both write to `outbox/`; never applied automatically), `smriti_resolve_outbox` |
+| The `reference` profile only (listed when `daylog.json` sets `"profile": "reference"`) | `tell_suti` (sends a real message through `notify_cmd`), `smriti_ask_suti`, `smriti_propose_goal_shift` (both write to `outbox/`; never applied automatically), `smriti_resolve_outbox` |
 
 **Hooks:**
 - Claude Code: SessionStart runs `wake.py`; UserPromptSubmit touches `.smriti/last-activity`; PostToolUse on `Read|Edit|Write` runs ambient recall (legacy).
@@ -176,7 +180,7 @@ The witness step needs `pip install -e ".[witness]"` and a memory root that is a
 
 ## Status and limits
 
-- **One setup, being generalised.** smriti grew inside one person's setup with one agent. Personal coupling is still in the code: the user-specific MCP tools above, the wake's person and cross-channel sections, the morning persona, Windows paths in project discovery, and the UTC+10 default. Plan Phase 6 extracts these into a profile and configuration.
+- **One setup, being generalised.** smriti grew inside one person's setup with one agent. That setup's MCP tools, wake sections and morning persona are now the optional `reference` profile, and the core names the two parties from configuration. Still coupled: Windows paths in project discovery, the UTC+10 default day boundary, and the default root `~/.narada`.
 - **Removed:** the April 2026 design's deep pipeline (EXTRACT → JUDGE → CROSSLINK, the cognitive cascade, ingest, consolidation, the task queue and its daemon, and the `sleep`, `queue`, `daemon`, `watch`, `ingest` and `merge-concepts` commands) was removed in November 2026; it remains in the git history. When it ran, it never changed a belief or identity file; it lengthened the pages it touched by 88% and destroyed one source file. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes that design.
 - **Legacy:** qmd as a recall backend; the Hermes harness (`--harness hermes`); the PreCompact staging hook; the file-touch ambient-recall hook. The last is off in the reference setup, because research found that 4-11% of its injections helped (plan 2.4).
 - **Retrieval quality** on the reference tree is moderate: 0.67 hit@5 on the MCP path, 0.81 with reranking. The plan targets 0.95.

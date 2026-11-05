@@ -26,10 +26,12 @@ Still running:
 - **Index pages** (the design's "structural cascade"): each write
   regenerates the existing `index.md` files above it from their directory
   listings, with no LLM (`smriti.store.index_pages`).
-- **MCP server**: `smriti/mcp/` serves the memory, project and outbox
-  tools over JSON-RPC stdio. Each tool is a `Tool` (name, schema,
-  handler) in a group module under `mcp/tools/`; a handler refuses by
-  raising `ToolError`, and the server marks every failure `isError`.
+- **MCP server**: `smriti/mcp/` serves the memory and project tools over
+  JSON-RPC stdio, plus the tools of the profile `daylog.json` names, if
+  any (`smriti.profiles`; the reference profile adds the outbox tools).
+  Each tool is a `Tool` (name, schema, handler) in a group module under
+  `mcp/tools/` or the profile's package; a handler refuses by raising
+  `ToolError`, and the server marks every failure `isError`.
   `python -m smriti.mcp_server` remains the entry point installed
   configs use.
 - **Metrics**: JSONL at `<root>/.smriti/metrics.jsonl`, summarised by

@@ -113,12 +113,17 @@ log needs only a collector, not new instrumentation.
 `~/.narada/log/YYYY/MM/DD.jsonl` — one line per conversational turn:
 
 ```json
-{"id": "tg:a1b2c3d4:42", "ts": "2026-09-04T11:00:00.000Z", "channel": "telegram", "who": "suti", "text": "Is the speaker working?", "session": "a1b2c3d4"}
+{"id": "tg:a1b2c3d4:42", "ts": "2026-09-04T11:00:00.000Z", "channel": "telegram", "who": "user", "text": "Is the speaker working?", "session": "a1b2c3d4"}
 ```
 
 - `id` — stable turn identity: `<channel-tag>:<session>:<per-session turn
   ordinal or source line hash>`. Dedup key everywhere.
 - `channel`: `claude:<project>` | `telegram` | `voice` | `codex:<project>`.
+- `who`: the speaker's role, `user` | `agent` (hardening H5). Display names
+  come from `user_name` and `agent_name` in `.smriti/daylog.json`. Records
+  written before H5 hold `"suti"` | `"narada"`; readers map them to the
+  roles, and the id hash uses those legacy tokens for both, so every
+  existing id and input hash is unchanged.
 - Conversational turns only: human text and Narada's text. Tool calls, tool
   results, synthetic user messages (tool-result wrappers, `isMeta` records,
   injected system reminders) are dropped by the source adapters.
@@ -209,8 +214,10 @@ hash; re-running a night that already completed is a no-op.
    headlines, picks 3–5 worth knowing, returns the good-morning message text.
 3. Write the sent-ledger entry (fail-closed: crash after this point means a
    silent morning, never a double send), then smriti's own code delivers via
-   `notify_suti(message)` — hardcoded Telegram today, the seam for the
-   future presence-routing tool.
+   `notify_user(cfg, message)` (named `notify_suti` before H5) — the
+   configured `notify_cmd`, the seam for the future presence-routing tool.
+   The prompt is generic unless the enabled profile supplies one; the
+   reference profile's carries Narada's persona.
 
 ### 6. Scope cut & cleanup
 

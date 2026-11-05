@@ -21,15 +21,17 @@ the reference entity; the system is not Narada-specific — point it at
 any `~/.<entity>/` root) wakes up with:
 
 - A briefing of at most 9,500 characters: the identity summary, last
-  night's status, what the session can reach, the person and channel
-  sections, the current project's `STATUS.md`/`INDEX.md` (or `todo.md`),
-  recent journal entries, and a reading list of the full identity files.
-  [SELF.md](SELF.md) lists every section with its source and budget.
+  night's status, the current project's `STATUS.md`/`INDEX.md` (or
+  `todo.md`), recent journal entries, and a reading list of the full
+  identity files, plus any sections an enabled profile adds (the
+  reference profile's: what the session can reach, the person, the other
+  channels). [SELF.md](SELF.md) lists every section with its source and
+  budget.
 - `smriti_read` / `smriti_write` / `smriti_status` as first-class MCP
   tools in every session
 
 The transport is a `SessionStart` hook that runs `wake.py` from the
-entity root's `.smriti/` dir; the sections are fixed in
+entity root's `.smriti/` dir; the core sections are fixed in
 `src/smriti/wake/briefing.py`. Per-project access is via directory
 junctions under `<entity>/mirrors/{project}/`. The memory search tool is
 registered as an MCP server in `~/.claude.json`.
@@ -138,8 +140,9 @@ sessions while preserving a single shared identity core.
 
 ### What the wake loads
 
-The briefing's sections, their order and their budgets are fixed in
-`src/smriti/wake/briefing.py`; [SELF.md](SELF.md) describes each one.
+The core sections, their order and their budgets are fixed in
+`src/smriti/wake/briefing.py`; an enabled profile adds its own (see
+[Profiles](#profiles)). [SELF.md](SELF.md) describes each one.
 `narada/wake.md` and `<entity>/wake.md` are obsolete: nothing reads them.
 
 ### Smriti CLI (optional, grows over time)
@@ -173,6 +176,47 @@ a config edit, never a code change. See
 The witness step needs the `witness` extra and a memory root that is a git
 repository. The README's [What runs today](../README.md#what-runs-today)
 lists every nightly step with what it writes.
+
+### Configuration: `<root>/.smriti/daylog.json`
+
+One small JSON file in the memory root configures capture, the nightly,
+the morning and the profile. Every key is optional; without the file the
+defaults apply.
+
+| Key | Default | What it does |
+|---|---|---|
+| `sources` | Claude Code, Codex, voice transcripts | Capture globs, `[{"name", "kind", "glob"}]`; replaces the defaults |
+| `extra_sources` | none | Capture globs added to the defaults |
+| `notify_cmd` | none | The command `smriti morning` pipes its message to; no command, no morning |
+| `location` | none | Where the user lives, for the morning's local headlines |
+| `user_name` | `"User"` | The user's display name: the day render, the presence line, the nightly and morning prompts, the core tools' text, the reading list's person file (`people/<name>/<name>.md`) |
+| `agent_name` | `"Agent"` | The agent's display name, used in the same places |
+| `profile` | none | An optional profile, `smriti.profiles.<name>`; see below |
+
+The day-log stores each speaker as a role, `user` or `agent`; the names
+above are only how they are shown. Logs written before roles existed
+hold `"suti"` and `"narada"` and are read as `user` and `agent`, with
+their turn ids unchanged.
+
+### Profiles
+
+A profile holds what only makes sense for one installation: MCP tools,
+wake-briefing sections, a morning persona. Without one, smriti runs its
+generic core: the MCP server lists the core tools only, the briefing has
+no profile sections, and the morning message has no persona.
+
+The only profile in the repo is `reference`, the maintainer's own
+installation (the agent Narada, the user Suti). It adds the `tell_suti`,
+`smriti_ask_suti`, `smriti_propose_goal_shift` and `smriti_resolve_outbox`
+tools, the wake's `HANDS`, `SUTI NOW` and `ACROSS SURFACES` sections, and
+the morning persona. That installation enables it with:
+
+```json
+{"profile": "reference", "user_name": "Suti", "agent_name": "Narada"}
+```
+
+To write your own, add a package under `src/smriti/profiles/<name>/`
+whose `PROFILE` is a `smriti.profiles.Profile`; every hook is optional.
 
 ---
 

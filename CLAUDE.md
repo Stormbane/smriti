@@ -23,7 +23,7 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 - `smriti write`, `smriti read`, and the MCP server (`python -m smriti.mcp_server`): dated markdown writes (which also regenerate the parent directories' `index.md` listings), and hybrid search (0.5 vector + 0.3 keyword + 0.2 trunk distance; the CLI also reranks, the MCP path doesn't).
 - Day-log capture: `smriti logd` merges Claude Code transcripts, Codex rollouts and voice transcripts into `log/YYYY/MM/DD.jsonl` (`src/smriti/daylog/`).
 - `smriti nightly` (03:00): reconcile → render → digest (one `claude -p` call per day, `codex exec` as fallback) → week/month/year rollups → index → witness (a git commit plus an OpenTimestamps stamp) → status file.
-- `smriti morning` (07:00): one message a day composed from the digest. Its persona is hard-coded to the reference user.
+- `smriti morning` (07:00): one message a day composed from the digest, from the configured agent to the configured user; a profile can supply its own prompt (the reference profile's carries its persona).
 - The wake briefing: a SessionStart hook prints `smriti.wake.briefing()`, at most 9,500 characters.
 - Backups: `<root>/.smriti/backup.py` commits and pushes the memory tree at each wake and in the nightly.
 
@@ -35,11 +35,10 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 - The PreCompact staging hook.
 - The PostToolUse ambient-recall hook: `scripts/install.py` still installs it, but it is off in the reference install and being retired (plan 2.4).
 
-**Personal coupling**, being extracted (plan 6.3):
-- the MCP tools `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift` and `smriti_resolve_outbox`;
-- the wake's `SUTI NOW` and `ACROSS SURFACES` sections;
-- the morning persona;
-- the UTC+10 default day boundary (`SMRITI_DAY_UTC_OFFSET`).
+**Roles and profiles** (hardening H5):
+- The day-log's speakers are roles, `user` and `agent`; `user_name` and `agent_name` in `<root>/.smriti/daylog.json` (default "User", "Agent") name them in the render, the prompts and the core tools. Old logs' `"suti"`/`"narada"` are read as the roles, with turn ids unchanged.
+- The reference installation's specifics are the optional profile `smriti.profiles.reference`, enabled by `"profile": "reference"` in the same file: the MCP tools `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift` and `smriti_resolve_outbox`, the wake's `HANDS`, `SUTI NOW` and `ACROSS SURFACES` sections, and the morning persona. Without a profile, none of these exist.
+- Still coupled: the UTC+10 default day boundary (`SMRITI_DAY_UTC_OFFSET`) and the default root `~/.narada`.
 
 ## Facts
 
@@ -60,7 +59,8 @@ src/smriti/
   mcp/                   MCP server over stdio, no dependencies: protocol, tool table, tools by group
   store/                 writer, index pages (index.md upkeep), indexer, index policy, schema, search
   daylog/                capture adapters, logd, render, digest, rollups, nightly, morning, schedule
-  wake/                  briefing.py, presence.py
+  wake/                  briefing.py: the wake briefing, with a hook for a profile's sections
+  profiles/              optional profiles (tools, wake sections, morning prompt); reference/ is the maintainer's installation
   witness.py, backup.py  tamper-evidence; the backup trigger
   integrations/          claude_code, codex, hermes installers; shared hooks; the managed agent-doc block
   llm/                   providers: claude_cli, codex_cli, anthropic_api, openai_api, ollama
