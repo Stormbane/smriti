@@ -37,14 +37,20 @@ directory: one started without ``XDG_RUNTIME_DIR`` (a cron job, say) uses
 ``$XDG_RUNTIME_DIR/smriti``, and without the shared file they would not
 exclude each other. Set ``SMRITI_RUNTIME_DIR`` for all of them before dropping it.
 
-**When a file can't be used.** If the runtime directory is refused (another
-user owns it, or others can write to it) or can't be created, a named lock
-falls back to the shared file alone, with a warning: still a lock, as before
-the move. (Once the shared file is dropped, such a process excludes only others
-that fell back too.) On POSIX, a shared file this user can't open (another
-user made the directory, or put something else in the file's place) can't be
-opened by an old process of this user either, so none can hold it, and the
-private file alone is held, with a warning.
+**When a file can't be used.** A named lock never takes a set of files its
+rivals don't, which would let both into the critical section:
+
+- If the runtime directory is refused (another user owns it, or others can
+  write to it) or can't be created while the shared file is on, the lock
+  falls back to the shared file alone, with a warning: every process takes
+  that file, so it still excludes them all, as before the move.
+- With the shared file dropped, other processes hold the private file
+  alone, so failing to open it means the lock isn't taken (False), with a
+  warning.
+- On POSIX, a shared file this user can't open (another user made the
+  directory, or put something else in the file's place) can't be opened by
+  an old process of this user either, so none can hold it, and the private
+  file alone is held, with a warning.
 """
 
 from __future__ import annotations
@@ -160,15 +166,27 @@ def _open(path: Path, mode: int) -> int:
 
 
 def _open_named(key: LockKey) -> list[int]:
-    """Open a named lock's files, in the order they are locked; empty when none can be."""
+    """Open a named lock's files, in the order they are locked; empty when it can't be held.
+
+    Never a namespace other processes don't take too: a process holding a
+    file its rivals don't would share the critical section with them.
+    """
+    legacy = legacy_locks()
     fds: list[int] = []
     try:
         fds.append(_open(key.private(), 0o600))
     except (OSError, RuntimeError) as exc:  # RuntimeError: Path.home() can't be found
+        if not legacy:
+            # Without the shared file, others hold the private one alone: a
+            # fallback to the shared file would be a lock nobody else takes.
+            _warn_once(f"private-only:{type(exc).__name__}",
+                       "the private lock directory can't be used (%s), and the shared lock "
+                       "files are off (SMRITI_LEGACY_LOCKS), so named locks can't be taken", exc)
+            return []
         _warn_once(f"private:{type(exc).__name__}",
                    "the private lock directory can't be used (%s); named locks fall back to "
                    "the shared temp directory alone", exc)
-    if fds and not legacy_locks():
+    if not legacy:
         return fds
     try:
         fds.append(_open(key.legacy, 0o644))

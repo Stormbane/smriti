@@ -246,15 +246,18 @@ def test_contending_takers_complete_and_never_overlap(tmp_path: Path) -> None:
 # ------------------------------------------------------------- fallback
 
 
-def test_a_refused_runtime_directory_falls_back_to_the_shared_file(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def _refuse_runtime_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     import smriti.embed.runtime as runtime
 
     def refuse(*, create: bool = True) -> Path:
         raise runtime.RuntimeDirError("refusing the runtime directory: other users can write")
 
     monkeypatch.setattr(runtime, "runtime_dir", refuse)
-    monkeypatch.setenv(oslock.LEGACY_LOCKS_ENV, "0")  # even with the shared file dropped
+
+
+def test_a_refused_runtime_directory_falls_back_to_the_shared_file(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    _refuse_runtime_dir(monkeypatch)
     key = lock_path("edit", str(tmp_path / "tree"))
     with caplog.at_level(logging.WARNING, logger="smriti.core.oslock"):
         with exclusive_lock(key, wait_s=0.3) as held:
@@ -291,6 +294,23 @@ def test_a_world_writable_runtime_directory_is_refused(
         assert held
         assert not _free(key.legacy)
     assert not (run / "locks").exists(), "nothing created in a refused directory"
+
+
+def test_with_the_shared_file_dropped_a_refused_runtime_directory_fails_closed(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    # Others hold the private file alone; the shared one would be a lock of its own.
+    monkeypatch.setenv(oslock.LEGACY_LOCKS_ENV, "0")
+    key = lock_path("edit", str(tmp_path / "tree"))
+    private = key.private()
+    with _held(private):  # another process, inside the critical section
+        _refuse_runtime_dir(monkeypatch)
+        with caplog.at_level(logging.WARNING, logger="smriti.core.oslock"):
+            with exclusive_lock(key, wait_s=0.3) as held:
+                assert not held
+                assert _free(key.legacy), "no switch to the shared file"
+    assert any("can't be taken" in r.getMessage() for r in caplog.records)
+    with exclusive_lock(key, wait_s=0.3) as alone:
+        assert not alone  # nobody holds it now, and still: never another namespace
 
 
 def test_an_unusable_shared_file_on_posix_leaves_the_private_lock(
