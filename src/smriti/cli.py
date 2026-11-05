@@ -45,9 +45,8 @@ def _cmd_index(args: argparse.Namespace) -> int:
 
 
 def _cmd_read(args: argparse.Namespace) -> int:
-    import sqlite3
-
     from smriti.core.tree import smriti_db_path
+    from smriti.store.schema import open_readonly
     from smriti.store.search import search
 
     db_path = smriti_db_path()
@@ -55,23 +54,18 @@ def _cmd_read(args: argparse.Namespace) -> int:
         print("No index found. Run 'smriti index' first.", file=sys.stderr)
         return 1
 
-    # Re-open with extensions
-    from smriti.store.schema import ensure_schema
-
-    # Read dimension from existing db
-    tmp = sqlite3.connect(str(db_path))
-    row = tmp.execute("SELECT value FROM meta WHERE key = 'dimension'").fetchone()
-    tmp.close()
-    if not row:
-        print("Index is corrupted (no dimension). Run 'smriti index --full'.", file=sys.stderr)
-        return 1
-
-    dim = int(row[0])
-    conn = ensure_schema(db_path, dim)
-
-    query = " ".join(args.query)
-    results = search(conn, query, top_k=args.n, use_reranker=not args.no_rerank)
-    conn.close()
+    # Read-only, like the MCP server: a reader that opened the index for
+    # writing (ensure_schema runs DDL and upserts meta) could block writers.
+    conn = open_readonly(db_path)
+    try:
+        if not conn.execute("SELECT value FROM meta WHERE key = 'dimension'").fetchone():
+            print("Index is corrupted (no dimension). Run 'smriti index --full'.",
+                  file=sys.stderr)
+            return 1
+        query = " ".join(args.query)
+        results = search(conn, query, top_k=args.n, use_reranker=not args.no_rerank)
+    finally:
+        conn.close()
 
     if not results:
         print("No results found.")
