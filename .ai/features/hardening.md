@@ -164,6 +164,19 @@ server for each conversation and never ends them. That leak is the
 plugin's to fix (report upstream); H10 makes each copy cost about 20 MB
 instead of about 1 GB.
 
+## H11. From outside review #4 (B and B+, at `f1319a1`)
+
+| # | Change | Acceptance |
+|---|---|---|
+| H11.1 | Capture is off unless configured: with no `daylog.json` sources, logd captures nothing and says so; `smriti_write` content is scrubbed like captured turns. | Tests; README privacy text. |
+| H11.2 | LLM calls fed untrusted text: verify the digest's no-tools flags against the installed Claude Code (a test that fails if tools are reachable, when the CLI is present); the morning call drops WebSearch unless configured on. | Tests; docs state the residual risk. |
+| H11.3 | The morning message is claimed by an exclusive create before composing, so overlapping runs send one. | A race test. |
+| H11.4 | Backups push the current branch to its upstream, not a hard-coded `master`. | Tests with a `main` repo. |
+| H11.5 | `_checked_branch` agrees with `safe_name` (no dot-prefixed segments); MCP handlers type-check their arguments (`ToolError` on a non-string, `top_k` bounded); `smriti status` reads the index read-only; "Moved" when a feature moves. | Tests. |
+| H11.6 | The reference profile moves out of the wheel into its own package (`smriti-reference`, or a plugin directory); the default root is neutral (`~/.smriti`) with `~/.narada` honoured where it exists. | A fresh install has no reference code; the reference install is unchanged. |
+| H11.7 | Release: tag `v0.2.0` with the changelog; the `read` extra's model download is disclosed (and `HF_HUB_OFFLINE` documented). | A tagged release. |
+| H11.8 | Outside review #5. | Grades recorded. |
+
 ## Status
 
 Updated as phases land. Each phase had a Codex diff review, fixes for every
@@ -210,5 +223,7 @@ a recheck.
   with E501, B and BLE, and `mypy --strict` on the whole package, on every OS;
   getting there found numpy's and the Anthropic SDK's stubs differing by
   version from the development machine's.
-- **H9.12** (outside review #4): running.
-- **H10**: planned.
+- **H9.12 done**: outside review #4 at `f1319a1`, Opus B (was B-), Sonnet B+ (was B).
+  The findings are H11.
+- **H10**: planned; Claude-Codex cross-review running.
+- **H11**: planned, after H10.
