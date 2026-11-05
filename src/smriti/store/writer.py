@@ -92,18 +92,29 @@ def _checked_branch(root: Path, branch: str) -> str:
     """Return *branch* normalised, or raise if it would leave *root*.
 
     ``branch`` reaches here straight from the MCP ``smriti_write`` tool, so
-    ``..`` segments, absolute or drive paths, and paths that resolve outside
-    the tree through a junction or symlink (e.g. ``mirrors/``) are rejected.
+    every segment must be a plain name by the rule every other path argument
+    follows (:func:`smriti.core.safe_names.safe_name`): no ``.`` or ``..``, no
+    dot-prefixed segment such as ``.git`` or ``.smriti``, no drive colon,
+    reserved character or device name. Absolute paths, and paths that resolve
+    outside the tree through a junction or symlink (e.g. ``mirrors/``), are
+    rejected too. The error is :class:`UnsafeName`, a ``ValueError``.
     """
+    from smriti.core.safe_names import UnsafeName, safe_name
+
     raw = branch.replace("\\", "/").strip()
     norm = raw.rstrip("/")
-    parts = norm.split("/")
-    if (not norm or raw.startswith("/") or ":" in norm or norm.startswith("~")
-            or any(p in ("", ".", "..") for p in parts)):
-        raise ValueError(f"invalid branch {branch!r}: use a relative path inside the memory tree")
+    if not norm or raw.startswith("/"):
+        raise UnsafeName(f"invalid branch {branch!r}: use a relative path inside the memory tree")
+    parts: list[str] = []
+    for part in norm.split("/"):
+        try:
+            parts.append(safe_name(part, "segment"))
+        except UnsafeName as exc:
+            raise UnsafeName(f"invalid branch {branch!r}: {exc}") from exc
+    norm = "/".join(parts)
     base = root.resolve()
     if not (base / norm).resolve().is_relative_to(base):
-        raise ValueError(f"invalid branch {branch!r}: resolves outside the memory tree")
+        raise UnsafeName(f"invalid branch {branch!r}: resolves outside the memory tree")
     return norm
 
 

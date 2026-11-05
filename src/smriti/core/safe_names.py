@@ -7,8 +7,9 @@ a single name that can't leave its directory: no separators, no ``.`` or
 ``..``, no drive colon or other characters Windows reserves, no leading ``.``
 or ``~``, no control characters, and not a Windows device name. Spaces and
 non-ASCII letters are fine: the installer names project mirrors after their
-folders verbatim. ``smriti_write``'s branch, which may be nested, has its own
-check (``smriti.store.writer._checked_branch``).
+folders verbatim. ``smriti_write``'s branch may be nested: its check
+(``smriti.store.writer._checked_branch``) holds each of its segments to this
+rule.
 """
 
 from __future__ import annotations
