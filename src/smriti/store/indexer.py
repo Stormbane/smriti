@@ -21,7 +21,7 @@ from typing import Protocol, cast
 from smriti._vendored.memsearch.chunker import chunk_markdown, compute_chunk_id
 from smriti._vendored.memsearch.scanner import scan_paths
 from smriti.core.tree import smriti_db_path, tree_root, trunk_distance
-from smriti.store.index_policy import is_indexable
+from smriti.store.index_policy import is_indexable, may_hold_indexable
 from smriti.store.schema import IndexDB, ensure_schema
 
 log = logging.getLogger(__name__)
@@ -271,7 +271,10 @@ def index_tree(
         # ── Scan tree ────────────────────────────────────────────────────
         root_resolved = root.resolve()
         scanned_files = [
-            f for f in scan_paths([str(root)])
+            f for f in scan_paths(
+                [str(root)],
+                keep_dir=lambda d: may_hold_indexable(str(d.relative_to(root_resolved))),
+            )
             if is_indexable(str(f.path.relative_to(root_resolved)))
         ]
         stats["scanned"] = len(scanned_files)

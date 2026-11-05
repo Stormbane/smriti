@@ -8,6 +8,10 @@ Modifications from upstream:
   - scan_paths: added ignore_dirs parameter to prune well-known build/vendor
     directories (node_modules, venv, etc.) during os.walk. Pruning at walk
     time matters for large repos where post-walk filtering is too late.
+  - scan_paths: added keep_dir, a caller's predicate to prune directories
+    by path (smriti's index policy) during the walk.
+  - _maybe_add: a file that vanishes between the walk and its stat is
+    skipped instead of aborting the whole scan.
 License: see smriti/NOTICE.md and smriti/src/smriti/_vendored/memsearch/LICENSE
 ---
 """
@@ -15,6 +19,7 @@ License: see smriti/NOTICE.md and smriti/src/smriti/_vendored/memsearch/LICENSE
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,6 +55,7 @@ def scan_paths(
     extensions: tuple[str, ...] = (".md", ".markdown"),
     ignore_hidden: bool = True,
     ignore_dirs: frozenset[str] | set[str] | None = None,
+    keep_dir: Callable[[Path], bool] | None = None,
 ) -> list[ScannedFile]:
     """Recursively scan *paths* for markdown files.
 
@@ -57,7 +63,9 @@ def scan_paths(
     walked recursively.  Hidden files/dirs (starting with ``"."``) are
     skipped when *ignore_hidden* is ``True``.  Directory names in
     *ignore_dirs* are pruned during the walk; defaults to
-    ``DEFAULT_IGNORE_DIRS`` (node_modules, venv, build, etc.).
+    ``DEFAULT_IGNORE_DIRS`` (node_modules, venv, build, etc.).  If
+    *keep_dir* is given, it is called with each directory's path, and the
+    directories it rejects are pruned too.
     """
     results: list[ScannedFile] = []
     seen: set[str] = set()
@@ -73,6 +81,7 @@ def scan_paths(
                     d for d in dirnames
                     if not (ignore_hidden and d.startswith("."))
                     and d not in prune
+                    and (keep_dir is None or keep_dir(Path(dirpath) / d))
                 ]
                 for fname in filenames:
                     if ignore_hidden and fname.startswith("."):
@@ -96,5 +105,8 @@ def _maybe_add(
     if real in seen:
         return
     seen.add(real)
-    stat = fp.stat()
+    try:
+        stat = fp.stat()
+    except OSError:  # deleted (or made unreadable) since the walk listed it
+        return
     results.append(ScannedFile(path=fp, mtime=stat.st_mtime, size=stat.st_size))

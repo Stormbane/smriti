@@ -32,6 +32,21 @@ _RAW_DAY_RENDER = re.compile(r"^log/\d{4}/\d{2}/\d{2}\.md$")
 _MIRROR_RECORDS = re.compile(r"^mirrors/[^/]+/(findings|decisions)/", re.IGNORECASE)
 
 
+def may_hold_indexable(rel_dir: str) -> bool:
+    """Whether a tree-relative directory can contain anything :func:`is_indexable` accepts.
+
+    The scan prunes the rest instead of walking it and filtering afterwards:
+    ``mirrors/<project>/`` junctions lead into whole other repositories.
+    """
+    rel = rel_dir.replace("\\", "/").strip("/")
+    if not rel:
+        return True
+    parts = rel.split("/")
+    if parts[0] == "mirrors":
+        return len(parts) < 3 or parts[2].lower() in ("findings", "decisions")
+    return parts[0] not in EXCLUDED_TOP_LEVEL
+
+
 def is_indexable(rel_source: str) -> bool:
     """Whether a tree-relative path (``/`` or ``\\`` separated) belongs in the index."""
     rel = rel_source.replace("\\", "/").strip("/")

@@ -619,6 +619,61 @@ def test_only_a_full_reindex_changes_the_vector_dimension(
     conn.close()
 
 
+def test_a_file_that_vanishes_mid_scan_does_not_abort_the_index(
+        mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Outside review #3: the scanner's unguarded stat let one file deleted
+    between the walk and its stat abort the whole index_tree run."""
+    import smriti._vendored.memsearch.scanner as scanner
+
+    real_walk = scanner.os.walk
+
+    def walk_listing_a_ghost(top, *a, **k):
+        for dirpath, dirnames, filenames in real_walk(top, *a, **k):
+            yield dirpath, dirnames, [*filenames, "deleted-meanwhile.md"]
+
+    monkeypatch.setattr(scanner.os, "walk", walk_listing_a_ghost)
+    stats = index_tree(root=mini_tree, db=mini_tree / ".smriti" / "index.db")
+    assert stats["indexed"] == 4 and stats["errors"] == 0
+
+
+def test_the_scan_prunes_what_the_policy_excludes(
+        mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """mirrors/<project>/ leads into other repositories; only its findings and
+    decisions are memory, so nothing else under it is walked."""
+    import smriti._vendored.memsearch.scanner as scanner
+
+    for rel in ("mirrors/demo/ai/deep/plan.md", "mirrors/demo/findings/f.md",
+                "heartbeat/cycles/c.md"):
+        p = mini_tree / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# x\n\ntext\n", encoding="utf-8")
+    walked: list[str] = []
+    real_walk = scanner.os.walk
+
+    def recording_walk(top, *a, **k):
+        for entry in real_walk(top, *a, **k):
+            walked.append(Path(entry[0]).relative_to(mini_tree.resolve()).as_posix())
+            yield entry
+
+    monkeypatch.setattr(scanner.os, "walk", recording_walk)
+    index_tree(root=mini_tree, db=mini_tree / ".smriti" / "index.db")
+    assert "mirrors/demo/findings" in walked
+    assert not [d for d in walked if d.startswith(("mirrors/demo/ai", "heartbeat"))]
+    assert "mirrors/demo/findings/f.md" in _sources(mini_tree / ".smriti" / "index.db")
+
+
+def test_may_hold_indexable_agrees_with_is_indexable() -> None:
+    from smriti.store.index_policy import is_indexable, may_hold_indexable
+
+    for rel in ("journal/2026/11/week1/11-04.md", "mirrors/demo/findings/f.md",
+                "mirrors/demo/Decisions/d.md", "mirrors/demo/ai/x.md", "private/a.md",
+                "heartbeat/c.md", "notes/a.md"):
+        parents = rel.split("/")[:-1]
+        reachable = all(may_hold_indexable("/".join(parents[:i]))
+                        for i in range(1, len(parents) + 1))
+        assert reachable or not is_indexable(rel), rel
+
+
 def test_a_failed_vector_leg_scores_like_keyword_only(
         mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Outside review #3: when embedding the query raised, the vector weight
