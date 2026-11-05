@@ -15,6 +15,7 @@ import argparse
 import logging
 import os
 import sys
+import traceback
 from pathlib import Path
 
 # Ensure UTF-8 output on Windows
@@ -187,7 +188,9 @@ def _cmd_nightly(args: argparse.Namespace) -> int:
     status = run_nightly(rollup_cap=args.rollup_cap, digest_cap=args.digest_cap,
                          reindex=not args.no_reindex, witness=not args.no_witness)
     steps = status.get("steps", {})
-    for name, step in steps.items():  # type: ignore[union-attr]
+    if not isinstance(steps, dict):
+        steps = {}
+    for name, step in steps.items():
         if isinstance(step, dict):
             outcome = "ok" if step.get("ok", True) else f"FAILED: {step.get('error', '?')}"
             detail = {k: v for k, v in step.items() if k not in ("ok", "error")}
@@ -465,6 +468,25 @@ def main(argv: list[str] | None = None) -> int:
     else:
         logging.basicConfig(level=logging.WARNING)
 
+    if args.command is None:
+        parser.print_help()
+        return 0
+    try:
+        return _run(args)
+    except KeyboardInterrupt:
+        print("smriti: interrupted", file=sys.stderr)
+        return 130
+    except Exception as exc:
+        # One clean line and a failing exit code; the traceback is for -v.
+        if args.verbose:
+            traceback.print_exc()
+        print(f"smriti {args.command}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        if not args.verbose:
+            print("Run with -v for the traceback.", file=sys.stderr)
+        return 1
+
+
+def _run(args: argparse.Namespace) -> int:
     # Eval must enter its sandbox before any default-root access.
     if args.command != "eval":
         # Wire private layer if vault already exists (idempotent)
@@ -473,10 +495,6 @@ def main(argv: list[str] | None = None) -> int:
         _private_root = _tree_root() / "private"
         if _private_root.exists():
             _PrivateStore(_tree_root()).init()
-
-    if args.command is None:
-        parser.print_help()
-        return 0
 
     handlers = {
         "index": _cmd_index,
