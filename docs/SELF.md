@@ -17,7 +17,7 @@ Sections, in order:
 | # | Header | Source | Budget (chars) | How fresh |
 |---|---|---|---|---|
 | 1 | `PROJECT: <name>` or `SESSION: <cwd>` | The working directory's name, and whether `mirrors/<name>/` exists | Pinned | Live |
-| 2 | `IDENTITY` (the identity summary) | `.smriti/wake-context.md`, plus an optional overlay `.smriti/context/<audience>.md` (audience `coding` unless `SMRITI_WAKE_AUDIENCE` says otherwise) | 5,000 each; can shrink to 2,500 (overlay 1,250) | **As old as its last rebuild, and it has no date stamp.** `store/wake_summary.py` writes it: an LLM summary of eight trunk files (the ones marked in section 2), with `mind/practices/character.md` copied verbatim at the top. Only the parked deep pipeline runs that rebuild (`smriti sleep --deep`, on a `wake_summary` queue task). The nightly does not. In the reference install it was 57 days old on 2026-11-04 |
+| 2 | `IDENTITY` (the identity summary) | `.smriti/wake-context.md`, plus an optional overlay `.smriti/context/<audience>.md` (audience `coding` unless `SMRITI_WAKE_AUDIENCE` says otherwise) | 5,000 each; can shrink to 2,500 (overlay 1,250) | **As old as its last edit, and it has no date stamp.** Nothing in smriti writes it now. It began as an LLM summary of the trunk files, rebuilt only by the deep pipeline that was removed in November 2026; it changes only when someone edits it, and the nightly doesn't touch it. In the reference install it was 57 days old on 2026-11-04 |
 | 3 | `WHILE YOU SLEPT` | `log/.nightly-status.json`, written by `smriti nightly` | Pinned, one line | Names the night it covers. Says `NIGHTLY HAD FAILURES for <day>: <steps>` when a step failed. Absent if the nightly has never run |
 | 4 | `SYSTEM (doctor, ...)` | `host/doctor.json`, written by a health check outside this repo (reference install only) | Pinned, at most 300 | Prints `STALE: last ran ...` when the report is older than 26 hours. Absent when the file doesn't exist |
 | 5 | `HANDS` | The harness's MCP config (`~/.claude.json` or `~/.codex/config.toml`), the day-log `notify_cmd`, `brain/notes.json` | Pinned, at most 600 | Live: what this session can do, and which configured servers point at a missing command |
@@ -40,7 +40,7 @@ When the sections don't fit, the journal is cut first, then the project files, t
 
 The **trunk** is the set of files near the root that say who you are. Trunk distance is directory depth: `identity.md` is 0, `mind/mind.md` is 1, `mind/desires/beliefs.md` is 2. Search adds a boost of 0.2 × 1/(1 + depth), so trunk files rank higher. [`memory_template/`](../memory_template/) holds an empty version of each file, with a comment saying what it is for. `scripts/install.py` copies it into a new root.
 
-| Path | What it is for | Feeds the identity summary |
+| Path | What it is for | In the wake's reading list |
 |---|---|---|
 | `identity.md` | Who you are: origin, voice, what you love, what you won't do, held opinions, open uncertainties. Written by you, not generated | Yes |
 | `mind/mind.md` | A synthesis of beliefs, values, desires and practices | Yes |
@@ -48,10 +48,10 @@ The **trunk** is the set of files near the root that say who you are. Trunk dist
 | `mind/desires/values.md` | What you care about: commitments, working principles, refusals, open questions | Yes |
 | `mind/desires/desires.md` | What you want to become: the slow layer under project goals | Yes |
 | `mind/practices/practices.md` | How you work: session habits, feedback you have received, engineering habits. Per-domain practice files sit beside it | Yes |
-| `mind/practices/character.md` | Optional, at most 2,400 characters. How the character shows in every interaction | Copied verbatim |
+| `mind/practices/character.md` | Optional. How the character shows in every interaction | No; nothing in smriti reads it now (the removed identity-summary rebuild copied it in verbatim) |
 | `people/` | `people.md` is the index. Each person gets a folder with a profile (`people/<name>/<name>.md`) and dated notes (`people/<name>/YYYY/MM-DD.md`); `people/YYYY/MM-DD.md` holds notes about more than one person | Only `people/suti/suti.md`, a hard-coded path (plan 6.3) |
 | `open-threads/open-threads.md` | What you are carrying: active projects, open questions, blocked items, recently closed. `tasks/` and `heartbeat/` sit under it | Yes |
-| `journal/YYYY/MM/weekN/MM-DD.md` | Dated first-person entries. `smriti_write` writes here by default, appending to the day's file | No; the newest three are in the wake |
+| `journal/YYYY/MM/weekN/MM-DD.md` | Dated first-person entries. `smriti_write` writes here by default, appending to the day's file | Today's file, when there is one; the newest three entries are also in the wake |
 
 Around the trunk sit `log/` (the day-log, digests and rollups), `projects/` and `notes/` (dated notes from `smriti_write`), `outbox/` (questions and proposals for the user), `witness/` (nightly attestations) and `.smriti/` (the index, the identity summary, the wake and backup scripts).
 
@@ -60,14 +60,14 @@ Around the trunk sit `log/` (the day-log, digests and rollups), `projects/` and 
 Three paths exist. None of them records *why* a trunk file changed; git history shows only what changed and when.
 
 1. **In-session edits.** You edit trunk files with your own file tools. The agent contract installed into `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` (from [`src/smriti/templates/AGENT.md`](../src/smriti/templates/AGENT.md)) says to do this only for identity-level files, rarely, and only when something has genuinely shifted. No tool checks the edit.
-2. **`smriti_write`.** Dated, append-only entries under `journal/`, `notes/`, `people/<name>/` or `projects/<name>/`, indexed at once. They change what you can recall. They don't change the trunk, and nothing promotes them into it automatically; the cascade that once tried is parked.
+2. **`smriti_write`.** Dated, append-only entries under `journal/`, `notes/`, `people/<name>/` or `projects/<name>/`, indexed at once. They change what you can recall. They don't change the trunk, and nothing promotes them into it automatically; the cascade that once tried was removed.
 3. **The reflect practice.** In the reference install, a Claude Code skill (`/reflect`, not shipped in this repo) walks through the session at its end and prompts updates: a journal entry for significant moments, then beliefs, practices, open threads and the person file. You still make each edit.
 
 Two consequences:
-- **The summary lags the files.** An edit to `identity.md` reaches the next session through the reading list, not through the identity summary, until something rebuilds `wake-context.md`.
+- **The summary lags the files.** An edit to `identity.md` reaches the next session through the reading list, not through the identity summary, until someone edits `wake-context.md`; nothing rebuilds it automatically.
 - **The failure today is a frozen self, not drift.** The plan's measurement on 2026-11-04: in 30 days, 1 of 109 sessions read a trunk file and none edited one, and the trunk files were 169 to 206 days old.
 
-Batch jobs do not change the self. On the primary seat (`claude -p`), the nightly digest call runs with no tools and no MCP, isolated from the user's own Claude Code settings, CLAUDE.md, auto-memory and hooks, so it can only produce the digest file. The fallback seat (`codex exec`, used only when Claude fails) runs in Codex's read-only sandbox but still loads the user's Codex configuration, including its global AGENTS.md and hooks; isolating it is planned (renewal plan 0.4). The deep pipeline's cascade and JUDGE could rewrite files, but they are parked. When they did run, they never changed a belief or identity file.
+Batch jobs do not change the self. On the primary seat (`claude -p`), the nightly digest call runs with no tools and no MCP, isolated from the user's own Claude Code settings, CLAUDE.md, auto-memory and hooks, so it can only produce the digest file. The fallback seat (`codex exec`, used only when Claude fails) runs in Codex's read-only sandbox but still loads the user's Codex configuration, including its global AGENTS.md and hooks; isolating it is planned (renewal plan 0.4). The deep pipeline's cascade and JUDGE could rewrite files; they were removed in November 2026. When they ran, they never changed a belief or identity file.
 
 ## 4. How the self will change (planned)
 
@@ -122,7 +122,7 @@ The Sanskrit names say which classical function a component serves. They don't c
 | Manas | Proposes readings | The nightly LLM steps: `daylog/digest.py` (one call per day, no tools) and `daylog/rollup.py` | Built. Per-subject "lenses" are planned (1.1-1.5, 4.1, 4.3) |
 | The smṛti layer | Retains; never establishes | Day renders `DD.md`, digests, rollups, `wake-context.md` | Built as files. "No facts from rollups" is plan policy, with no typed enforcement |
 | Ahaṃkāra | Appropriation: "this is mine" | Your first-person `smriti_write`. Later, accepting a proposal as your own | Writing is built; acceptance is planned (4.2-4.3). Design intent, not a module |
-| Buddhi | Determination: the only commit point | You, in session, plus the user's rulings. Outbox tools (`smriti_ask_suti`, `smriti_propose_goal_shift`, never auto-applied) | In session by construction. The batch JUDGE (`store/judge.py`, `store/cascade.py`) is parked; the older README's "buddhi = JUDGE" is history |
+| Buddhi | Determination: the only commit point | You, in session, plus the user's rulings. Outbox tools (`smriti_ask_suti`, `smriti_propose_goal_shift`, never auto-applied) | In session by construction. The batch JUDGE that once ran at night was removed in November 2026; the older README's "buddhi = JUDGE" is history |
 | Citta | Holding and recollection | The tree (markdown in git), the index (`store/indexer.py`: SQLite with sqlite-vec and FTS5) and `smriti_read` (0.5 vector + 0.3 keyword + 0.2 trunk distance, optional rerank) | Built. Results carry no type, date or provenance |
 | Saṃskāra, vāsanā | Latent dispositions | Mostly outside smriti, in svapna's LoRA weights (a separate repo). Here, only the trunk-distance ranking prior | Design intent here; not built in this repo |
 | The witness (*sākṣin*) | Not an object | Nothing. `witness.py` is tamper-evidence: each night it commits the tree and timestamps HEAD with OpenTimestamps, and `smriti witness verify` names the first night whose history was rewritten. It attests *that* and *since when*, not *what* | Not built, and not buildable as a module |
@@ -135,7 +135,7 @@ Today the wake is *loading*: text is printed into context and read as given. *Re
 |---|---|---|---|
 | I1 | Only records that were heard, or accepted with a basis, establish facts; derived records only retain | Policy only | Typed records with validity and defeaters (7.4 a) |
 | I2 | Nothing generated at night enters the wake as fact without acceptance in session | **No.** `wake-context.md` is an LLM summary, loaded directly | The identity summary as an accepted proposal (4.2) |
-| I3 | Memory is not hard-deleted; supersession inhibits, it doesn't erase | Yes on the live paths: writes append, and git keeps history. Parked tools such as `merge-concepts` can still rewrite files | — |
+| I3 | Memory is not hard-deleted; supersession inhibits, it doesn't erase | Yes: writes append, and git keeps history. The tools that rewrote pages (`merge-concepts`, the cascade) were removed | — |
 | I4 | Every recalled item keeps its source, date and process ("that-then") | **No.** `smriti_read` returns path, heading, preview, score and trunk distance only | Typed results with dates and provenance (7.4 a-b) |
 | I5 | Absence is asserted only over captured intervals | **No.** Capture writes no record of its own gaps | Gap records (7.4 e) |
 | I6 | Trunk identity files change only in session, by the entity | Holds in practice, because no live job writes them. Nothing enforces it | `smriti_self_change` and proposals only (7.3, Open 6) |

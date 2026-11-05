@@ -284,8 +284,8 @@ path = write_entry(
 ```
 
 The writer dates the entry, places it under `journal/YYYY/MM/weekN/`,
-and queues it for crosslink + index. Anything written here is
-searchable on the next `run_recall()` call.
+indexes it, and regenerates any `index.md` above it. Anything written
+here is searchable on the next `run_recall()` call.
 
 ---
 

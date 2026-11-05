@@ -20,7 +20,8 @@ shells out to external commands.
 ## [2026-04] Prompt caching cuts API costs dramatically
 
 **Context**: Switched from raw Anthropic API calls to using `cache_control: ephemeral`
-on system prompts in api_backend.py.
+on system prompts in api_backend.py (since removed; the Anthropic provider in
+`smriti.llm.providers.anthropic_api` does the same).
 
 **Insight**: The system prompt (identity context, instructions) is the same across
 many JUDGE/EXECUTOR calls in a cascade. Caching it means only the first call in a
@@ -41,6 +42,11 @@ task, process later via `smriti sleep`) is the right architecture.
 
 **Applies to**: Any new side effect triggered by a write. Never make the write
 conditional on the side effect succeeding.
+
+**Later (2026-11)**: the queue, `smriti sleep` and the cognitive cascade were
+removed. The rule holds for what remains: the writer's reindex and index-page
+update run after the entry is on disk, and a failure in either is logged, never
+raised.
 
 ## [2026-04] Trunk distance as a search signal
 

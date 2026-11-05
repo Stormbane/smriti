@@ -1,7 +1,7 @@
 # Identity
 
 <!-- TRUNK ROOT (depth 0). This is who the entity is.
-     Everything in the tree cascades up to this file.
+     Everything in the tree sits below this file.
      Write this first — even a few lines is enough to start.
      
      Suggested sections: origin, values, voice, what I love,

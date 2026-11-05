@@ -60,7 +60,7 @@ Each commit was diff-reviewed by the other model (Codex for Claude's work, Claud
   - always `--strict-mcp-config`;
   - smriti's instructions as the real system prompt (`--system-prompt-file`).
   Verified in transcripts. **Still open:** isolating the Codex fallback.
-- **0.5 done:** writes no longer feed the parked queue (`SMRITI_LEGACY_QUEUE=1` re-enables it).
+- **0.5 done:** writes no longer feed the parked queue. (The `SMRITI_LEGACY_QUEUE=1` switch went with the queue in hardening H3.)
 - **0.6 done:** `smriti eval` runs on a packaged synthetic fixture in a disposable sandbox. With `SMRITI_ROOT` pointed at the live tree it changes nothing. Result: 14 search cases, MRR 0.96, 13/14 (the no-answer case fails, which is 2.1's job). Implemented by Codex, reviewed by Claude.
 - **0.7 and 0.8 done:**
   - one index policy (`store/index_policy.py`), excluding `.smriti/`, `.git/`, `private/`, `heartbeat/`, `mirrors/` (except its findings and decisions) and raw day renders;
@@ -68,6 +68,7 @@ Each commit was diff-reviewed by the other model (Codex for Claude's work, Claud
   - writer branch paths validated.
 - **0.9 done:** a conftest isolates every test. A full run adds 0 lines to the live metrics.
 - **0.10 done:** the rollup input budget is shared across inputs, so the year rollup sees every month.
+- **4.0 done, and 6.4's deep pipeline and daemon** (hardening H3, 2026-11-05): the deep pipeline, its queue, watcher and daemon, and the `sleep`, `queue`, `daemon`, `watch`, `ingest` and `merge-concepts` commands are deleted rather than moved to `legacy/`; git history keeps them. The `index.md` upkeep that `smriti_write` uses stays, as `smriti.store.index_pages`. `smriti eval` keeps its search cases. Hermes and the PreCompact staging hook (the rest of 6.4) remain.
 - **0.11 done:** PID liveness no longer sends CTRL_C on Windows.
 
 **Retrieval:**
@@ -104,7 +105,7 @@ Each commit was diff-reviewed by the other model (Codex for Claude's work, Claud
 
 **Gaps found by the docs pass (open):**
 - ~~nothing reads `.smriti/handoff-pending.md`~~ fixed: the wake shows it once, then archives it;
-- `wake-context.md` is still rebuilt only by the parked pipeline;
+- nothing rebuilds `wake-context.md` (its rebuild went with the deep pipeline in H3); it changes only by hand;
 - MCP registration doesn't carry the memory root;
 - `wake.md` is obsolete.
 

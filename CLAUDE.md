@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Orientation for an agent working on this repo. Claude Code loads this file; Codex loads [`AGENTS.md`](AGENTS.md), which says the same thing. Keep the two identical apart from this line. Status as of 2026-11-04.
+Orientation for an agent working on this repo. Claude Code loads this file; Codex loads [`AGENTS.md`](AGENTS.md), which says the same thing. Keep the two identical apart from this line. Status as of 2026-11-05.
 
 ## What smriti is
 
@@ -15,19 +15,19 @@ It grew inside one setup (the entity Narada and its user Suti, the maintainer) a
 3. [`docs/SELF.md`](docs/SELF.md): the wake briefing, the self files, how the self changes.
 4. [`.ai/features/nightly-cycle.md`](.ai/features/nightly-cycle.md): the contract for capture, the nightly and the morning message.
 
-Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.md`, `.ai/knowledge/architecture.md` and `.ai/knowledge/glossary.md` describe the April 2026 design, much of which is parked. Read them for intent, not for status.
+Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.md`, `.ai/knowledge/architecture.md` and `.ai/knowledge/glossary.md` describe the April 2026 design. Of what was built from it, only search, writes and the `index.md` upkeep remain. Read them for intent, not for status.
 
 ## Status
 
 **Live** (runs daily in the reference install):
-- `smriti write`, `smriti read`, and the MCP server (`python -m smriti.mcp_server`): dated markdown writes, and hybrid search (0.5 vector + 0.3 keyword + 0.2 trunk distance; the CLI also reranks, the MCP path doesn't).
+- `smriti write`, `smriti read`, and the MCP server (`python -m smriti.mcp_server`): dated markdown writes (which also regenerate the parent directories' `index.md` listings), and hybrid search (0.5 vector + 0.3 keyword + 0.2 trunk distance; the CLI also reranks, the MCP path doesn't).
 - Day-log capture: `smriti logd` merges Claude Code transcripts, Codex rollouts and voice transcripts into `log/YYYY/MM/DD.jsonl` (`src/smriti/daylog/`).
 - `smriti nightly` (03:00): reconcile → render → digest (one `claude -p` call per day, `codex exec` as fallback) → week/month/year rollups → index → witness (a git commit plus an OpenTimestamps stamp) → status file.
 - `smriti morning` (07:00): one message a day composed from the digest. Its persona is hard-coded to the reference user.
 - The wake briefing: a SessionStart hook prints `smriti.wake.briefing()`, at most 9,500 characters.
 - Backups: `<root>/.smriti/backup.py` commits and pushes the memory tree at each wake and in the nightly.
 
-**Parked** (the code is present but doesn't run; removal is plan 4.0 and 6.4): `smriti sleep --deep` (cascade, JUDGE, ingest, consolidate); the task queue (`smriti queue`, `smriti daemon`, `smriti watch`), which writes stopped feeding on 2026-11-04; `smriti ingest`; `smriti merge-concepts`.
+**Removed** (2026-11-05, hardening H3; the code is in the git history): the deep pipeline that `smriti sleep --deep` ran (cognitive cascade, JUDGE, ingest and routing, consolidation, thread synthesis, actionables, journal rollups, the wake-context rebuild), its task queue and file watcher, and the `sleep`, `queue`, `daemon`, `watch`, `ingest` and `merge-concepts` commands. `smriti eval` keeps only its search cases.
 
 **Legacy:**
 - qmd as a recall backend (`smriti recall index`, `smriti recall daemon`); smriti's own index is the default.
@@ -57,7 +57,7 @@ Regenerate with `python scripts/doc_facts.py --write`; `tests/test_doc_facts.py`
 src/smriti/
   cli.py                 the `smriti` command
   mcp/                   MCP server over stdio, no dependencies: protocol, tool table, tools by group
-  store/                 writer, indexer, index policy, search; also the parked cascade, judge, ingest, queue
+  store/                 writer, index pages (index.md upkeep), indexer, index policy, schema, search
   daylog/                capture adapters, logd, render, digest, rollups, nightly, morning, schedule
   wake/                  briefing.py, presence.py
   witness.py, backup.py  tamper-evidence; the backup trigger
@@ -65,7 +65,7 @@ src/smriti/
   llm/                   providers: claude_cli, codex_cli, anthropic_api, openai_api, ollama
   recall/                ambient-recall hook backends (smriti, qmd)
   private/               encrypted private store
-  eval/                  evaluation cases and runner
+  eval/                  search evaluation: cases, runner, synthetic fixture
   _vendored/memsearch/   vendored MIT code (see NOTICE.md)
 scripts/                 install.py, setup_project.py, doc_facts.py
 memory_template/         skeleton for a new memory root

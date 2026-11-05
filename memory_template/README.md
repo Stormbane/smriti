@@ -3,7 +3,7 @@
 This is the directory structure for an entity's memory tree. Copy it
 to `~/.<entity>/` as part of `python scripts/install.py`.
 
-## Structure and cascade flow
+## Structure
 
 ```
 <entity>/
@@ -30,30 +30,33 @@ to `~/.<entity>/` as part of `python scripts/install.py`.
 
   journal/                        depth 1+ (temporal experience)
     YYYY/MM/weekN/MM-DD.md        daily entries (leaves)
-    YYYY/MM/weekN/weekN.md        week summaries (rollup)
-    YYYY/MM/MM.md                 month summaries (rollup)
-    YYYY/YYYY.md                  year summaries (rollup)
+
+  log/                            the day-log, written by smriti logd and nightly
+    YYYY/MM/DD.jsonl, DD.md       each day's turns, and their render
+    YYYY/MM/DD-digest.md          the nightly digest
+    YYYY/MM/weekN.md              week rollup of the digests
+    YYYY/MM.md                    month rollup
+    YYYY.md                       year rollup
 
   projects/                       project-specific memory (smriti_write)
-  sources/                        ingested external content
-  semantic/                       synthesized wiki pages
+  sources/                        external content you file here yourself
+  semantic/                       concept pages you write yourself
   notes/                          general observations
 
-  .smriti/                        system state (not in cascade tree)
-    wake-context.md               derived identity briefing for wake
+  .smriti/                        system state (not indexed)
+    wake-context.md               identity briefing for wake (edited by hand)
     index.db                      search index (sqlite-vec + FTS5)
-    queue.json                    task queue
     metrics.jsonl                 event log
 ```
 
-## Cascade direction
+## Direction
 
-Changes flow UP the tree. A daily journal entry cascades:
+The tree is ordered by distance from the trunk: leaves (journal, notes,
+projects) sit far from `identity.md`, summaries nearer it. Nothing pushes
+changes up the tree for you. When the leaves below a summary have really
+shifted, you update the summary yourself:
 
-  daily → week summary → month summary → year summary
-    → beliefs/values (via wikilinks) → desires → mind → identity
-
-Project todos cascade through mirrors:
+  journal → beliefs/values → desires → mind → identity
 
   project .ai/todo.md → tasks.md → open-threads.md → identity.md
 
@@ -80,10 +83,9 @@ People (observations)
 
 ## Files vs directories
 
-Each directory has a summary file with the same name (e.g. `mind/mind.md`).
-The summary file is updated by the cognitive cascade when its children
-change. The structural cascade generates `index.md` files from directory
-listings (no LLM needed).
+Each directory has a summary file with the same name (e.g. `mind/mind.md`),
+which you keep current by hand. Where a directory has an `index.md`, each
+`smriti_write` below it regenerates that listing from the directory (no LLM).
 
 ## First setup
 

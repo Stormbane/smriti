@@ -41,23 +41,29 @@ The reference entity for both projects is Narada.
 
 ## Features
 
-### Live (v0.1)
-- Write path: dated entries with frontmatter, structural cascade, reindex
+### Live
+- Write path: dated entries with frontmatter, reindex, parent `index.md` upkeep
 - Read path: hybrid search (sqlite-vec + FTS5) with trunk-distance scoring
-- MCP server: smriti_read, smriti_write, smriti_status as Claude Code tools
-- CLI: index, read, write, status, watch, sleep, queue, daemon, eval, ingest, metrics
+- MCP server: smriti_read, smriti_write, smriti_status, plus project-workflow and
+  handoff tools
+- CLI: index, read, write, status, doctor, nightly, witness, morning, logd, tasks,
+  eval, metrics, recall
+- Day-log capture and the nightly cycle (render, digest, rollups, index, witness)
+- Pluggable LLM providers: claude -p by default; Anthropic SDK with prompt caching
+- Wake system: SessionStart hook loads identity + project memory into Claude Code
+- PreCompact capture hook (legacy): saves raw conversation turns before compaction
+- Project template + setup script for new projects
+- Eval: labelled search cases against a synthetic fixture
+
+### Built, then removed (November 2026)
 - Ingest pipeline: source file -> summarize -> route -> execute -> cascade
 - Cognitive cascade: JUDGE -> EXECUTOR loop on parent MOCs, wikilink following
 - Batch consolidation: cluster similar files, synthesize concept pages
-- Queue system: async task processing (ingest, route, cognitive_cascade, reindex)
-- Anthropic API backend with prompt caching; fallback to claude -p
-- Wake system: SessionStart hook loads identity + project memory into Claude Code
-- PreCompact capture hook: saves raw conversation turns before context compaction
-- Project template + setup script for new projects
-- Eval framework for JUDGE, search, and cascade testing
+- Queue system and its commands (sleep, queue, daemon, watch, ingest, merge-concepts)
+- The judge and cascade eval cases
 
 ### Not yet built
-- Full EXTRACT phase (currently candidates come from EXECUTOR during ingest only)
+- Full EXTRACT phase
 - CROSSLINK entity resolution (wikilinks in prose, not structured graph)
 - Lint pass (Karpathy-style health check for stale/contradictory entries)
 - Qwen3 + LoRA as identity core (interface exists, model not integrated)
@@ -104,11 +110,11 @@ Full reading list and citations in docs/ARCHITECTURE.md.
 
 ### v0.1 (current) -- Working pipeline
 - [x] Index + hybrid search
-- [x] Write path with cascade
+- [x] Write path with index-page upkeep
 - [x] MCP server
-- [x] Ingest pipeline
-- [x] Cognitive cascade with JUDGE/EXECUTOR
-- [x] Batch consolidation
+- [x] Ingest pipeline (removed November 2026)
+- [x] Cognitive cascade with JUDGE/EXECUTOR (removed November 2026)
+- [x] Batch consolidation (removed November 2026)
 - [x] Wake system + installer
 - [x] Project template + setup script
 - [x] 39 tests passing

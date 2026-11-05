@@ -43,7 +43,8 @@ as a dependency.
      empty mid-rebuild.
    - The digest never silently drops part of a day.
 3. **Architecture.**
-   - No dead code: the parked pipelines are removed, not just switched off.
+   - No dead code: the parked pipelines are removed, not just switched off
+     (done: hardening H3).
    - `mcp_server.py` is split into handler modules with a typed dispatch table.
    - Modules stay small and cohesive.
    - The core is generic; the reference user's profile (presence, messaging,

@@ -36,8 +36,8 @@ registered as an MCP server in `~/.claude.json`.
 
 **Wake is silent unless `SMRITI_WAKE=1` is set** in its environment — the
 SessionStart hook sets this so interactive sessions wake fully, while
-`claude -p` and other headless callers (smriti's JUDGE, routing, eval
-runs) stay clean. To inject the entity's identity into a one-shot
+`claude -p` and other headless callers (such as the nightly digest) stay
+clean. To inject the entity's identity into a one-shot
 headless call anyway, use `<entity>/.smriti/narada-p.sh "your prompt"` —
 it prepends the wake output and forwards to `claude -p`.
 
@@ -107,7 +107,7 @@ python scripts/install.py --harness none  # core memory setup only
 | Copy the memory template | `<entity>/` from `memory_template/` | Empty identity tree (never overwrites existing files) |
 | Copy `wake.py`, `backup.py` | `<entity>/.smriti/` | Wake shim; backup script. smriti-managed copies are upgraded, keeping a `.pre-upgrade.bak` |
 | Copy `narada-p.sh` | `<entity>/.smriti/narada-p.sh` | Wake-injecting wrapper for headless `claude -p` |
-| Ensure `.smriti/` dir | `<entity>/.smriti/` | Smriti runtime state (index, queue, wake) |
+| Ensure `.smriti/` dir | `<entity>/.smriti/` | Smriti runtime state (index, metrics, wake) |
 | Create junctions | `<entity>/mirrors/{project}/auto-memory`, `/knowledge`, `/ai` | Per-project memory and knowledge access |
 | Register MCP server | `~/.claude.json` | Exposes `smriti_read` / `smriti_write` / `smriti_status` |
 | Patch settings.json | `~/.claude/settings.json` | SessionStart → `wake.py`; UserPromptSubmit → touch `last-activity`; PostToolUse → ambient recall (legacy, being retired) |
@@ -124,8 +124,9 @@ smriti doctor --harness codex --project C:/Projects/your-project
 The Hermes bridge writes `~/.hermes/SOUL.md`. It is a generated composition of
 `<entity>/.smriti/wake-context.md` and
 `<entity>/.smriti/context/hermes.md`; do not edit it as the source of truth.
-The write is atomic, which safely replaces the old core-only hardlink. Whenever
-Smriti rebuilds `wake-context.md`, it rebuilds the live Hermes SOUL as well.
+The write is atomic, which safely replaces the old core-only hardlink. Nothing
+rebuilds `wake-context.md` automatically; after editing it, rerun
+`python scripts/install.py --harness hermes` to refresh the live SOUL.
 
 ### Audience-specific wake context
 
@@ -147,12 +148,10 @@ The briefing's sections, their order and their budgets are fixed in
 smriti index          # build the search index over ~/.narada/
 smriti read "query"   # semantic + keyword search
 smriti write "text"   # write an entry to the memory tree
-smriti ingest file.md # parked: ingest external content, route to tree
 smriti nightly        # sleep task: reconcile day-log, render, digest, rollups, reindex
 smriti morning        # wake task: the one good-morning message
 smriti logd           # day-log watcher daemon (--ensure = keepalive)
 smriti tasks install  # schedule the nightly cycle (logd keepalive, 03:00 nightly, 07:00 morning)
-smriti sleep --deep   # parked deep pipeline (cascade/ingest/consolidate); refuses without --deep
 smriti status         # index stats + day-log capture health
 ```
 
@@ -360,11 +359,10 @@ cwd: <absolute working directory>
 - **Incremental.** Per-session markers track the last JSONL line processed.
 - **Idempotent.** Running with no new turns is a no-op.
 
-### Future migration path
+### What reads it
 
-When the smriti ingest path is wired to read from the staging tree
-directly, this hook's output becomes the canonical ingest source. For now
-it is a backstop that runs alongside smriti's live pipelines.
+Nothing ingests the staging tree automatically. It is a backstop that runs
+alongside the day-log, which is the live capture path.
 
 ---
 

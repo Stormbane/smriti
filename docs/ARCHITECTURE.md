@@ -1,8 +1,8 @@
 # smriti Architecture
 
-> **This is the April 2026 design, and much of it is parked.** The six-step pipeline (EXTRACT → JUDGE → CROSSLINK), the cognitive cascade, ingest, consolidation, the semantic wiki and the task queue don't run; they are reachable only through `smriti sleep --deep` and the other parked commands (`ingest`, `queue`, `daemon`, `watch`, `merge-concepts`), and are slated for removal. The "Implementation status (2026-04-15)" list below is out of date, and the working spec is now the renewal plan, not svapna.
+> **This is the April 2026 design. It does not describe the running code.** The parts of it that were built as a deep pipeline (JUDGE, the cognitive cascade, ingest and routing, consolidation, the semantic wiki's upkeep, the task queue and its commands) were removed in November 2026 and remain in the git history. "What was built of this design" below says what survives; the working spec is now the renewal plan, not svapna.
 >
-> For what runs today, read [What runs today](../README.md#what-runs-today) in the README. For the wake briefing, the self files and how the self changes, read [SELF.md](SELF.md). The current state and plan are in [`.ai/features/smriti-renewal.md`](../.ai/features/smriti-renewal.md). The rest of this document is unchanged and kept for its reasoning.
+> For what runs today, read [What runs today](../README.md#what-runs-today) in the README. For the wake briefing, the self files and how the self changes, read [SELF.md](SELF.md). The current state and plan are in [`.ai/features/smriti-renewal.md`](../.ai/features/smriti-renewal.md). From section 1 on, this document is unchanged and kept for its reasoning: where it names commands, modules or env vars, they are the design's, not the code's.
 
 **Status**: Design document, synchronized from the svapna reference
 implementation at `svapna/.ai/knowledge/memory-architecture.md`. When the
@@ -15,53 +15,48 @@ the document is written with them in mind alongside the others.
 
 ---
 
-## Implementation status (2026-04-15)
+## What was built of this design (as of 2026-11-05)
 
-What is built and live:
+Still running:
 
-- **Index + search**: hybrid vector (sqlite-vec) + FTS5 with trunk-distance
-  scoring. CLI: `smriti index`, `smriti read`.
-- **Write path**: dated-entry writes under branches with frontmatter. CLI:
-  `smriti write`.
-- **Structural cascade**: auto-regenerates `index.md` files from directory
-  listings on every write (no LLM).
-- **Cognitive cascade**: upward wikilink propagation with a pluggable JUDGE
-  (KEEP/REVISE/REJECT/PROMOTE). Cycle-protected via a `visited` set. Stops
-  at `PROTECTED_FILES` (default: identity.md, manifest.md, mind.md, suti.md,
-  MEMORY.md; overridable via `NARADA_PROTECTED_FILES` env var).
-- **Ingest pipeline**: `smriti ingest <path>` reads a file/directory,
-  summarizes via EXECUTOR, routes via search-informed JUDGE, executes
-  REVISE/LINK/TASK/CREATE actions, queues cascades. Leaf-directory filter
-  excludes `sources/`, `events/`, `journal/`, `days/`, `episodes/`, `notes/`,
-  `heartbeat/artifacts/` from routing targets (overridable via
-  `NARADA_LEAF_PREFIXES`).
-- **Routing JUDGE**: one claude -p call per ingest, returns a JSON routing
-  table scoring all candidates together. `routing_judge_via_claude` is the
-  default; `routing_judge_auto_skip` is a test stub.
-- **Queue + sleep**: deferred cognitive cascade processing. CLI: `smriti
-  sleep` (with `--dry-run` for stubs), `smriti daemon start` for a
-  long-running worker.
-- **Eval framework**: JUDGE cases, search cases, cascade cases. `smriti
-  eval --real` runs live claude -p.
+- **Index + search** (Step 6): hybrid vector (sqlite-vec) + FTS5 with
+  trunk-distance scoring. CLI: `smriti index`, `smriti read`.
+- **Write path** (Step 4): dated-entry writes under branches with
+  frontmatter. CLI: `smriti write`; MCP: `smriti_write`.
+- **Index pages** (the design's "structural cascade"): each write
+  regenerates the existing `index.md` files above it from their directory
+  listings, with no LLM (`smriti.store.index_pages`).
 - **MCP server**: `smriti/mcp/` serves the memory, project and outbox
   tools over JSON-RPC stdio. Each tool is a `Tool` (name, schema,
   handler) in a group module under `mcp/tools/`; a handler refuses by
   raising `ToolError`, and the server marks every failure `isError`.
   `python -m smriti.mcp_server` remains the entry point installed
   configs use.
-- **Metrics**: JSONL at `~/.narada/.smriti/metrics.jsonl` with
-  per-operation token/cost/timing.
+- **Metrics**: JSONL at `<root>/.smriti/metrics.jsonl`, summarised by
+  `smriti metrics`.
+- **Eval**: `smriti eval` runs labelled search cases against a synthetic
+  fixture in a disposable sandbox.
 
-What is NOT built yet:
+Built, then removed (November 2026):
 
-- **Full EXTRACT phase**: candidates are produced by the EXECUTOR during
-  ingest, not as a separate capability-LLM step.
-- **CROSSLINK entity resolution**: wikilinks are written by the EXECUTOR in
-  prose, not via a structured extraction pass.
-- **Lint** (Karpathy-style health pass): orphan pages, broken wikilinks,
-  contradictions — not yet.
-- **Qwen3+LoRA as JUDGE**: currently all judges are `claude -p`; the
-  pluggable interface is in place so the swap is a function-pointer change.
+- **JUDGE and the cognitive cascade**: upward wikilink propagation with
+  KEEP/REVISE/REJECT/PROMOTE verdicts from `claude -p`, stopping at
+  protected trunk files.
+- **Ingest and routing**: summarise a source, score candidate pages, apply
+  REVISE/LINK/TASK/CREATE actions.
+- **Consolidation**: clustering leaf files into concept pages, merging
+  near-duplicate concepts, thread synthesis and actionable extraction.
+- **Journal rollups and the wake-context rebuild** through the queue.
+- **The task queue** with its watcher and the `sleep`, `queue`, `daemon`,
+  `watch`, `ingest` and `merge-concepts` commands; the judge and cascade
+  eval cases.
+
+The nightly cycle (`smriti nightly`) replaced the queue-driven sleep: it
+digests each day's log and rolls the digests up, and edits no file it did
+not generate.
+
+Never built: a separate EXTRACT step, CROSSLINK entity resolution, a lint
+pass, Qwen3+LoRA as the judge, and the pluggable backends of section 7.
 
 ---
 

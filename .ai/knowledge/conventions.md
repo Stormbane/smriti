@@ -17,8 +17,7 @@
 
 - **mypy strict** mode. Full PEP 484 type hints on all functions.
 - **ruff** with line-length 100, target Python 3.11.
-- **Dataclasses** for structured return values (SearchResult, JudgmentResult, etc.).
-- **Uppercase strings** for enum-like values (KEEP, REVISE, PROMOTE, DISCARD).
+- **Dataclasses** for structured return values (SearchResult, SearchCaseResult, etc.).
 
 ## Dependencies
 
@@ -31,17 +30,17 @@
 ## Error Handling
 
 - **Non-fatal failures**: try-except around non-critical operations (reindex,
-  cascade, metrics). A cascade error must not block a write.
+  index-page updates, metrics). An index-page error must not block a write.
 - **Log levels**: WARNING for expected failures (missing index, FTS not available).
   ERROR for unexpected. Never swallow silently.
-- **Fallback pattern**: primary method (Anthropic SDK) -> secondary (claude -p
-  subprocess). Both paths tested.
+- **Fallback pattern**: primary method -> secondary (the digest: `claude -p`, then
+  `codex exec`). Both paths tested.
 
 ## Config
 
-- **Environment variables** for all config overrides: NARADA_ROOT,
-  NARADA_PROTECTED_FILES, NARADA_LEAF_PREFIXES, NARADA_CLUSTER_THRESHOLD,
-  SMRITI_MODEL, SMRITI_EXECUTOR_MODEL, ANTHROPIC_API_KEY.
+- **Environment variables** for all config overrides: SMRITI_ROOT (or the legacy
+  NARADA_ROOT), SMRITI_LLM_PROVIDER, SMRITI_MODEL, SMRITI_EXECUTOR_MODEL,
+  ANTHROPIC_API_KEY.
 - **No config files** in v0.1. Env vars only.
 - **`root: Path | None = None`** parameter pattern -- most functions accept an
   optional root that defaults to `tree_root()`. This makes testing easy (pass
@@ -49,11 +48,11 @@
 
 ## Functions & Modules
 
-- **One function per concern**: judge functions judge, executor functions execute,
-  writer functions write. Don't mix.
+- **One function per concern**: the indexer indexes, the writer writes, index_pages
+  keeps index.md current. Don't mix.
 - **Return dataclasses** for complex results, not dicts or tuples.
-- **Lazy imports** where needed to avoid circular deps (e.g. api_backend inside
-  judge functions).
+- **Lazy imports** where needed to avoid circular deps or loading heavy optional
+  modules (e.g. the writer imports the indexer inside `_reindex_one`).
 - **Singletons** for MetricsLogger and embedding provider (via factory function).
 
 ## CLI
@@ -67,15 +66,15 @@
 
 - **pytest** with tmp_path fixtures for file isolation.
 - **mini_tree fixtures** that create a narada-like tree in temp dirs.
-- **Stub judge/executor** (judge_auto_keep, executor_echo) for tests that don't
-  need real LLM calls. Use `--real` flag in eval for actual API calls.
+- **Stub models** (an offline embedding provider, fake LLM providers) for tests
+  that don't need a real model.
 - **No external service deps** in default test runs.
 
 ## Metrics
 
 - **Structured JSONL** at `~/.narada/.smriti/metrics.jsonl`.
 - **snake_case event names**: search_query, index_completed, write_entry,
-  cascade_verdict, ingest_completed.
+  index_pages_updated.
 - **Every operation** produces a metrics event. This is not optional.
 - **10 MB rotation**, 3 files kept.
 

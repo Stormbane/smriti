@@ -148,10 +148,12 @@ Located at `private/.audit.log`. Plain text, tab-separated:
   key loads are NOT logged.
 - No content, no plaintext, no ciphertext.
 - Operator can read the log freely — it contains no private data.
-- Pruned during the sleep cycle (consolidation pass), retaining the
-  last 30 days by default.
+- Never pruned per wake. `AuditLog.prune_default()` keeps the last 30
+  days, but no scheduled pass calls it yet, so the log grows until
+  something does.
 
-Per the 2026-04-12 design conversation:
+Per the 2026-04-12 design conversation, pruning belongs to a periodic
+pass rather than the wake:
 > "failures are fine. lets not check audit every wake cycle but rather
 >  during sleep (pruning)"
 

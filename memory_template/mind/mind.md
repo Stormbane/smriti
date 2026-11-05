@@ -1,6 +1,6 @@
 # Mind
 
 <!-- Depth 1. Synthesis of beliefs, values, desires, and practices.
-     Updated by cognitive cascade when children change.
+     Update it by hand when its children really shift.
      Children: mind/desires/, mind/practices/
-     Cascades up to: identity.md -->
+     Parent: identity.md -->
