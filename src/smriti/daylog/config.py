@@ -26,9 +26,10 @@ speaker roles (``smriti.daylog.model.USER`` and ``AGENT``): the day-log
 render, the presence line and the nightly prompts use them. They
 default to "User" and "Agent".
 
-``profile`` names an optional profile, ``smriti.profiles.<name>``, that
-adds one installation's tools, wake sections and morning persona to the
-core (see :mod:`smriti.profiles`). Unset, the core runs alone.
+``profile`` names an optional profile, an installed package registered
+under that name in the ``smriti.profiles`` entry-point group, that adds
+one installation's tools, wake sections and morning persona to the core
+(see :mod:`smriti.profiles`). Unset, the core runs alone.
 
 ``morning_web_search`` (default false) lets the morning call search the
 web for headlines; off, that call gets no tools at all.
@@ -65,7 +66,7 @@ class DaylogConfig:
     # Display names of the two speaker roles.
     user_name: str = DEFAULT_USER_NAME
     agent_name: str = DEFAULT_AGENT_NAME
-    # The optional profile (smriti.profiles.<name>); "" means none.
+    # The optional profile's entry-point name (see smriti.profiles); "" means none.
     profile: str = ""
     # Why nothing is captured, when nothing is; "" otherwise (see capture_note).
     capture_off: str = ""

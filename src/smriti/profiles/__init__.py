@@ -4,13 +4,24 @@ The core (capture, the nightly, the memory and project tools, the wake
 briefing) knows two roles, a user and an agent, and the names config
 gives them. What only makes sense for one particular installation, such
 as tools that reach its user's phone, wake sections that read its health
-app, or a persona for its morning message, lives in a profile: a
-subpackage of ``smriti.profiles`` whose ``PROFILE`` is a :class:`Profile`.
+app, or a persona for its morning message, lives in a profile: an
+installed package that exposes a :class:`Profile` through the
+``smriti.profiles`` entry-point group. Its ``pyproject.toml`` names it::
+
+    [project.entry-points."smriti.profiles"]
+    myprofile = "my_profile:PROFILE"
 
 A profile is enabled by config, ``"profile": "<name>"`` in
 ``<root>/.smriti/daylog.json``. With none set, the core runs alone: the
 MCP server lists only its own tools, the wake briefing has no profile
 sections, and the morning message uses the generic prompt.
+
+A profile is code from the Python environment smriti runs in, found the
+way any installed plugin is; nothing is ever loaded from the memory tree.
+A profile that can't be loaded raises :class:`ProfileError`, so it costs
+only what it adds: the MCP server serves the core's tools, and the wake
+shows one line in place of its sections. The morning fails instead, since
+a wrong persona must not go out quietly.
 
 Every hook is optional:
 
@@ -24,11 +35,11 @@ Every hook is optional:
 
 from __future__ import annotations
 
-import importlib
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -36,11 +47,13 @@ if TYPE_CHECKING:
     from smriti.daylog.config import DaylogConfig
     from smriti.mcp.tool import Tool
 
+ENTRY_POINT_GROUP = "smriti.profiles"
+
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 class ProfileError(Exception):
-    """The configured profile does not exist or is not a profile."""
+    """The configured profile is not installed, is ambiguous, or can't be loaded."""
 
 
 @dataclass(frozen=True)
@@ -87,19 +100,44 @@ class Profile:
     morning_prompt: Callable[[DaylogConfig], str] | None = None
 
 
+def _provider(entry: EntryPoint) -> str:
+    """The distribution an entry point comes from, for error messages."""
+    dist = entry.dist
+    return f"{dist.name} {dist.version}" if dist is not None else entry.value
+
+
 def load_profile(name: str) -> Profile:
-    """The profile ``smriti.profiles.<name>``; raises :class:`ProfileError` if there is none."""
+    """The installed profile called *name*.
+
+    It is the object named by the one entry point called *name* in the
+    ``smriti.profiles`` group. Raises :class:`ProfileError` when no
+    installed package provides it, when more than one does, when loading
+    it raises anything, and when what it names is not a :class:`Profile`.
+    """
     if not _NAME_RE.match(name):
-        raise ProfileError(f"profile name {name!r} is not a plain lower-case module name")
+        raise ProfileError(f"profile name {name!r} is not a plain lower-case name")
     try:
-        module = importlib.import_module(f"{__name__}.{name}")
-    except ModuleNotFoundError as exc:
-        if exc.name != f"{__name__}.{name}":
-            raise  # the profile exists but something it imports does not
-        raise ProfileError(f"no profile named {name!r} (smriti.profiles.{name})") from exc
-    profile = getattr(module, "PROFILE", None)
+        found = list(entry_points(group=ENTRY_POINT_GROUP, name=name))
+    except (OSError, ValueError) as exc:  # an installed package's metadata is unreadable
+        raise ProfileError(f"can't read the installed {ENTRY_POINT_GROUP!r} entry points: "
+                           f"{exc}") from exc
+    if not found:
+        raise ProfileError(f"no installed package provides profile {name!r} "
+                           f"(entry point group {ENTRY_POINT_GROUP!r})")
+    if len(found) > 1:
+        providers = ", ".join(sorted(_provider(entry) for entry in found))
+        raise ProfileError(f"profile {name!r} is ambiguous: {len(found)} installed packages "
+                           f"provide it ({providers})")
+    entry = found[0]
+    try:
+        profile = entry.load()
+    except Exception as exc:
+        # Whatever the profile's own code raised: it costs only the profile.
+        raise ProfileError(f"profile {name!r} ({entry.value}, from {_provider(entry)}) "
+                           f"failed to load: {type(exc).__name__}: {exc}") from exc
     if not isinstance(profile, Profile):
-        raise ProfileError(f"smriti.profiles.{name} has no PROFILE")
+        raise ProfileError(f"profile {name!r} ({entry.value}) is {type(profile).__name__}, "
+                           "not a smriti.profiles.Profile")
     return profile
 
 
