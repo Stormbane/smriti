@@ -1,11 +1,13 @@
-"""Private file store with Fernet encryption and README-held key.
+"""Private file store with Fernet encryption; the key never goes to git.
 
 Phase 1 of the smriti privacy design. See `smriti/docs/PRIVACY.md`
 for the full reasoning.
 
 Layout:
     <memory_root>/private/
-    ├── README.md                 ← joint contract + encryption key
+    ├── README.md                 ← joint contract (committed)
+    ├── .key                      ← encryption key (never committed)
+    ├── .gitignore                ← keeps .key out of git
     ├── .audit.log                ← failures-only audit log
     └── YYYY/MM/YYYY-MM-DD-NNN.md.enc   ← encrypted content
 """
@@ -23,11 +25,14 @@ if TYPE_CHECKING:
     from cryptography.fernet import Fernet
 
 
-# Path to the contract template shipped with smriti. On PrivateStore.init()
-# this is read, the key placeholder is filled with a fresh Fernet key, and
-# the result is written to <memory_root>/private/README.md.
+# The contract template shipped with smriti, copied to private/README.md on
+# PrivateStore.init(). The key goes to private/.key, which private/.gitignore
+# keeps out of git: a key committed beside its ciphertext protects nothing
+# from anyone who can clone the remote. Older installs kept the key in a
+# README code block; it is still read from there when .key is absent.
 _TEMPLATE_PATH = Path(__file__).parent / "README.template.md"
-_KEY_PLACEHOLDER = "{{SMRITI_PRIVATE_KEY}}"
+_KEY_FILE = ".key"
+_GITIGNORE = ".key\n"
 
 
 @dataclass
@@ -82,22 +87,23 @@ class PrivateStore:
     # ---- initialization ----------------------------------------------------
 
     def init(self) -> None:
-        """Create the `private/` directory with README + key if missing.
+        """Create `private/` with its contract, its key and its .gitignore.
 
-        Idempotent: if `README.md` already exists, leaves it alone. This
-        is important — the key in the README is the one previously
-        committed to git, and overwriting it would orphan all existing
-        encrypted files.
+        Idempotent and never destructive: an existing key (in `.key`, or in
+        an older install's README) is kept, because replacing it would orphan
+        every encrypted file. The `.gitignore` is (re)written on every call so
+        the key stays out of git even if a root `.gitignore` is missing.
         """
         self.private_root.mkdir(parents=True, exist_ok=True)
+        ignore = self.private_root / ".gitignore"
+        if not ignore.exists() or _KEY_FILE not in ignore.read_text(encoding="utf-8").split():
+            ignore.write_text(_GITIGNORE, encoding="utf-8")
         readme = self.private_root / "README.md"
-        if readme.exists():
-            return
-
-        key = self._generate_key()
-        template = _TEMPLATE_PATH.read_text(encoding="utf-8")
-        populated = template.replace(_KEY_PLACEHOLDER, key)
-        readme.write_text(populated, encoding="utf-8")
+        if not readme.exists():
+            readme.write_text(_TEMPLATE_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+        key_path = self.private_root / _KEY_FILE
+        if not key_path.exists() and self._legacy_readme_key() is None:
+            key_path.write_text(self._generate_key() + "\n", encoding="ascii")
 
     @staticmethod
     def _generate_key() -> str:
@@ -109,23 +115,25 @@ class PrivateStore:
     # ---- key loading -------------------------------------------------------
 
     def _load_fernet(self) -> "Fernet":
-        """Read the encryption key from README.md and return a Fernet.
-
-        Parses the `## The key` section of the template — the key lives
-        in a fenced code block of the form:
-
-            ```
-            key: <base64-encoded-fernet-key>
-            ```
-        """
+        """Return a Fernet for this store's key: `.key`, else a legacy README key."""
         from cryptography.fernet import Fernet
 
+        key_path = self.private_root / _KEY_FILE
+        if key_path.exists():
+            return Fernet(key_path.read_text(encoding="ascii").strip().encode("ascii"))
+        legacy = self._legacy_readme_key()
+        if legacy is not None:
+            return Fernet(legacy.encode("ascii"))
+        raise RuntimeError(
+            f"no key at {key_path} (and no legacy key in private/README.md). "
+            "Call PrivateStore.init() first, or restore .key from your backup."
+        )
+
+    def _legacy_readme_key(self) -> str | None:
+        """The key from an older install's README (`key: ...` in a code block)."""
         readme = self.private_root / "README.md"
         if not readme.exists():
-            raise RuntimeError(
-                f"private/README.md not found at {readme}. "
-                "Call PrivateStore.init() first."
-            )
+            return None
         text = readme.read_text(encoding="utf-8")
 
         # Find a line starting with "key:" inside any fenced code block.
@@ -137,12 +145,8 @@ class PrivateStore:
                 continue
             if in_fence and stripped.startswith("key:"):
                 key = stripped.split(":", 1)[1].strip()
-                return Fernet(key.encode("ascii"))
-
-        raise RuntimeError(
-            "no `key: ...` line found in private/README.md. "
-            "The contract template may be malformed."
-        )
+                return key if key and not key.startswith("{{") else None
+        return None
 
     # ---- consent tokens ----------------------------------------------------
 
@@ -168,7 +172,7 @@ class PrivateStore:
         entity: str,
         session_id: str,
     ) -> Path:
-        """Encrypt content with the README key, write to a dated file,
+        """Encrypt content with the store key, write to a dated file,
         return the on-disk path.
 
         On failure, appends an entry to the audit log and re-raises.
@@ -180,13 +184,18 @@ class PrivateStore:
             date_dir = self.private_root / dt.strftime("%Y/%m")
             date_dir.mkdir(parents=True, exist_ok=True)
 
-            counter = self._next_counter(date_dir, dt)
-            filename = f"{dt.strftime('%Y-%m-%d')}-{counter:03d}.md.enc"
-            path = date_dir / filename
-
             ciphertext = fernet.encrypt(content.encode("utf-8"))
-            path.write_bytes(ciphertext)
-            return path
+            # Exclusive create: two writes in the same instant get distinct
+            # files instead of one overwriting the other.
+            counter = self._next_counter(date_dir, dt)
+            while True:
+                path = date_dir / f"{dt.strftime('%Y-%m-%d')}-{counter:03d}.md.enc"
+                try:
+                    with path.open("xb") as f:
+                        f.write(ciphertext)
+                    return path
+                except FileExistsError:
+                    counter += 1
         except Exception as e:
             self.audit.log_failure(
                 operation="write",

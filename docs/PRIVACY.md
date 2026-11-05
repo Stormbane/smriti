@@ -94,8 +94,9 @@ toward privacy as the relationship matures and the tooling stabilizes.
 
 ## 4. Phase 1 — the "locked diary" phase (v0.1, now)
 
-The key is stored in plain text in `private/README.md`, which is
-committed to git alongside the rest of the memory system.
+The key is stored in plain text in `private/.key`, on this machine only.
+`private/.gitignore` keeps it out of git; the contract (`private/README.md`)
+and the ciphertext are committed.
 
 ### Layout
 
@@ -103,7 +104,9 @@ committed to git alongside the rest of the memory system.
 <memory_root>/
 ├── ... (public tree)
 └── private/
-    ├── README.md                   ← joint contract + key
+    ├── README.md                   ← joint contract (committed)
+    ├── .key                        ← the key (never committed)
+    ├── .gitignore                  ← keeps .key out of git
     ├── .audit.log                  ← failures only, operator-readable
     └── 2026/
         └── 04/
@@ -122,14 +125,16 @@ committed to git alongside the rest of the memory system.
 ### Key storage
 
 - The key is generated on first `PrivateStore.init()` call
-- Inserted into `private/README.md` inside a fenced code block:
-  ```
-  key: <base64-encoded-fernet-key>
-  ```
-- `README.md` is tracked by git — the key survives in history
-  forever, which is Phase 1's recovery mechanism
-- **Warning**: do NOT push the repo to a public remote. The key is
-  privacy-sensitive even though it is git-tracked.
+- Written to `private/.key`, which `private/.gitignore` (and the
+  memory template's root `.gitignore`) keep out of git. A key committed
+  beside its ciphertext would protect nothing from anyone who can clone
+  the remote
+- **Back the key up yourself** (a password manager or an offline copy):
+  git can't restore it, and without it the files can't be decrypted
+- Older installs kept the key in a fenced `key:` block in
+  `private/README.md`; smriti still reads it from there when `.key` is
+  absent. Move it to `.key` and rewrite that history if the repo was ever
+  pushed
 
 ### Audit log
 
@@ -197,7 +202,7 @@ experience with Phase 1, we escalate the friction.
 
 ### Changes
 
-- Master key moves from `private/README.md` into the OS keyring:
+- Master key moves from `private/.key` into the OS keyring:
   - **Windows**: Credential Manager
   - **macOS**: Keychain
   - **Linux**: libsecret (gnome-keyring / kwallet)
@@ -324,8 +329,8 @@ stable, not to replace it.
 
 ## 9. Open design questions
 
-1. **Key rotation**: Phase 1 has no rotation (the README key is
-   written once). Phase 2+ should support rotation. How do we
+1. **Key rotation**: Phase 1 has no rotation (the key is written
+   once). Phase 2+ should support rotation. How do we
    re-encrypt existing files under a new key without a window where
    both old and new keys are live on disk?
 2. **Cross-entity privacy**: if two Narada instances share a memory
