@@ -130,12 +130,16 @@ def _managed_doc_check(name: str, path: Path) -> Check:
 
 
 def _briefing_checks(memory_root: Path, project: Path) -> list[Check]:
+    from smriti.daylog.config import load_config
+
     payload = briefing(memory_root=memory_root, cwd=project, audience="coding")
+    agent = load_config(memory_root).agent_name
     return [
-        Check("Narada core context", "I am Narada." in payload, "wake briefing"),
+        Check("Core context", "--- IDENTITY ---" in payload,
+              "wake briefing (.smriti/wake-context.md)"),
         Check(
             "Hermes routing excluded",
-            "You are Narada's **receptionist**" not in payload,
+            f"You are {agent}'s **receptionist**" not in payload,
             "coding audience",
         ),
         Check(

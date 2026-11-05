@@ -89,6 +89,60 @@ def test_reference_tools_are_answered(reference_profile: Path) -> None:
     assert "**Ask:** Ship it?" in comms.read_text(encoding="utf-8")
 
 
+# ── the core tools name the configured parties ──────────────────────────
+
+
+def _listing() -> dict[str, dict[str, Any]]:
+    response = handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert response is not None
+    return {t["name"]: t for t in response["result"]["tools"]}
+
+
+def _owner_enum(listing: dict[str, dict[str, Any]]) -> list[str]:
+    return listing["smriti_record_feature"]["inputSchema"]["properties"]["owner"]["enum"]
+
+
+def test_core_tool_text_names_the_configured_parties(_isolated_memory_root: Path) -> None:
+    generic = _listing()
+    assert generic["smriti_read"]["description"].startswith("Search Agent's memory tree")
+    assert _owner_enum(generic) == ["user", "agent", "both"]
+    enable_profile(_isolated_memory_root, user_name="Sam", agent_name="Ari")
+    named = _listing()
+    assert named["smriti_read"]["description"].startswith("Search Ari's memory tree")
+    assert "to the ari tree" in named["smriti_write"]["description"]
+    assert "Sam still triggers /clear" in named["smriti_write_handoff"]["description"]
+    assert _owner_enum(named) == ["sam", "ari", "both"]
+    text = json.dumps(named)
+    assert not [t for t in ("{user", "{agent") if t in text]
+    assert "{project}" in text  # other braces are left alone
+
+
+def test_the_reference_names_reproduce_the_old_tool_text(reference_profile: Path) -> None:
+    listing = _listing()
+    assert listing["smriti_read"]["description"].startswith("Search Narada's memory tree")
+    assert "to the narada tree" in listing["smriti_write"]["description"]
+    assert "Suti still triggers /clear" in listing["smriti_write_handoff"]["description"]
+    assert _owner_enum(listing) == ["suti", "narada", "both"]
+
+
+@pytest.mark.parametrize("config,owner,stored", [
+    ({"user_name": "Sam", "agent_name": "Ari"}, "Sam", "sam"),
+    ({"user_name": "Sam", "agent_name": "Ari"}, "suti", "both"),
+    ({"user_name": "Suti", "agent_name": "Narada"}, "narada", "narada"),
+    ({}, "agent", "agent"),
+])
+def test_a_feature_owner_is_one_of_the_configured_parties(
+    _isolated_memory_root: Path, config: dict[str, str], owner: str, stored: str,
+) -> None:
+    enable_profile(_isolated_memory_root, **config)
+    (_isolated_memory_root / "mirrors" / "demo" / "ai").mkdir(parents=True)
+    result = _call("smriti_record_feature", {"project": "demo", "slug": "f", "title": "T",
+                                             "goal": "g", "plan": "p", "owner": owner})
+    assert not result["result"].get("isError"), result
+    spec = _isolated_memory_root / "mirrors" / "demo" / "ai" / "features" / "active" / "f.md"
+    assert f"owner: {stored}\n" in spec.read_text(encoding="utf-8")
+
+
 # ── loading ─────────────────────────────────────────────────────────────
 
 

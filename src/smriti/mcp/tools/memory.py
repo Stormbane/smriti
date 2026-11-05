@@ -166,7 +166,7 @@ def handle_write_handoff(arguments: Arguments) -> str:
 TOOLS = (
     Tool(
         name="smriti_read",
-        description="Search Narada's memory tree — identity files, concept wiki, "
+        description="Search {agent}'s memory tree — identity files, concept wiki, "
             "goals, threads, journal, and event indexes. Returns ranked "
             "results with source path, heading, content preview, relevance "
             "score, and trunk distance (0 = identity-adjacent, higher = "
@@ -190,7 +190,7 @@ TOOLS = (
     ),
     Tool(
         name="smriti_write",
-        description="Write a new memory entry to the narada tree. Content is saved as a "
+        description="Write a new memory entry to the {agent_key} tree. Content is saved as a "
             "dated markdown file under the specified branch (default: journal) and "
             "immediately indexed so it is searchable via smriti_read. "
             "This is the v0.1 write path — no JUDGE step yet.",
@@ -232,7 +232,7 @@ TOOLS = (
             "or otherwise want future-self to pick up exactly where you "
             "left off. The wake loader on the next session reads the "
             "handoff at the very top of the briefing, then archives it "
-            "(single-slot — writing again overwrites). Suti still triggers "
+            "(single-slot — writing again overwrites). {user} still triggers "
             "/clear; this prepares the continuation context so neither of "
             "you has to write a re-entry prompt by hand. Good handoffs "
             "name: what was being done, what the next concrete step is, "

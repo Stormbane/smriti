@@ -31,6 +31,19 @@ def _known_projects() -> list[str]:
     return sorted(p.name for p in mirrors.iterdir() if p.is_dir())
 
 
+def _feature_owners() -> tuple[str, str, str]:
+    """Who can own a feature: the user and the agent by their configured keys, or both.
+
+    The same values ``smriti_record_feature``'s ``owner`` enum lists.
+    """
+    from smriti.daylog.config import load_config
+    from smriti.mcp.tool import party_names
+
+    cfg = load_config()
+    names = party_names(cfg.user_name, cfg.agent_name)
+    return names["user_key"], names["agent_key"], "both"
+
+
 def handle_add_todo(arguments: Arguments) -> str:
     """Append to mirrors/{project}/ai/todo.md. Fails loud on unknown project."""
     import re
@@ -287,7 +300,7 @@ def handle_record_feature(arguments: Arguments) -> str:
     why_now = arguments.get("why_now", "").strip()
     constraints = arguments.get("constraints", "").strip()
     owner = arguments.get("owner", "both").strip().lower()
-    if owner not in ("suti", "narada", "both"):
+    if owner not in _feature_owners():
         owner = "both"
 
     fm = (
@@ -545,7 +558,7 @@ TOOLS = (
                 },
                 "owner": {
                     "type": "string",
-                    "enum": ["suti", "narada", "both"],
+                    "enum": ["{user_key}", "{agent_key}", "both"],
                     "default": "both",
                 },
             },
