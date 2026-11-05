@@ -46,6 +46,11 @@ LOG_KEEP_LINES = 1000
 RUN_LOCK_NAME = "smriti-backup.lock"
 RUN_LOCK_MAX_AGE_S = 6 * 3600
 RUN_LOCK_INIT_GRACE_S = 60
+# CREATE_NO_WINDOW: a hidden console the child (and every git it runs)
+# inherits. Without it, a console-less parent's git calls each get a fresh
+# visible console -- with Windows Terminal as the default terminal, a blank
+# window that steals focus for half a second (2026-11-05).
+NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
 def repo_root() -> Path:
@@ -94,7 +99,8 @@ def run_cmd(cmd: list[str], cwd: Path, timeout: float) -> tuple[int, str]:
     """
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as out:
         try:
-            proc = subprocess.Popen(cmd, cwd=str(cwd), stdout=out, stderr=subprocess.STDOUT)
+            proc = subprocess.Popen(cmd, cwd=str(cwd), stdout=out, stderr=subprocess.STDOUT,
+                                    creationflags=NO_WINDOW)
         except FileNotFoundError:
             return 127, f"{cmd[0]} not found"
         try:
@@ -115,7 +121,7 @@ def git_running() -> bool:
         if os.name == "nt":
             proc = subprocess.run(
                 ["tasklist", "/FI", "IMAGENAME eq git.exe", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=10, creationflags=NO_WINDOW,
             )
             return proc.returncode != 0 or "git.exe" in proc.stdout.lower()
         # pgrep: 0 = found, 1 = none found, anything else = could not tell.
@@ -316,13 +322,15 @@ def spawn_detached(argv: list[str]) -> bool:
     kwargs: dict = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
                     "stderr": subprocess.DEVNULL, "close_fds": True}
     if os.name == "nt":
-        # Breakaway is what escapes a kill-on-close job; DETACHED_PROCESS and a
+        # Breakaway is what escapes a kill-on-close job; the console flag and a
         # new process group don't change job membership. If the job forbids
         # breakaway, report failure so the caller runs in the foreground.
         # (Outside any job the breakaway flag is simply ignored.)
-        detached, new_group, breakaway = 0x00000008, 0x00000200, 0x01000000
+        # NO_WINDOW, never DETACHED_PROCESS: a worker with no console at all
+        # makes each git it runs allocate a visible one (see NO_WINDOW).
+        new_group, breakaway = 0x00000200, 0x01000000
         try:
-            subprocess.Popen(cmd, creationflags=detached | new_group | breakaway, **kwargs)
+            subprocess.Popen(cmd, creationflags=NO_WINDOW | new_group | breakaway, **kwargs)
             return True
         except OSError:
             return False
