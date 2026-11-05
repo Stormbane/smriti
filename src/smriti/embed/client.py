@@ -2,7 +2,8 @@
 
 :class:`ServiceEmbedding` asks the memory root's service for vectors. When
 none is running it starts ``python -m smriti embed serve`` (a hidden
-console on Windows, never a detached process) and waits, bounded. Every
+console on Windows, never a detached process) and waits, bounded; a query
+never waits while the service is still starting (loading its model). Every
 step works to one deadline, from connecting to the last byte of the
 answer: 3 s for a query, 30 s for a write's batch. When the deadline
 passes, or the service can't be trusted (it fails authentication, or
@@ -176,7 +177,7 @@ class ServiceEmbedding:
         for _attempt in range(2):
             runtime, paths = self._paths()
             key = load_key(runtime)
-            found = self._ready_service(paths, deadline)
+            found = self._ready_service(paths, deadline, kind)
             try:
                 reply = self._call(found, key, paths, deadline, {
                     "op": "embed", "kind": kind, "texts": batch,
@@ -204,8 +205,17 @@ class ServiceEmbedding:
             return Embedded(vectors, identity)
         raise EmbeddingUnavailable(f"the embedding service closed the connection twice ({gone})")
 
-    def _ready_service(self, paths: ServicePaths, deadline: float) -> Discovery:
-        """The ready service's discovery record, starting one if needed, by ``deadline``."""
+    def _ready_service(self, paths: ServicePaths, deadline: float,
+                       kind: str = "write") -> Discovery:
+        """The ready service's discovery record, starting one if needed, by ``deadline``.
+
+        A query that finds the service still starting doesn't wait for it:
+        loading the model takes far longer than a query's 3 s, so every search
+        during a cold start used to spend all of them before falling back to
+        keywords. It falls back at once instead; a query that starts the
+        service waits only until the service says it is starting. A write
+        still waits, up to its 30 s.
+        """
         spawned = False
         delay = 0.02
         while True:
@@ -218,6 +228,9 @@ class ServiceEmbedding:
                     and time.time() - found.updated < FAILED_BACKOFF_S):
                 raise EmbeddingUnavailable(f"the embedding service failed to start: {found.error}")
             starting = found is not None and alive and found.state == "starting"
+            if starting and kind == "query":
+                raise EmbeddingUnavailable(
+                    "the embedding service is starting (loading its model); try again shortly")
             if not starting and not spawned:
                 if not self.spawn:
                     raise EmbeddingUnavailable("the embedding service is not running")

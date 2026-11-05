@@ -465,12 +465,12 @@ def test_idle_exit_racing_a_request_retries_on_a_fresh_service(
     real_ready = client._ready_service
     looks: list[str] = []
 
-    def ready(paths: Any, deadline: float) -> Discovery:
+    def ready(paths: Any, deadline: float, kind: str = "write") -> Discovery:
         if not looks:
             looks.append("stale")
             return as_read  # the request goes to the service that is exiting
         looks.append("fresh")
-        return real_ready(paths, deadline)
+        return real_ready(paths, deadline, kind)
 
     monkeypatch.setattr(client, "_ready_service", ready)
     assert deciding.wait(5)  # it has decided it is idle; it accepts nothing more
@@ -936,6 +936,33 @@ def test_stop_reaches_a_service_that_was_still_starting(root: Path) -> None:
         assert read_discovery(paths) is None
     finally:
         _kill([proc])
+
+
+def test_a_query_does_not_wait_while_the_service_is_starting(
+        root: Path, services: Services) -> None:
+    """H11.10: during a cold start (about 30 s of model loading) every query
+    waited out its whole 3 s deadline before falling back to keywords."""
+    paths = service_paths(runtime_dir(), root)
+    # A live service, still loading its model: the record a starting `serve` writes.
+    write_discovery(paths, Discovery(os.getpid(), "starting", "warming", root=str(paths.root)))
+    query = ServiceEmbedding(root, spawn=False)  # the usual 3 s query deadline
+
+    t0 = time.monotonic()
+    with pytest.raises(EmbeddingUnavailable, match="is starting"):
+        query.embed_with_identity(["brass lantern"], kind="query")
+    assert time.monotonic() - t0 < 1.0  # at once, not after 3 s
+
+    # A write still waits for it, and gets its vectors once the service is up.
+    writer = ServiceEmbedding(root, spawn=False, write_s=20)
+    up = threading.Timer(0.3, services.start, args=(root,))
+    up.start()
+    try:
+        got = writer.embed_with_identity(["brass lantern"], kind="write")
+    finally:
+        up.join(10)
+    assert got.identity == STUB and got.vectors == stub(["brass lantern"])
+    # And a query, once the service is ready, is served as before.
+    assert query.embed_with_identity(["brass lantern"], kind="query").identity == STUB
 
 
 # ── Real processes ───────────────────────────────────────────────────

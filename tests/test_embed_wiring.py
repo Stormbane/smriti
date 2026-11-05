@@ -168,6 +168,25 @@ def test_an_outage_degrades_visibly_and_vectors_fill_in_on_recovery_without_a_ni
     assert "saved and indexed" in wrote
 
 
+def test_a_search_during_a_cold_start_is_keyword_only_at_once(
+        tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """H11.10: each search of a cold start waited 3 s before going keyword-only."""
+    if not _has_vec():
+        pytest.skip("sqlite-vec can't load here: every search is keyword-only anyway")
+    monkeypatch.setenv("SMRITI_EMBED_SERVICE", "1")
+    paths = service_paths(runtime_dir(), tree)
+    write_discovery(paths, Discovery(os.getpid(), "starting", "warming", root=str(paths.root)))
+
+    for _ in range(3):  # every search while it loads, not only the first
+        t0 = time.monotonic()
+        read = _call("smriti_read", query="marigolds beside the well")
+        assert time.monotonic() - t0 < 1.5
+        assert read.startswith("keyword-only: the embedding service is starting"), read
+        assert "notes/garden.md" in read  # still found, by keyword
+    found = read_discovery(paths)
+    assert found is not None and found.instance == "warming"  # nothing started over it
+
+
 def test_with_the_service_off_status_says_so(tree: Path) -> None:
     # Without sqlite-vec (macOS's CI Python) no vectors can be stored, so the
     # tree's two sources, and the new write, are pending and say so.
