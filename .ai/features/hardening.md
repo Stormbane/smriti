@@ -209,6 +209,39 @@ identity checks. `SMRITI_EMBED_SERVICE=0` turns the service off.
 | H10.3 | Wire `_get_embedding_provider()` to the service in long-lived processes; degraded results and statuses through MCP and `smriti status`. | An MCP server stays under 100 MB after searches and writes, never importing `torch` or `onnxruntime` (test). Outage: a write is saved and keyword-searchable at once, the read says keyword-only, and vectors fill in on recovery without a nightly (tests). With the real model (`needs_model`): vector fidelity and first-search latency under 1 s with the service warm. |
 | H10.5 | Docs: README (what runs), ARCHITECTURE, SECURITY (the endpoint, its key, the trust boundary), the off switch. | Doc facts regenerated. |
 
+### H10.0 measurements (2026-11-05)
+
+On the development machine (12 cores, an NVIDIA GPU, Windows 11, Python 3.12,
+torch 2.5.1+cu121, sentence-transformers 4.1.0, onnxruntime 1.21.1), each
+variant in a fresh process, embedding 151 chunks of this repository's docs.
+RSS is resident memory after loading, then after embedding; peak is the
+process's peak working set. The ONNX MiniLM is the model repository's own
+export (`onnx/model.onnx`) at the same snapshot as the PyTorch weights
+(`1110a24`), run with mean pooling and the CPU arena off.
+
+| Runtime | Load | RSS loaded → after | Peak | One query (median) | 151 chunks |
+|---|---|---|---|---|---|
+| MiniLM, PyTorch, as the `local` provider runs it here (CUDA) | 15.3 s | 711 → 1,042 MB | 1,042 MB | 10.7 ms | 0.23 s |
+| MiniLM, PyTorch, CPU only | 15.0 s | 622 → 942 MB | 942 MB | 17.6 ms | 4.9 s |
+| MiniLM, ONNX, CPU | 0.55 s | 155 → 167 MB | 758 MB | 10.3 ms | 7.4 s |
+| bge-m3 int8, ONNX (the `onnx` provider's default), for scale | 3.2 s | 889 → 905 MB | 4,499 MB | 136 ms | 218 s |
+
+- **Agreement:** MiniLM through ONNX and through PyTorch give the same vectors:
+  cosine at least 0.999999 on every chunk (largest difference in any
+  component 2.5e-7), and identical top-5 neighbours for every chunk.
+- **What it decides.** ONNX would make the service about 170 MB resident
+  instead of about 1 GB, and start in half a second instead of 15, with the
+  same vectors; it embeds a large batch more slowly on the CPU than PyTorch
+  does on the GPU, which the service (short batches, queries first) barely
+  feels. The service keeps the index's recorded provider for now: serving
+  MiniLM through ONNX needs a provider with mean pooling (the vendored `onnx`
+  provider pools by CLS, which is right for bge-m3 but not for MiniLM) and a
+  different provider key, so it is a migration (`smriti index --full`), not a
+  drop-in. Recorded for a later decision; nothing in H10 depends on it.
+- **Found on the way:** the `local` provider can't load with `HF_HUB_OFFLINE=1`
+  under transformers 4.57 (its tokenizer loader lists the hub id as a
+  directory); online, it loads from the cache.
+
 ### Cross-review dispositions (round 1, Codex adversarial review)
 
 1. *Bind every embedding to the index identity of its transaction* [high]:
