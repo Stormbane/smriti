@@ -5,16 +5,19 @@ script is the one that actually runs `git commit` / `git push`. This
 module exists so Python callers (writer, CLI) don't duplicate subprocess
 boilerplate and all trigger points stay consistent.
 
-Fire-and-forget: any failure is swallowed. Backup is best-effort; the
-next trigger catches up.
+Fire-and-forget: any failure is logged as a warning and goes no further.
+Backup is best-effort; the next trigger catches up.
 """
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 if sys.platform == "win32":
     _CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW
@@ -74,5 +77,5 @@ def trigger(
         )
         with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=timeout)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 — best-effort; the next trigger catches up
+        log.warning("backup (%s) did not run: %s", tag, exc)

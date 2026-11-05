@@ -477,7 +477,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("smriti: interrupted", file=sys.stderr)
         return 130
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — the top-level handler reports, exits 1
         # One clean line and a failing exit code; the traceback is for -v.
         if args.verbose:
             traceback.print_exc()

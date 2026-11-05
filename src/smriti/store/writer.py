@@ -215,7 +215,7 @@ def _reindex_one(path: Path, root: Path) -> None:
 
         chunks = index_file(path, root=root)
         log.info("Indexed written file %s (%d chunks)", path.name, chunks)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — never blocks the write; the nightly catches up
         log.warning("Reindex after write failed: %s", exc)
 
 
@@ -227,5 +227,5 @@ def _update_index_pages(path: Path, root: Path) -> None:
         updated = update_index_pages(path, root)
         if updated:
             log.info("Updated %d index pages", len(updated))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — an index-page failure never blocks the write
         log.warning("Index page update failed: %s", exc)

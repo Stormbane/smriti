@@ -22,6 +22,24 @@ def test_backup_command_triggers_with_the_tag_and_push(monkeypatch: pytest.Monke
     assert calls == [("hourly", True), ("manual", False)]
 
 
+def test_a_backup_that_cannot_run_warns_and_does_not_raise(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture) -> None:
+    """H9.9: trigger swallowed every failure without a trace."""
+    from smriti import backup
+
+    (tmp_path / ".smriti").mkdir()
+    (tmp_path / ".smriti" / "backup.py").write_text("", encoding="utf-8")
+
+    def cannot_start(*args: object, **kwargs: object) -> None:
+        raise OSError("no interpreter")
+
+    monkeypatch.setattr(backup.subprocess, "Popen", cannot_start)
+    with caplog.at_level("WARNING", logger="smriti.backup"):
+        backup.trigger("nightly", root=tmp_path)
+    assert "backup (nightly) did not run: no interpreter" in caplog.text
+
+
 def test_the_backup_task_is_hourly_windowless_and_pushes() -> None:
     tasks = {name: (cmd, when, windowless) for name, cmd, when, windowless in schedule.TASKS}
     cmd, when, windowless = tasks["smriti-backup"]

@@ -21,16 +21,19 @@ Typical use::
     print(result.recall_block)   # injectable system-reminder text
 
 The wrapper never raises on recall failures — recall is *ambient*,
-not load-bearing for the tool call.
+not load-bearing for the tool call. It logs them as warnings.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from smriti.recall.runner import run_recall
 from smriti.recall.types import RecallResponse
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -91,13 +94,15 @@ def wrap_tool(
         output = fn(*args, **kwargs)
         try:
             query = query_from(args, kwargs, output)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — recall is ambient; the output stands
+            log.warning("recall for %s: no query: %s", tool_name, exc)
             query = None
         if not query:
             return ToolResult(output=output)
         try:
             response = run_recall(query)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — recall is ambient; the output stands
+            log.warning("recall for %s failed: %s", tool_name, exc)
             return ToolResult(output=output)
         return ToolResult(
             output=output,

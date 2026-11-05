@@ -120,7 +120,7 @@ def list_providers() -> list[dict[str, object]]:
             available = bool(p.is_available())
             judge = p.default_model("judge")
             executor = p.default_model("executor")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — a broken provider is reported in its row
             available = False
             judge = executor = ""
             rows.append({

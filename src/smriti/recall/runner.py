@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -11,14 +12,16 @@ from smriti.metrics import query_fields
 from smriti.recall.config import RecallConfig, load_config
 from smriti.recall.types import RecallResponse
 
+log = logging.getLogger(__name__)
+
 
 def _log(log_path: Path, entry: dict[str, Any]) -> None:
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
-    except Exception:
-        pass
+    except (OSError, TypeError, ValueError) as exc:  # unwritable; an unserialisable extra
+        log.warning("recall log %s not written: %s", log_path, exc)
 
 
 def run_recall(

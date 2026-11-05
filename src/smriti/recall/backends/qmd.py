@@ -181,7 +181,7 @@ def _query_via_subprocess(
         )
     except subprocess.TimeoutExpired:
         return [], None, "qmd_timeout"
-    except Exception as exc:
+    except (OSError, ValueError) as exc:  # can't start; bad argument; undecodable output
         return [], None, f"qmd_run_failed: {str(exc)[:160]}"
 
     stdout = proc.stdout or ""
@@ -267,7 +267,7 @@ def daemon_start() -> tuple[bool, str]:
             stdin=subprocess.DEVNULL,
             **kwargs,
         )
-    except Exception as exc:
+    except (OSError, ValueError) as exc:  # can't start, or a bad argument
         return False, f"start_failed: {str(exc)[:160]}"
 
     # Poll until healthy or 10s elapses.
@@ -289,6 +289,6 @@ def daemon_stop() -> tuple[bool, str]:
             [*cmd, "mcp", "stop"], capture_output=True, text=True, timeout=10,
             creationflags=_CREATE_NO_WINDOW,
         )
-    except Exception as exc:
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:  # incl. the 10 s timeout
         return False, f"stop_failed: {str(exc)[:160]}"
     return proc.returncode == 0, (proc.stdout or proc.stderr or "").strip()[:200]

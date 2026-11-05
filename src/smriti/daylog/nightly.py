@@ -103,7 +103,7 @@ def run_nightly(
             "files_scanned": report.files_scanned,
             "parse_errors": report.parse_errors,
         }
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — recorded in the status; the night goes on
         steps["reconcile"] = {"ok": False, "error": str(exc)[:300]}
 
     # 2+3+4. Repair/render/digest every stale day: reconcile-changed and
@@ -135,7 +135,7 @@ def run_nightly(
                            "errors": digest_errors,
                            "deferred": max(0, len(stale) - len(digest_days))}
         _clear_dirty(cfg, dirty, digest_errors)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — recorded in the status; the night goes on
         steps["render"] = {"ok": False, "error": str(exc)[:300]}
 
     # 5. Rollup scan — all closed stale periods, oldest first, capped.
@@ -150,7 +150,7 @@ def run_nightly(
             "built": built,
             "remaining": max(0, len(stale_periods) - rollup_cap),
         }
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — recorded in the status; the night goes on
         steps["rollups"] = {"ok": False, "error": str(exc)[:300]}
 
     # 6. Reindex (smriti index, incremental). The qmd refresh that used to
@@ -167,7 +167,7 @@ def run_nightly(
             from smriti.witness import run_witness
 
             steps["witness"] = run_witness(cfg.root, day_key(target))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — recorded in the status; the night goes on
             steps["witness"] = {"ok": False, "error": str(exc)[:300]}
 
     # 8. Status file (consumed by the wake briefing).
@@ -203,7 +203,7 @@ def _index_with_retries(cfg: DaylogConfig) -> dict[str, object]:
                 stats = index_tree(root=cfg.root)
                 return {"ok": True, "attempts": attempt,
                         **{k: int(v) for k, v in stats.items()}}
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — logged, retried, then in the status
                 last_error = str(exc)[:300]
                 log.warning("index attempt %d failed: %s", attempt, last_error)
         return {"ok": False, "error": last_error,

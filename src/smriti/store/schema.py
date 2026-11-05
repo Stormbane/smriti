@@ -57,7 +57,7 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> bool:
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
         return True
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — logged; search falls back to keywords
         log.warning("sqlite-vec not available: %s", exc)
         return False
 

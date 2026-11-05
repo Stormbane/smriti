@@ -158,7 +158,7 @@ def run_morning(
     try:
         notify_user(cfg, message)
         result["sent"] = True
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — logged and recorded in the result
         result["sent"] = False
         result["phase"] = "deliver"
         result["reason"] = type(exc).__name__

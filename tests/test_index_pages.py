@@ -72,7 +72,7 @@ def test_concurrent_writers_in_one_directory_are_all_listed(tree: Path) -> None:
             page = projects / f"part-{i}.md"
             page.write_text(f"# Part {i}\n", encoding="utf-8")
             update_index_pages(page, tree)
-        except BaseException as exc:  # surfaced below
+        except BaseException as exc:  # noqa: BLE001 — collected, asserted on the main thread
             errors.append(exc)
 
     threads = [threading.Thread(target=write, args=(i,)) for i in range(n)]

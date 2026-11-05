@@ -21,7 +21,7 @@ def is_available() -> bool:
         from smriti.store.schema import ensure_schema  # noqa: F401
         from smriti.store.search import search  # noqa: F401
         return True
-    except Exception:
+    except ImportError:
         return False
 
 
@@ -31,7 +31,7 @@ def query(text: str, *, top_k: int, timeout_s: float, rerank: bool) -> RecallRes
         from smriti.core.tree import smriti_db_path
         from smriti.store.schema import open_readonly
         from smriti.store.search import search
-    except Exception as exc:
+    except ImportError as exc:
         return RecallResponse(
             matches=[], elapsed_ms=0, backend="smriti",
             error=f"import_failed: {str(exc)[:160]}",
@@ -53,7 +53,7 @@ def query(text: str, *, top_k: int, timeout_s: float, rerank: bool) -> RecallRes
                              use_vectors=vectors)
         finally:
             conn.close()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — returned as the response's error; the runner logs it
         return RecallResponse(
             matches=[], elapsed_ms=int((time.monotonic() - t0) * 1000),
             backend="smriti", error=f"search_failed: {str(exc)[:160]}",

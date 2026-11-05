@@ -325,7 +325,7 @@ def _block(height: int) -> tuple[str, int] | None:
                                         timeout=_TIMEOUT_S) as resp:
                 data = json.loads(resp.read())
             return str(data["merkle_root"]), int(data["timestamp"])
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — logged; the next explorer is tried
             log.warning("explorer %s: %s", base, exc)
     return None
 

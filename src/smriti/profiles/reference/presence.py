@@ -21,6 +21,7 @@ arithmetic can rely on the caps.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -31,6 +32,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 HANDS_CAP = 600
 SUTI_NOW_CAP = 1800
@@ -111,7 +114,8 @@ class WakeSources:
             self._servers_loaded = True
             try:
                 self._servers = _load_mcp_servers(self.mcp_config, self.harness, self.cwd)
-            except Exception:  # noqa: BLE001 — fail open
+            except Exception as exc:  # noqa: BLE001 — fail open
+                log.warning("MCP servers unreadable from %s: %s", self.mcp_config, exc)
                 self._servers = None
         return self._servers
 
@@ -264,7 +268,8 @@ def hands_section(src: WakeSources) -> str:
     lines = ["--- HANDS (what I can do from here) ---"]
     try:
         sender = notify_command(load_config(src.memory_root))
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — fail open: Hands lists no sender
+        log.warning("notify sender unreadable: %s", exc)
         sender = []
     if sender and has("smriti"):
         lines.append(
@@ -359,7 +364,8 @@ def _akhada_lines(src: WakeSources) -> list[str]:
         return ["Health: akhada returned no context; try get_context."]
     try:
         trend = _weight_trend(src.run_akhada(["call", "get_recent", '{"days": 60}']))
-    except Exception:  # noqa: BLE001 — the trend is a nicety
+    except Exception as exc:  # noqa: BLE001 — the trend is a nicety
+        log.warning("weight trend unavailable: %s", exc)
         trend = None
     if trend:
         at = next((i for i, (k, _) in enumerate(blocks) if k == "LAST WEIGHT"), len(blocks))

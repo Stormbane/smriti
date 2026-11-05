@@ -703,6 +703,37 @@ def test_a_failed_vector_leg_scores_like_keyword_only(
         (r.source, r.score) for r in keyword_only]
 
 
+def test_a_failed_reranker_warns_and_the_combined_scores_stand(
+        mini_tree: Path, monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture) -> None:
+    """H9.9: a reranker failure was logged at debug level, so a broken
+    reranker went unseen. It now warns; the combined scores still answer."""
+    import sys
+    import types
+
+    from smriti.store.schema import open_readonly
+
+    def broken_rerank(query: str, results: list[dict[str, object]],
+                      top_k: int = 10) -> list[dict[str, object]]:
+        raise RuntimeError("reranker model missing")
+
+    fake = types.ModuleType("smriti._vendored.memsearch.reranker")
+    monkeypatch.setattr(fake, "rerank", broken_rerank, raising=False)
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+    db = open_readonly(db_path)
+    try:
+        plain = search(db, "Narada memory", use_vectors=False, use_reranker=False)
+        monkeypatch.setitem(sys.modules, "smriti._vendored.memsearch.reranker", fake)
+        with caplog.at_level("WARNING", logger="smriti.store.search"):
+            fallen_back = search(db, "Narada memory", use_vectors=False, use_reranker=True)
+    finally:
+        db.close()
+    assert len(plain) > 1  # the reranker runs only on two or more candidates
+    assert [(r.source, r.score) for r in fallen_back] == [(r.source, r.score) for r in plain]
+    assert "Reranker failed" in caplog.text and "reranker model missing" in caplog.text
+
+
 def test_index_file_follows_the_same_policy(mini_tree: Path) -> None:
     from smriti.store.indexer import index_file
 

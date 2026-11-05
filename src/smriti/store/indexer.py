@@ -89,7 +89,8 @@ def _recorded_provider_key(db: Path | None = None) -> str | None:
             return _provider_for_model(row[0]) if row and row[0] else None
         finally:
             conn.close()
-    except Exception:
+    except (sqlite3.Error, OSError) as exc:
+        log.warning("could not read the index's embedding provider from %s: %s", db, exc)
         return None
 
 
@@ -141,7 +142,7 @@ def _get_embedding_provider() -> _EmbeddingProvider:
     for key in keys:
         try:
             return cast(_EmbeddingProvider, get_provider(key))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — logged; the next provider is tried
             last_error = exc
             log.warning("embedding provider %r unavailable: %s", key, exc)
     raise RuntimeError(
@@ -366,7 +367,7 @@ def index_tree(
         for fpath, rel_source, st in to_index:
             try:
                 text = fpath.read_text(encoding="utf-8")
-            except Exception as exc:
+            except (OSError, UnicodeDecodeError) as exc:
                 log.warning("Could not read %s: %s", fpath, exc)
                 stats["errors"] += 1
                 continue
@@ -498,8 +499,8 @@ def index_tree(
         finally:
             try:
                 conn.close()
-            except Exception:
-                pass
+            except sqlite3.Error as exc:  # the original failure is what propagates
+                log.warning("could not close the index after a failure: %s", exc)
         raise
 
 
@@ -567,6 +568,6 @@ def index_file(path: Path, *, root: Path | None = None, db: Path | None = None) 
         finally:
             try:
                 conn.close()
-            except Exception:
-                pass
+            except sqlite3.Error as exc:  # the original failure is what propagates
+                log.warning("could not close the index after a failure: %s", exc)
         raise

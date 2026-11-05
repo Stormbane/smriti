@@ -113,11 +113,13 @@ def _parse_zone(raw: str) -> tzinfo | None:
         return timezone(timedelta(hours=float(raw)))
     except ValueError:
         pass
-    try:
-        from zoneinfo import ZoneInfo
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+    try:
         return ZoneInfo(raw)
-    except Exception:  # no such zone, or no tz database here (Windows without tzdata)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        # No such zone, or no tz database here (Windows without tzdata); or a
+        # key that isn't a relative path, or names a directory or a non-TZif file.
         log.warning("unknown time zone %r; using the system's local time", raw)
         return None
 

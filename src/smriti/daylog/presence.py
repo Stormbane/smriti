@@ -3,17 +3,20 @@
 A deterministic tail-read of today's (and, near midnight, yesterday's)
 day-log. Injected into live sessions via the recall hook so a Claude
 Code session instantly knows a conversation is happening on another
-channel. String formatting only; any failure returns '' (never-break
-contract).
+channel. String formatting only; any failure is logged and returns ''
+(never-break contract).
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 
 from smriti.daylog.config import DaylogConfig, load_config
 from smriti.daylog.model import Turn, day_key, day_tz
 from smriti.daylog.writer import read_day_turns
+
+log = logging.getLogger(__name__)
 
 _WINDOW_MIN = 15
 _PREVIEW_CHARS = 90
@@ -56,5 +59,6 @@ def presence_line(
             preview = turn.text.replace("\n", " ").strip()[:_PREVIEW_CHARS]
             parts.append(f'{channel} {age_min} min ago ({who}: "{preview}")')
         return "Active on other channels: " + "; ".join(parts[:3])
-    except Exception:  # noqa: BLE001 — presence must never break a session
+    except Exception as exc:  # noqa: BLE001 — presence must never break a session
+        log.warning("no presence line: %s", exc)
         return ""

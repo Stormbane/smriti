@@ -22,14 +22,15 @@ Output framing controlled by ``SMRITI_RECALL_FRAMING`` env var:
     codex-json   {"hookSpecificOutput": {"hookEventName": "PostToolUse",
                  "additionalContext": "..."}} JSON. Codex shape.
 
-All errors are swallowed — a recall hook must never break the parent
-tool call.
+All errors are logged (to stderr) and go no further — a recall hook must
+never break the parent tool call.
 """
 
 from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 import re
 import sys
@@ -39,6 +40,8 @@ from typing import Any, cast
 from smriti.recall.config import load_config
 from smriti.recall.runner import run_recall
 from smriti.recall.types import RecallMatch
+
+log = logging.getLogger(__name__)
 
 _EXT_ALLOW = {
     ".md", ".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go",
@@ -70,10 +73,7 @@ def _read_head(path: Path) -> str:
             raw = f.read(_CONTENT_PROBE_BYTES)
     except OSError:
         return ""
-    try:
-        return raw.decode("utf-8", errors="ignore")
-    except Exception:
-        return ""
+    return raw.decode("utf-8", errors="ignore")  # can't raise: bad bytes are dropped
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -160,8 +160,8 @@ def _presence_line(payload: dict[str, Any]) -> str:
     """Cross-channel presence for the session firing this hook.
 
     Excludes the session's own channel (derived from the payload's cwd
-    the same way the day-log adapter does). Deterministic and silent on
-    any failure — presence must never break the parent tool call.
+    the same way the day-log adapter does). Deterministic; any failure is
+    logged and yields "" — presence must never break the parent tool call.
     """
     try:
         from smriti.daylog.adapters.claude_jsonl import channel_for
@@ -177,7 +177,8 @@ def _presence_line(payload: dict[str, Any]) -> str:
         else:
             own = channel_for(Path(cwd), cwd)
         return presence_line(exclude_channel=own)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 — presence must never break the tool call
+        log.warning("recall hook: no presence line: %s", exc)
         return ""
 
 
@@ -191,7 +192,8 @@ def _run_recall_for_paths(paths: list[str]) -> list[RecallMatch]:
             continue
         try:
             response = run_recall(query, cfg=cfg, log_extra={"file_path": path})
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — one path's failure must not stop the rest
+            log.warning("recall hook: recall for %s failed: %s", path, exc)
             continue
         for m in response.matches:
             existing = seen.get(m.source)
@@ -283,11 +285,11 @@ def main() -> int:
         framing = os.environ.get("SMRITI_RECALL_FRAMING", "raw").strip()
         sys.stdout.write(_frame_output(block, framing))
         return 0
-    except Exception:
-        # Honour the contract documented in the module docstring: a
-        # recall hook must never break the parent tool call. Anything
-        # unexpected (config parse failure, stdout I/O error, etc.)
-        # collapses to a silent no-op.
+    except Exception:  # noqa: BLE001 — a recall hook must never break the tool call
+        # Honour the contract documented in the module docstring. Anything
+        # unexpected (config parse failure, stdout I/O error, etc.) is
+        # logged to stderr and collapses to a no-op.
+        log.exception("recall hook failed; no recall for this tool call")
         return 0
 
 

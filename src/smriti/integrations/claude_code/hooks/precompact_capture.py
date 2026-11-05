@@ -117,7 +117,7 @@ def load_marker(session_id: str) -> dict[str, Any]:
         return {"session_id": session_id, "last_line": 0, "turn_count": 0}
     try:
         return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
-    except Exception as e:
+    except (OSError, ValueError) as e:  # unreadable, not UTF-8, or not JSON
         log(f"marker corrupt, resetting: {e}")
         return {"session_id": session_id, "last_line": 0, "turn_count": 0}
 
@@ -166,7 +166,7 @@ def extract_turn(entry: dict[str, Any]) -> tuple[str, str, str] | None:
                 tool_input = block.get("input", {})
                 try:
                     tool_input_str = json.dumps(tool_input, indent=2)[:2000]
-                except Exception:
+                except (TypeError, ValueError, RecursionError):  # what json.dumps raises
                     tool_input_str = str(tool_input)[:2000]
                 parts.append(
                     f"\n[tool_use: {tool_name}]\n```json\n{tool_input_str}\n```"
@@ -282,7 +282,7 @@ def process_transcript(
                     cwd,
                 )
                 written += 1
-            except Exception as e:
+            except (OSError, ValueError) as e:  # ValueError: a lone surrogate won't encode
                 log(f"write failed for turn {turn_count}: {e}")
                 turn_count -= 1  # rollback so retry next time
 
@@ -331,7 +331,7 @@ def main() -> int:
             )
         return 0
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — the hook must never block compaction
         log(f"unexpected error: {e}")
         log(traceback.format_exc())
         return 0  # never block compaction

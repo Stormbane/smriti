@@ -26,7 +26,7 @@ def _together(n: int, work: Callable[[int], object]) -> list[object]:
         start.wait()
         try:
             results[i] = work(i)
-        except BaseException as exc:  # surfaced below
+        except BaseException as exc:  # noqa: BLE001 — collected, asserted on the main thread
             errors.append(exc)
 
     threads = [threading.Thread(target=run, args=(i,)) for i in range(n)]

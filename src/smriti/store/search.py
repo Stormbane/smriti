@@ -220,7 +220,7 @@ def search(
                                 "content": row[3],
                                 "trunk_distance": row[4],
                             }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — logged; falls back to keyword-only
             # Fall back to exactly a keyword-only search: without this the
             # vector weight stayed in the sum with nothing behind it, and
             # every score silently lost half its range.
@@ -272,7 +272,7 @@ def search(
                                     "content": row[3],
                                     "trunk_distance": row[4],
                                 }
-        except Exception as exc:
+        except sqlite3.Error as exc:
             log.warning("FTS search failed: %s", exc)
 
     if not candidates:
@@ -329,8 +329,8 @@ def search(
                 top_source=results[0].source if results else "",
             )
             return results[:top_k]
-        except Exception as exc:
-            log.debug("Reranker not available, using combined score: %s", exc)
+        except Exception as exc:  # noqa: BLE001 — logged; the combined scores stand
+            log.warning("Reranker failed; using the combined score: %s", exc)
 
     # ── Return top-k by combined score ───────────────────────────────
     results = []

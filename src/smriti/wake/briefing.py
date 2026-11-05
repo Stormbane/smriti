@@ -27,6 +27,7 @@ they shrink further. The result never exceeds ``budget_chars``.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 from collections.abc import Callable, Iterator
@@ -37,6 +38,8 @@ from pathlib import Path
 
 from smriti.daylog.config import DEFAULT_USER_NAME, DaylogConfig, load_config
 from smriti.daylog.model import day_tz
+
+log = logging.getLogger(__name__)
 
 # Default budgets. Claude Code's SessionStart hook truncates stdout at
 # 10,000 chars, so we keep the default below that. Other harnesses with
@@ -538,7 +541,8 @@ def briefing(
     cwd_name = cwd_path.name
     try:
         cfg: DaylogConfig | None = load_config(memory_root)
-    except Exception:  # noqa: BLE001 — a broken config never breaks the wake
+    except Exception as exc:  # noqa: BLE001 — a broken config never breaks the wake
+        log.warning("daylog config unreadable; the wake uses the defaults: %s", exc)
         cfg = None
     person = _person_line(cfg or DaylogConfig(root=memory_root))
 

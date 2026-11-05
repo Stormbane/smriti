@@ -18,9 +18,10 @@ import sys
 if __name__ == "__main__":
     try:
         from smriti.recall.hook import main
-    except Exception:
-        # smriti not importable -> silently no-op so we never break
-        # the parent tool call. Run `pip install -e .` from the smriti
-        # repo to enable recall.
+    except Exception as exc:  # noqa: BLE001 — a recall hook must never break the tool call
+        # smriti not importable -> say so on stderr and no-op, so we never
+        # break the parent tool call. Run `pip install -e .` from the
+        # smriti repo to enable recall.
+        print(f"smriti recall is off: smriti did not import: {exc}", file=sys.stderr)
         sys.exit(0)
     sys.exit(main())
