@@ -64,7 +64,11 @@ def handle_message(msg: Message) -> Message | None:
     """The response to one JSON-RPC message, or None for a notification."""
     method = msg.get("method", "")
     id = msg.get("id")
-    params = msg.get("params") or {}
+    params = msg.get("params")
+    if not isinstance(params, dict):
+        params = {}
+    if not isinstance(method, str):
+        return _error(id, -32600, "Invalid request: method must be a string")
 
     if method == "initialize":
         return _response(id, {
@@ -75,9 +79,12 @@ def handle_message(msg: Message) -> Message | None:
     if method == "tools/list":
         return _response(id, {"tools": [tool.listing() for tool in TOOLS]})
     if method == "tools/call":
-        tool = _BY_NAME.get(params.get("name", ""))
+        name = params.get("name")
+        if not isinstance(name, str):
+            return _error(id, -32602, "Invalid params: name must be a string")
+        tool = _BY_NAME.get(name)
         if tool is None:
-            return _error(id, -32601, f"Unknown tool: {params.get('name', '')}")
+            return _error(id, -32601, f"Unknown tool: {name}")
         return _response(id, call_tool(tool, params.get("arguments", {})))
     if method == "ping":
         return _response(id, {})
@@ -106,7 +113,13 @@ def main() -> None:
             continue
         if not isinstance(msg, dict):
             continue
-        response = handle_message(msg)
+        try:
+            response = handle_message(msg)
+        except Exception:
+            # One malformed message must never end the server for the session.
+            log.exception("could not handle %.200r", msg)
+            id = msg.get("id")
+            response = None if id is None else _error(id, -32603, "Internal error")
         if response is not None:
             sys.stdout.write(json.dumps(response) + "\n")
             sys.stdout.flush()

@@ -67,6 +67,33 @@ def test_unknown_tool_and_method_are_protocol_errors() -> None:
     assert response is not None and response["error"]["code"] == -32601
 
 
+@pytest.mark.parametrize("params", [{"name": ["a"]}, {"name": {"x": 1}}, {"name": 3}, ["x"], "x"])
+def test_malformed_tool_calls_are_protocol_errors(params: Any) -> None:
+    response = handle_message({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                               "params": params})
+    assert response is not None and response["error"]["code"] in (-32601, -32602)
+
+
+def test_the_server_survives_malformed_messages() -> None:
+    """Over stdio, a bad message gets an error and the next one is still answered."""
+    import json
+    import subprocess
+    import sys
+
+    lines = [
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": ["a"]}},
+        {"jsonrpc": "2.0", "id": 2, "method": ["not", "a", "string"]},
+        {"jsonrpc": "2.0", "id": 3, "method": "ping"},
+    ]
+    proc = subprocess.run([sys.executable, "-m", "smriti.mcp_server"],
+                          input="".join(json.dumps(m) + "\n" for m in lines),
+                          capture_output=True, text=True, timeout=60, check=True)
+    replies = [json.loads(line) for line in proc.stdout.splitlines()]
+    assert [r["id"] for r in replies] == [1, 2, 3]
+    assert "error" in replies[0] and "error" in replies[1]
+    assert replies[2]["result"] == {}
+
+
 def test_handshake_ping_and_notifications() -> None:
     init = handle_message({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
     assert init is not None and init["result"]["serverInfo"]["name"] == "smriti"
