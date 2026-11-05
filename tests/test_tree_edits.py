@@ -73,6 +73,28 @@ def test_racing_feature_opens_create_one_spec() -> None:
     assert len(opened) == 1, replies
 
 
+def test_same_title_same_day_findings_and_decisions_both_survive() -> None:
+    from smriti.mcp_server import handle_record_decision, handle_record_finding
+
+    mirror = tree_root() / "mirrors" / "demo"
+    mirror.mkdir(parents=True)
+    for n in (1, 2):
+        handle_record_finding({"project": "demo", "title": "Same", "finding": f"finding {n}",
+                               "why_it_matters": "w", "tags": ["locks"]})
+        handle_record_decision({"project": "demo", "title": "Same", "decision": f"decision {n}",
+                                "rationale": "r"})
+    findings = sorted((mirror / "findings").glob("*.md"), key=lambda p: len(p.name))
+    decisions = list((mirror / "decisions").glob("*.md"))
+    assert [p.stem.split("-same")[-1] for p in findings] == ["", "-2"]
+    assert "finding 1" in findings[0].read_text(encoding="utf-8")
+    assert len(decisions) == 2
+    assert {p.read_text(encoding="utf-8").count("decision ") for p in decisions} == {1}
+    stubs = sorted((tree_root() / "semantic" / "concepts" / "cross-project" / "findings"
+                    / "locks").glob("*.md"), key=lambda p: len(p.name))
+    assert len(stubs) == 2
+    assert f"[[mirrors/demo/findings/{findings[1].stem}]]" in stubs[1].read_text(encoding="utf-8")
+
+
 def test_edit_lock_is_exclusive_and_says_busy(tmp_path: Path) -> None:
     target = tmp_path / "f.md"
     held, release = threading.Event(), threading.Event()

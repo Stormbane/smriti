@@ -974,7 +974,12 @@ def handle_record_finding(arguments: dict) -> str:
     if source:
         body += f"\n## Source\n\n{source}\n"
 
-    path.write_text(fm + body, encoding="utf-8")
+    # A second finding with the same title on the same day gets -2, -3...
+    # rather than replacing the first.
+    from smriti.core.files import create_new
+
+    path = create_new(path, fm + body)
+    slug = path.stem.removeprefix(f"{date_str}-")
 
     # Cascade: for each tag, drop a wikilink stub under
     # semantic/concepts/cross-project/findings/{tag}/{date}-{project}-{slug}.md
@@ -992,21 +997,23 @@ def handle_record_finding(arguments: dict) -> str:
             tag_dir = cp_root / tag_slug
             tag_dir.mkdir(parents=True, exist_ok=True)
             stub = tag_dir / f"{date_str}-{project}-{slug}.md"
-            if not stub.exists():
-                stub.write_text(
-                    f"---\n"
-                    f"type: cross-project-finding-link\n"
-                    f"tag: {tag}\n"
-                    f"project: {project}\n"
-                    f"date: {date_str}\n"
-                    f"---\n\n"
-                    f"# {title}\n\n"
-                    f"Source: [[{rel_link}]]\n\n"
-                    f"## Finding\n\n{finding}\n\n"
-                    f"## Why it matters\n\n{why_it_matters}\n",
-                    encoding="utf-8",
-                )
-                cascade_msgs.append(tag_slug)
+            try:
+                with stub.open("x", encoding="utf-8") as f:
+                    f.write(
+                        f"---\n"
+                        f"type: cross-project-finding-link\n"
+                        f"tag: {tag}\n"
+                        f"project: {project}\n"
+                        f"date: {date_str}\n"
+                        f"---\n\n"
+                        f"# {title}\n\n"
+                        f"Source: [[{rel_link}]]\n\n"
+                        f"## Finding\n\n{finding}\n\n"
+                        f"## Why it matters\n\n{why_it_matters}\n"
+                    )
+            except FileExistsError:
+                continue
+            cascade_msgs.append(tag_slug)
 
         # Update cross-project index (append-only, dedup by line content)
         from smriti.core.files import edit_lock, write_atomic
@@ -1078,7 +1085,9 @@ def handle_record_decision(arguments: dict) -> str:
     if source:
         body += f"\n## Source\n\n{source}\n"
 
-    path.write_text(fm + body, encoding="utf-8")
+    from smriti.core.files import create_new
+
+    path = create_new(path, fm + body)  # same title, same day: -2, not a replacement
     return f"Recorded decision: {project}/decisions/{path.name}"
 
 
