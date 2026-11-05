@@ -42,10 +42,10 @@ class ToolResult:
     recall_block: str = ""
 
 
-QueryDeriver = Callable[[tuple, dict, Any], str | None]
+QueryDeriver = Callable[[tuple[Any, ...], dict[str, Any], Any], str | None]
 
 
-def _default_query(args: tuple, kwargs: dict, output: Any) -> str | None:
+def _default_query(args: tuple[Any, ...], kwargs: dict[str, Any], output: Any) -> str | None:
     """Best-effort: stringify the first positional arg."""
     if args:
         return str(args[0])
@@ -55,7 +55,7 @@ def _default_query(args: tuple, kwargs: dict, output: Any) -> str | None:
     return None
 
 
-def _format_block(name: str, response: RecallResponse) -> str:
+def _format_block(name: object, response: RecallResponse) -> str:
     if not response.matches:
         return ""
     lines = [

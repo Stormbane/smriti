@@ -28,11 +28,13 @@ tool call.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 from smriti.recall.config import load_config
 from smriti.recall.runner import run_recall
@@ -122,7 +124,7 @@ def _build_query(file_path: str) -> str | None:
     return stem
 
 
-def _extract_paths(tool_name: str, tool_input: dict) -> list[str]:
+def _extract_paths(tool_name: str, tool_input: dict[str, Any]) -> list[str]:
     """Return file paths to fire recall on, based on the tool call.
 
     Centralising this so each harness's tool_input shape is handled in
@@ -154,7 +156,7 @@ def _extract_paths(tool_name: str, tool_input: dict) -> list[str]:
     return []
 
 
-def _presence_line(payload: dict) -> str:
+def _presence_line(payload: dict[str, Any]) -> str:
     """Cross-channel presence for the session firing this hook.
 
     Excludes the session's own channel (derived from the payload's cwd
@@ -241,7 +243,7 @@ def main() -> int:
     # Reconfigure to UTF-8 with replacement so the hook can never die
     # on a snippet's encoding.
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        cast(io.TextIOWrapper, sys.stdout).reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, OSError):
         pass
 

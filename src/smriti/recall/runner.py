@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Any
 
 from smriti.metrics import query_fields
 from smriti.recall.config import RecallConfig, load_config
 from smriti.recall.types import RecallResponse
 
 
-def _log(log_path: Path, entry: dict) -> None:
+def _log(log_path: Path, entry: dict[str, Any]) -> None:
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as f:
@@ -24,7 +25,7 @@ def run_recall(
     query: str,
     *,
     cfg: RecallConfig | None = None,
-    log_extra: dict | None = None,
+    log_extra: dict[str, Any] | None = None,
 ) -> RecallResponse:
     """Run a recall query against the configured backend, logging the fire.
 
@@ -34,11 +35,13 @@ def run_recall(
     cfg = cfg or load_config()
 
     if cfg.backend == "smriti":
-        from smriti.recall.backends import smriti_be as backend
+        from smriti.recall.backends import smriti_be
+        backend_query = smriti_be.query
     else:
-        from smriti.recall.backends import qmd as backend
+        from smriti.recall.backends import qmd
+        backend_query = qmd.query
 
-    response = backend.query(
+    response = backend_query(
         query, top_k=cfg.top_k, timeout_s=cfg.timeout_s, rerank=cfg.rerank,
     )
 
@@ -62,7 +65,7 @@ def run_recall(
     for m in relevant[:cfg.max_inject]:
         injected_chars += len(m.source) + len(m.snippet[:200]) + 20
 
-    entry: dict = {
+    entry: dict[str, Any] = {
         "ts": time.time(),
         **query_fields(query),
         "elapsed_ms": response.elapsed_ms,

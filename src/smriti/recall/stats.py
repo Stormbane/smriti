@@ -12,6 +12,7 @@ import time
 from collections import Counter
 from pathlib import Path
 from statistics import mean, median
+from typing import Any
 
 from smriti.recall.config import load_config
 
@@ -33,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
 
     cutoff = time.time() - (args.hours * 3600) if args.hours else 0.0
 
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     for line in log_path.read_text(encoding="utf-8").splitlines():
         try:
             r = json.loads(line)

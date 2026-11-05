@@ -33,12 +33,19 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 from smriti.recall.types import RecallMatch, RecallResponse
+
+if sys.platform == "win32":
+    _CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW
+else:
+    _CREATE_NO_WINDOW = 0
 
 
 def _resolve_qmd_cmd() -> list[str] | None:
@@ -116,7 +123,7 @@ def _sanitize_query(text: str) -> str:
     return " ".join(out.split())
 
 
-def _query_via_http(text: str, *, top_k: int, timeout_s: float) -> list[dict] | None:
+def _query_via_http(text: str, *, top_k: int, timeout_s: float) -> list[object] | None:
     """Query qmd's HTTP daemon. Returns parsed results, or None on failure
     so the caller can fall through to the subprocess path."""
     safe = _sanitize_query(text)
@@ -124,7 +131,7 @@ def _query_via_http(text: str, *, top_k: int, timeout_s: float) -> list[dict] | 
     # guess first." For our enriched-content queries the embedding leg is
     # the more reliable signal (handles paraphrase; BM25 is stricter), so
     # vec goes first.
-    payload: dict = {
+    payload: dict[str, object] = {
         "searches": [
             {"type": "vec", "query": safe},
             {"type": "lex", "query": safe},
@@ -155,7 +162,7 @@ def _query_via_http(text: str, *, top_k: int, timeout_s: float) -> list[dict] | 
 
 def _query_via_subprocess(
     text: str, *, top_k: int, timeout_s: float, rerank: bool,
-) -> tuple[list[dict], int | None, str | None]:
+) -> tuple[list[object], int | None, str | None]:
     """Cold-start fallback. Returns (results, returncode, stderr_tail)."""
     cmd = _resolve_qmd_cmd()
     if not cmd:
@@ -170,7 +177,7 @@ def _query_via_subprocess(
     try:
         proc = subprocess.run(
             args, capture_output=True, text=True, timeout=timeout_s,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            creationflags=_CREATE_NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
         return [], None, "qmd_timeout"
@@ -180,7 +187,7 @@ def _query_via_subprocess(
     stdout = proc.stdout or ""
     start = stdout.find("[")
     end = stdout.rfind("]")
-    parsed: list = []
+    parsed: list[object] = []
     if start >= 0 and end > start:
         try:
             parsed = json.loads(stdout[start:end + 1])
@@ -195,7 +202,7 @@ def _query_via_subprocess(
     return parsed, proc.returncode, err
 
 
-def _to_matches(items: list) -> list[RecallMatch]:
+def _to_matches(items: list[object]) -> list[RecallMatch]:
     out: list[RecallMatch] = []
     for item in items:
         if not isinstance(item, dict):
@@ -249,9 +256,9 @@ def daemon_start() -> tuple[bool, str]:
         # console (CREATE_NO_WINDOW), never DETACHED_PROCESS: qmd is a .cmd,
         # and cmd.exe with no console gives node a visible window.
         # On POSIX, start_new_session detaches it.
-        kwargs: dict = {}
-        if os.name == "nt":
-            kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+        kwargs: dict[str, Any] = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         else:
             kwargs["start_new_session"] = True
         subprocess.Popen(
@@ -280,7 +287,7 @@ def daemon_stop() -> tuple[bool, str]:
     try:
         proc = subprocess.run(
             [*cmd, "mcp", "stop"], capture_output=True, text=True, timeout=10,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            creationflags=_CREATE_NO_WINDOW,
         )
     except Exception as exc:
         return False, f"stop_failed: {str(exc)[:160]}"
