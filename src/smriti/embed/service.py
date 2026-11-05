@@ -509,16 +509,19 @@ def idle_seconds() -> float:
 def serve(root: Path, *, idle_s: float | None = None) -> int:
     """Run the service for ``root`` in this process until it stops; the exit code.
 
-    A second starter for the same root loses the lock and returns 0 at
-    once, unless the holder is draining: then it waits for the lock, so a
-    restart after a drain takes one start, not a race.
+    A second starter for the same root loses the lock and returns 0 within
+    a second, unless the holder is draining: then it waits for the lock, so
+    a restart after a drain takes one start, not a race.
     """
     from smriti.core.oslock import exclusive_lock
 
     runtime = runtime_dir()
     key = load_key(runtime)
     paths = service_paths(runtime, root)
-    for wait_s in (0.0, DRAIN_WAIT_S + 5.0):
+    # The first wait is short but not zero: a client recovering from a dead
+    # service holds the lock for a moment (client._recover), and a starter
+    # must not lose to that and leave no service at all.
+    for wait_s in (1.0, DRAIN_WAIT_S + 5.0):
         with exclusive_lock(paths.lock, wait_s=wait_s) as held:
             if held:
                 return _serve_locked(paths, key, idle_s)

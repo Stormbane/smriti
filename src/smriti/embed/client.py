@@ -47,6 +47,7 @@ from smriti.embed.protocol import (
 from smriti.embed.runtime import (
     Discovery,
     ServicePaths,
+    clear_discovery,
     load_key,
     pid_alive,
     read_discovery,
@@ -59,6 +60,7 @@ log = logging.getLogger(__name__)
 QUERY_DEADLINE_S = 3.0
 WRITE_DEADLINE_S = 30.0
 SPAWN_BACKOFF_S = 10.0  # one start per root in this long, whoever asks
+CONNECT_S = 0.5  # a loopback connect that takes longer finds nobody listening
 FAILED_BACKOFF_S = 30.0  # after a failed start, report it this long before trying again
 _BATCH_BYTES = MAX_FRAME - 64 * 1024  # room for the frame's other fields
 
@@ -71,6 +73,10 @@ def service_enabled() -> bool:
 
 class _Gone(Exception):
     """The connection ended before an answer: worth one fresh try."""
+
+
+class _Unreachable(_Gone):
+    """The endpoint took no connection (refused, or no answer to connect): perhaps dead."""
 
 
 def _batches(texts: list[str]) -> list[list[str]]:
@@ -109,6 +115,27 @@ class ServiceEmbedding:
         self.last_identity: EmbeddingIdentity | None = None
         self.last_instance = ""
         self._children: list[subprocess.Popen[bytes]] = []
+        self._exited: dict[int, float] = {}  # pid of a service this started -> when seen gone
+
+    def _reap(self) -> None:
+        """Collect the services this process started that have exited.
+
+        On POSIX an exited child stays a zombie until its parent waits for
+        it, and a zombie's pid still probes as alive; polling the handle reaps
+        it. Its pid is remembered with the time, so a discovery record it left
+        is known to be dead even where the pid is later reused.
+        """
+        now = time.time()
+        for child in list(self._children):
+            if child.poll() is not None:
+                self._children.remove(child)
+                self._exited[child.pid] = now
+
+    def _alive(self, found: Discovery) -> bool:
+        gone = self._exited.get(found.pid)
+        if gone is not None and found.updated <= gone:
+            return False  # written by a service of ours that has since exited
+        return pid_alive(found.pid)
 
     def _paths(self) -> tuple[Path, ServicePaths]:
         runtime = runtime_dir()
@@ -154,6 +181,12 @@ class ServiceEmbedding:
                 reply = self._call(found, key, paths, deadline, {
                     "op": "embed", "kind": kind, "texts": batch,
                     "budget_ms": max(1, int((deadline - time.monotonic()) * 1000))})
+            except _Unreachable as exc:
+                gone = exc
+                log.info("the embedding service on port %d took no connection (%s)",
+                         found.port, exc)
+                self._recover(paths, found)
+                continue
             except _Gone as exc:
                 gone = exc
                 log.info("the embedding service went away mid-request (%s); trying once more",
@@ -176,8 +209,9 @@ class ServiceEmbedding:
         spawned = False
         delay = 0.02
         while True:
+            self._reap()  # before any liveness check: a dead child must not look alive
             found = read_discovery(paths)
-            alive = found is not None and pid_alive(found.pid)
+            alive = found is not None and self._alive(found)
             if found is not None and alive and found.state == "ready" and found.port:
                 return found
             if (found is not None and found.state == "failed"
@@ -198,13 +232,16 @@ class ServiceEmbedding:
     def _call(self, found: Discovery, key: bytes, paths: ServicePaths, deadline: float,
               request: Frame) -> Frame:
         """Authenticate both ways with the service in ``found``; send ``request``; the reply."""
-        connect_s = max(0.001, min(1.0, deadline - time.monotonic()))
+        # A live service accepts on loopback at once. Nobody listening is refused
+        # on POSIX, but on Windows only after about 2 s of retries: a connect that
+        # takes this long is as good as refused (_recover then checks the lock).
+        connect_s = max(0.001, min(CONNECT_S, deadline - time.monotonic()))
         try:
             sock = socket.create_connection(("127.0.0.1", found.port), timeout=connect_s)
         except TimeoutError as exc:
-            raise EmbeddingUnavailable("connecting to the embedding service timed out") from exc
-        except OSError as exc:  # refused or reset: it is gone (or going)
-            raise _Gone(str(exc)) from exc
+            raise _Unreachable(f"no answer to connect in {connect_s:.1f}s") from exc
+        except OSError as exc:  # refused: nothing listens there now
+            raise _Unreachable(str(exc)) from exc
         with sock:
             try:
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -247,14 +284,39 @@ class ServiceEmbedding:
 
     # ── Starting one ─────────────────────────────────────────────────
 
-    def start_service(self, paths: ServicePaths) -> bool:
+    def _recover(self, paths: ServicePaths, stale: Discovery) -> bool:
+        """``stale`` says ready but took no connection: replace it if it is dead.
+
+        A live service holds its root's lock for its whole life, and the kernel
+        frees the lock when the process dies, zombie or not. So under the lock,
+        a record still naming ``stale`` is a dead service's: it is cleared, and
+        a replacement started at once, whoever started the last one. A held
+        lock means the service is alive (busy, or draining): it is left alone.
+        Returns True when a replacement was started.
+        """
+        if not self.spawn:
+            return False
+        from smriti.core.oslock import exclusive_lock
+
+        cleared = False
+        with exclusive_lock(paths.lock, wait_s=0) as held:
+            if held:
+                current = read_discovery(paths)
+                if current is not None and current.instance == stale.instance:
+                    clear_discovery(paths, stale.instance)
+                    cleared = True
+        if not cleared:
+            return False
+        log.warning("the embedding service %s (pid %d) is gone; starting another",
+                    stale.instance, stale.pid)
+        return self.start_service(paths, throttle=False)
+
+    def start_service(self, paths: ServicePaths, *, throttle: bool = True) -> bool:
         """Start ``smriti embed serve`` for this root, unless one was started just now."""
-        for child in list(self._children):
-            if child.poll() is not None:
-                self._children.remove(child)  # reaped
+        self._reap()
         try:
             age = time.time() - paths.spawn.stat().st_mtime
-            if age < SPAWN_BACKOFF_S:
+            if throttle and age < SPAWN_BACKOFF_S:
                 return False
         except OSError:
             pass

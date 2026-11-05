@@ -57,7 +57,7 @@ def stub(texts: list[str]) -> list[list[float]]:
 
 
 class Services:
-    """In-thread services, published in the runtime directory as ``serve`` would."""
+    """In-thread services, holding the root's lock and published as ``serve`` would."""
 
     def __init__(self) -> None:
         self.running: list[tuple[EmbedService, threading.Thread]] = []
@@ -65,6 +65,7 @@ class Services:
 
     def start(self, root: Path, provider: Any = None, *, publish: bool = True,
               **kw: Any) -> EmbedService:
+        from smriti.core.oslock import exclusive_lock
         runtime = runtime_dir()
         paths = service_paths(runtime, root)
         holder: list[EmbedService] = []
@@ -81,9 +82,13 @@ class Services:
         svc.bind()
 
         def run() -> None:
-            reason = svc.run()
-            if publish:
-                clear_discovery(paths, svc.instance)
+            # Like serve(): the lock for the service's life (a draining
+            # predecessor may still hold it for a moment).
+            with exclusive_lock(paths.lock, wait_s=15) as held:
+                assert held, "another service holds the lock"
+                reason = svc.run()
+                if publish:
+                    clear_discovery(paths, svc.instance)
             self.reasons[svc.instance] = reason  # last: once it is here, the service is gone
 
         t = threading.Thread(target=run, daemon=True)
@@ -419,7 +424,7 @@ def test_idle_exit_racing_a_request_retries_on_a_fresh_service(
     assert as_read is not None and as_read.state == "ready"
     client = ServiceEmbedding(root, spawn=True)
     started: list[EmbedService] = []
-    client.start_service = lambda paths: bool(started.append(services.start(root)) or True)
+    client.start_service = lambda paths, **kw: bool(started.append(services.start(root)) or True)
     real_ready = client._ready_service
     looks: list[str] = []
 
@@ -507,7 +512,7 @@ def test_mixed_client_versions_coexist_and_another_protocol_degrades(
 
     future = ServiceEmbedding(root, spawn=True, protocol=PROTOCOL + 1)
     spawned: list[object] = []
-    future.start_service = lambda paths: bool(spawned.append(paths))
+    future.start_service = lambda paths, **kw: bool(spawned.append(paths))
     with pytest.raises(EmbeddingUnavailable, match="protocol"):
         future.embed_with_identity(["three"])
     assert not spawned  # it neither replaces the service nor starts another
@@ -716,6 +721,109 @@ def test_without_sqlite_vec_the_repair_loop_waits_and_fills_once_it_loads(
 
     assert _wait(lambda: pending() == 0, 10)
     assert svc.can_store_vectors and svc.stats.repaired == 1 and len(fills) >= 1
+
+
+def _closed_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = int(s.getsockname()[1])
+    s.close()
+    return port
+
+
+def test_a_crashed_service_of_ours_is_reaped_and_replaced_without_knocking(
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex review of H10, P2: on POSIX a service that crashed stays a zombie
+    while the MCP server that started it lives, and a zombie's pid probes alive;
+    children were reaped only when starting another, so its stale "ready"
+    record was tried twice and nothing replaced it."""
+    import smriti.embed.client as client_mod
+
+    paths = service_paths(runtime_dir(), root)
+    written = time.time()
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])  # the service, about to crash
+    if hasattr(os, "waitid"):
+        os.waitid(os.P_PID, dead.pid, os.WEXITED | os.WNOWAIT)  # exited, not reaped
+    else:
+        assert _wait(lambda: not client_mod.pid_alive(dead.pid), 10)
+    real_alive = client_mod.pid_alive
+    # A zombie's pid probes alive (POSIX); the same here on every platform.
+    monkeypatch.setattr(client_mod, "pid_alive",
+                        lambda pid: dead.returncode is None if pid == dead.pid else real_alive(pid))
+    write_discovery(paths, Discovery(dead.pid, "ready", "crashed", port=_closed_port(),
+                                     identity=STUB, updated=written))
+    client = ServiceEmbedding(root)
+    client._children.append(dead)
+    knocked: list[str] = []
+    real_call = client._call
+
+    def recording_call(found: Discovery, *a: Any, **k: Any) -> Any:
+        knocked.append(found.instance)
+        return real_call(found, *a, **k)
+
+    monkeypatch.setattr(client, "_call", recording_call)
+    started: list[EmbedService] = []
+
+    def start(paths: Any, **kw: Any) -> bool:
+        started.append(services.start(root))
+        return True
+
+    client.start_service = start  # type: ignore[method-assign]
+
+    got = client.embed_with_identity(["after the crash"])
+
+    assert got.vectors == stub(["after the crash"])
+    assert dead.returncode == 0  # reaped
+    assert "crashed" not in knocked  # known dead before any connection was tried
+    assert len(started) == 1 and client.last_instance == started[0].instance
+
+
+def test_a_dead_service_whose_pid_still_looks_alive_is_replaced_under_its_lock(
+        root: Path, services: Services) -> None:
+    """Codex review of H10, P2: another session's service died (a zombie of that
+    session, or a reused pid): its record says ready and its pid probes alive,
+    but nothing listens. Refused twice, the client gave up and nothing replaced
+    it; now the lock, free once the service is gone, proves it dead."""
+    paths = service_paths(runtime_dir(), root)
+    write_discovery(paths, Discovery(os.getpid(), "ready", "crashed", port=_closed_port(),
+                                     identity=STUB))
+    client = ServiceEmbedding(root)
+    throttles: list[object] = []
+
+    def start(paths: Any, **kw: Any) -> bool:
+        throttles.append(kw.get("throttle", True))
+        services.start(root)
+        return True
+
+    client.start_service = start  # type: ignore[method-assign]
+
+    got = client.embed_with_identity(["replaced"])
+
+    assert got.vectors == stub(["replaced"])
+    assert throttles == [False]  # one replacement, started past the start throttle
+    found = read_discovery(paths)
+    assert found is not None and found.instance == client.last_instance != "crashed"
+
+
+def test_an_unreachable_service_that_holds_its_lock_is_left_alone(root: Path) -> None:
+    """The lock is what tells a dead service from a live one that isn't accepting
+    (draining, swamped): a held lock means alive, so its record stands."""
+    from smriti.core.oslock import exclusive_lock
+
+    paths = service_paths(runtime_dir(), root)
+    write_discovery(paths, Discovery(os.getpid(), "ready", "alive-but-busy",
+                                     port=_closed_port(), identity=STUB))
+    started: list[object] = []
+    client = ServiceEmbedding(root, query_s=1.5)
+    client.start_service = lambda paths, **kw: bool(started.append(kw))  # type: ignore
+    with exclusive_lock(paths.lock, wait_s=1) as held:
+        assert held
+        t0 = time.monotonic()
+        with pytest.raises(EmbeddingUnavailable):
+            client.embed_with_identity(["x"], kind="query")
+        assert time.monotonic() - t0 < 2.5  # within the query's deadline
+    found = read_discovery(paths)
+    assert found is not None and found.instance == "alive-but-busy" and started == []
 
 
 # ── Real processes ───────────────────────────────────────────────────
