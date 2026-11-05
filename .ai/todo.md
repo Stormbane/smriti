@@ -40,21 +40,34 @@ live core is sound (connection discipline, capture design, backup locking,
 subprocess hygiene) and that these items stand between it and an adoptable
 product, most important first:
 
-- [ ] **Path validation on every MCP tool that takes a path argument**
-      (`project`, `slug`, `file` in `mcp_server.py`), the way
-      `writer._checked_branch` does, with traversal tests. Some of these
-      tools write, move or delete files.
-- [ ] **The memory root's backup privacy:** ship a `.gitignore` for the
-      memory template (index DB, metrics, private/), stop logging raw search
-      queries to `metrics.jsonl`, widen `daylog/scrub.py` (JWTs, `user:pass@`
-      URLs, more key prefixes), and either move the private-store key out of
-      the tree or drop the "encrypted" claim. Docstrings must not promise
-      encryption that the installer doesn't set up.
-- [ ] **Concurrency:** move `daylog/lock.py` to `smriti.core.oslock`; lock
-      the journal append in `writer.py` (O_APPEND isn't atomic across
-      processes on Windows); fix the private-store file counter race; track
-      file mtimes in the incremental index; make `index --full` build a new
-      generation and swap (plan 2.2).
+- [x] **Path validation on every MCP tool that takes a path argument**
+      (`smriti.core.safe_names`, applied centrally in the dispatcher;
+      refusals are marked `isError`). Done 2026-11-05.
+- [x] **The memory root's backup privacy:** a template `.gitignore`, queries
+      logged as hashes, a wider scrubber, the private-store key in
+      `private/.key` (never committed), docstrings that don't overclaim.
+      Done 2026-11-05.
+- [ ] **Concurrency:** move `daylog/lock.py` to `smriti.core.oslock` (it
+      still breaks locks by age and releases what it doesn't own); put the
+      read-modify-write MCP handlers (`add_todo`, `resolve_outbox`) and
+      `cascade.structural_cascade`'s `index.md` rewrite under an oslock;
+      have `witness.py` clear `.git/index.lock` only the way `backup.py`
+      does (no git running, lock unchanged), not by age; lock the journal
+      append in `writer.py` (O_APPEND isn't atomic across processes on
+      Windows); track file mtimes in the incremental index; make
+      `index --full` build a new generation and swap (plan 2.2). The
+      private-store counter race is fixed.
+- [ ] **No silent overwrites:** `record_finding` and `record_decision`
+      replace an earlier entry with the same date and title; refuse or
+      suffix instead.
+- [ ] **Types that match the code:** `ensure_schema` returns `IndexDB`, not
+      `sqlite3.Connection`; `search()` takes an `IndexDB`. Then work the
+      `mypy --strict` count down. The `mcp_server.py` docstring still says
+      "two tools".
+- [ ] **Personal coupling in the logic, not just the names:** speakers are
+      typed `"suti" | "narada"` and the human/autonomous split keys on
+      `who == "suti"` (`daylog/model.py`, `digest.py`, `render.py`); make
+      roles generic (user / agent) with names from config (plan 6.3).
 - [ ] **Digest truncation:** chunk long days instead of cutting at 60k chars,
       or at least record the cut (plan 3.2).
 - [ ] **Remove the parked pipelines** (plan 4.0, 6.4); split `mcp_server.py`
