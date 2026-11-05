@@ -52,7 +52,11 @@ def calendars(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return submitted
 
 
-def test_stale_lock_is_cleared_fresh_lock_is_not(repo: Path) -> None:
+def test_stale_lock_is_cleared_fresh_lock_is_not(repo: Path,
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    import smriti.core.gitproc as gitproc
+
+    monkeypatch.setattr(gitproc, "git_running", lambda: False)
     lock = repo / ".git" / "index.lock"
     lock.touch()
     assert witness.clear_stale_lock(repo) is False
@@ -61,6 +65,38 @@ def test_stale_lock_is_cleared_fresh_lock_is_not(repo: Path) -> None:
     os.utime(lock, (old, old))
     assert witness.clear_stale_lock(repo) is True
     assert not lock.exists()
+
+
+def test_old_lock_is_kept_while_git_runs(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Age isn't proof: a slow live git may hold an old-looking lock."""
+    import smriti.core.gitproc as gitproc
+
+    monkeypatch.setattr(gitproc, "git_running", lambda: True)
+    lock = repo / ".git" / "index.lock"
+    lock.touch()
+    old = time.time() - 3600
+    os.utime(lock, (old, old))
+    assert witness.clear_stale_lock(repo) is False
+    assert lock.exists()
+
+
+def test_lock_replaced_after_inspection_is_kept(repo: Path,
+                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    """A live git that takes the lock between our look and our delete keeps it."""
+    import smriti.core.gitproc as gitproc
+
+    lock = repo / ".git" / "index.lock"
+    lock.touch()
+    old = time.time() - 3600
+    os.utime(lock, (old, old))
+
+    def a_git_starts() -> bool:
+        lock.write_text("live", encoding="utf-8")  # new content, new mtime
+        return False
+
+    monkeypatch.setattr(gitproc, "git_running", a_git_starts)
+    assert witness.clear_stale_lock(repo) is False
+    assert lock.read_text(encoding="utf-8") == "live"
 
 
 def test_stamp_writes_manifest_and_proof(repo: Path, calendars: list[str]) -> None:

@@ -66,19 +66,30 @@ def _git(root: Path, *args: str, timeout: int = 60) -> subprocess.CompletedProce
 def clear_stale_lock(root: Path, *, max_age_s: float = _STALE_LOCK_S) -> bool:
     """Remove a git ``index.lock`` left behind by a killed process.
 
-    Memory commits take seconds, so a lock this old belongs to a git that
-    died mid-commit. Left alone it silently blocks every later backup: one
-    from 2026-09-07 did, for six weeks.
+    Memory commits take seconds, so a lock this old *probably* belongs to a
+    git that died mid-commit. Left alone it silently blocks every later
+    backup (one from 2026-09-07 did, for six weeks). Age alone isn't proof,
+    though: it is removed only when no git process is running and the lock
+    is still the one that was inspected, the same rule ``backup.py`` uses.
     """
+    from smriti.core.gitproc import git_running
+
     lock = root / ".git" / "index.lock"
     try:
-        age = time.time() - lock.stat().st_mtime
+        st = lock.stat()
     except FileNotFoundError:
         return False
-    if age < max_age_s:
+    age = time.time() - st.st_mtime
+    if age < max_age_s or git_running():
         return False
-    lock.unlink()
-    log.warning("removed stale %s (%.0f min old)", lock, age / 60)
+    try:
+        now = lock.stat()
+        if (now.st_ino, now.st_mtime_ns, now.st_size) != (st.st_ino, st.st_mtime_ns, st.st_size):
+            return False  # replaced by a live git since we looked
+        lock.unlink()
+    except OSError:
+        return False
+    log.warning("removed stale %s (%.0f min old, no git running)", lock, age / 60)
     return True
 
 
