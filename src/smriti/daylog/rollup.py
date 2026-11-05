@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from smriti.daylog.config import DaylogConfig
+from smriti.daylog.config import DEFAULT_AGENT_NAME, DaylogConfig
 from smriti.daylog.digest import compose
 from smriti.daylog.render import read_input_hash
 
@@ -27,11 +27,17 @@ _MANIFEST_RE = re.compile(r"^inputs_hash:\s*(\S+)\s*$", re.MULTILINE)
 _DIGEST_NAME_RE = re.compile(r"^(\d{2})-digest\.md$")
 
 _SYSTEM = (
-    "You are Narada's memory rollup writer. You receive the digests that make "
+    "You are {agent}'s memory rollup writer. You receive the digests that make "
     "up one {unit}. Compress them into the {unit}'s highlights: what happened, "
     "what was decided, what changed, what stayed open. Markdown, specific, "
     "no preamble. Keep it to roughly a third of the input length."
 )
+
+
+def _system_prompt(unit: str, cfg: DaylogConfig | None = None) -> str:
+    """The rollup prompt for a week, month or year, naming the configured agent."""
+    agent = cfg.agent_name if cfg is not None else DEFAULT_AGENT_NAME
+    return _SYSTEM.format(unit=unit, agent=agent)
 
 
 @dataclass
@@ -136,9 +142,10 @@ def rollup_body(period: Period) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def build_rollup(period: Period, attempts_log: list[dict[str, str]]) -> Path:
+def build_rollup(period: Period, attempts_log: list[dict[str, str]],
+                 cfg: DaylogConfig | None = None) -> Path:
     text = compose(
-        _SYSTEM.format(unit=period.kind),
+        _system_prompt(period.kind, cfg),
         f"Digests for this {period.kind}:\n\n{rollup_body(period)}",
         attempts_log,
     )

@@ -6,10 +6,16 @@ config edit, never a code change. Overrides live in
 ``<tree>/.smriti/daylog.json``:
 
     {"sources": [{"name": "...", "kind": "claude_jsonl", "glob": "..."}],
-     "notify_cmd": ["...", "..."]}
+     "notify_cmd": ["...", "..."],
+     "user_name": "Sam", "agent_name": "Ari"}
 
 ``sources`` REPLACES the defaults when present; ``extra_sources``
 appends to them. ``kind`` selects the adapter module.
+
+``user_name`` and ``agent_name`` are the display names of the two
+speaker roles (``smriti.daylog.model.USER`` and ``AGENT``): the day-log
+render, the presence line and the nightly prompts use them. They
+default to "User" and "Agent".
 """
 
 from __future__ import annotations
@@ -19,6 +25,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from smriti.core.tree import tree_root
+from smriti.daylog.model import USER
+
+DEFAULT_USER_NAME = "User"
+DEFAULT_AGENT_NAME = "Agent"
 
 
 @dataclass(frozen=True)
@@ -36,6 +46,13 @@ class DaylogConfig:
     # Where the user lives, for the morning message's local news (e.g.
     # "Lisbon, Portugal"). Set in the private .smriti/daylog.json, never in code.
     location: str = ""
+    # Display names of the two speaker roles.
+    user_name: str = DEFAULT_USER_NAME
+    agent_name: str = DEFAULT_AGENT_NAME
+
+    def speaker(self, who: str) -> str:
+        """The display name for a turn's role; anything but the user is the agent."""
+        return self.user_name if who == USER else self.agent_name
 
     @property
     def log_dir(self) -> Path:
@@ -121,4 +138,9 @@ def load_config(root: Path | None = None) -> DaylogConfig:
     location = raw.get("location")
     if isinstance(location, str):
         cfg.location = location.strip()
+    user_name, agent_name = raw.get("user_name"), raw.get("agent_name")
+    if isinstance(user_name, str) and user_name.strip():
+        cfg.user_name = user_name.strip()
+    if isinstance(agent_name, str) and agent_name.strip():
+        cfg.agent_name = agent_name.strip()
     return cfg

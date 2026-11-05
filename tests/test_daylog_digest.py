@@ -141,7 +141,7 @@ def test_short_day_is_one_call_with_the_whole_log(tmp_path: Path, llm: NotesProv
     assert out is not None
     assert len(llm.requests) == 1
     request = llm.requests[0]
-    assert request.system == digest_mod._SYSTEM
+    assert request.system == digest_mod._system_prompt(cfg)
     assert request.user == (f"Day log for {DAY}:\n\n{log_text}"
                             f"\n\nAutonomous activity sample:\n{_sample(cfg)}")
     assert "note 1" in out.read_text(encoding="utf-8")
@@ -155,7 +155,7 @@ def test_one_call_up_to_the_budget_and_parts_past_it(tmp_path: Path, llm: NotesP
     base = _rendered_day(n_turns=40, turn_chars=1000)
     cfg = _seed(tmp_path, _sized(base, _BUDGET))
     digest_mod.digest_day(cfg, DAY, [])
-    assert [r.system for r in llm.requests] == [digest_mod._SYSTEM]
+    assert [r.system for r in llm.requests] == [digest_mod._system_prompt(cfg)]
 
     llm.requests.clear()
     cfg.day_md(DAY).write_text(_sized(base, _BUDGET + 1), encoding="utf-8")
@@ -284,7 +284,7 @@ def test_a_heading_in_the_last_turn_stays_in_the_timeline() -> None:
 def test_render_indents_every_line_break(tmp_path: Path) -> None:
     from smriti.daylog.render import render_day
 
-    cfg = DaylogConfig(root=tmp_path, sources=[])
+    cfg = DaylogConfig(root=tmp_path, sources=[], user_name="Sam")
     append_turns(cfg, [Turn(
         ts=parse_ts(f"{DAY}T02:00:00Z"), channel="voice", who="user",  # type: ignore[arg-type]
         text="one\rtwo\r\nthree\n## four", session="s1")])
@@ -292,7 +292,27 @@ def test_render_indents_every_line_break(tmp_path: Path) -> None:
     assert rendered is not None
     body = rendered.read_text(encoding="utf-8").split("# Day log", 1)[1]
     assert [line for line in body.splitlines()[2:] if line] == [
-        "- `12:00` [voice] **Suti:** one", "  two", "  three", "  ## four"]
+        "- `12:00` [voice] **Sam:** one", "  two", "  three", "  ## four"]
+
+
+# The one-call prompt before the parties' names came from config.
+_REFERENCE_DIGEST_PROMPT = (
+    "You are Narada's nightly digest writer. You receive one day's complete "
+    "communication log between Suti and Narada across every channel (voice, "
+    "Telegram, Claude Code sessions, Codex), plus a sample of autonomous "
+    "session activity. " + digest_mod._SECTIONS
+)
+
+
+def test_the_digest_prompt_names_the_configured_parties(tmp_path: Path) -> None:
+    sam = digest_mod._system_prompt(DaylogConfig(root=tmp_path, user_name="Sam",
+                                                 agent_name="Ari"))
+    assert sam.startswith("You are Ari's nightly digest writer.")
+    assert "between Sam and Ari across" in sam and "{" not in sam
+    generic = digest_mod._system_prompt(DaylogConfig(root=tmp_path))
+    assert "between User and Agent across" in generic
+    reference = DaylogConfig(root=tmp_path, user_name="Suti", agent_name="Narada")
+    assert digest_mod._system_prompt(reference) == _REFERENCE_DIGEST_PROMPT
 
 
 def test_a_failed_part_call_writes_no_digest(tmp_path: Path,
@@ -355,7 +375,7 @@ def test_a_large_trailer_stays_bounded_in_one_call_and_in_parts(
     cfg = _seed(tmp_path, log_text)
     out = digest_mod.digest_day(cfg, DAY, [])
     assert out is not None
-    assert [r.system for r in llm.requests] == [digest_mod._SYSTEM]
+    assert [r.system for r in llm.requests] == [digest_mod._system_prompt(cfg)]
     assert len(llm.requests[0].user) <= _CALL_LIMIT
     assert log_text in llm.requests[0].user
     assert _frontmatter(out)["cut"] == "false"

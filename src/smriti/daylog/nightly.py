@@ -143,7 +143,7 @@ def run_nightly(
         stale_periods = enumerate_stale_periods(cfg, target)
         built: list[str] = []
         for period in stale_periods[:rollup_cap]:
-            build_rollup(period, attempts)
+            build_rollup(period, attempts, cfg)
             built.append(str(period.out_path.name))
         steps["rollups"] = {
             "ok": True,

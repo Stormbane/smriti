@@ -1,4 +1,4 @@
-"""The day-log: a unified, chronological record of Suti<->Narada communication.
+"""The day-log: a unified, chronological record of user<->agent communication.
 
 Every channel (Claude Code sessions, the Telegram typed-chat brain, box
 voice, Codex sessions) already streams transcripts to disk. This package

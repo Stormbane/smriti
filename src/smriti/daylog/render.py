@@ -81,7 +81,7 @@ def render_day(cfg: DaylogConfig, day: str) -> Path | None:
         clock = t.ts.astimezone(tz).strftime("%H:%M")
         channel = f" [{t.channel}]" if t.channel != last_channel else ""
         last_channel = t.channel
-        speaker = "Suti" if t.who == USER else "Narada"
+        speaker = cfg.speaker(t.who)
         # Every line break, \r included, so each continuation line is indented
         # (a lone \r would come back from read_text as an unindented line).
         text = t.text.strip().replace("\r\n", "\n").replace("\r", "\n")

@@ -43,7 +43,7 @@ def fake_llm(monkeypatch: pytest.MonkeyPatch) -> FakeProvider:
 
 
 def _cfg(tmp_path: Path) -> DaylogConfig:
-    return DaylogConfig(root=tmp_path, sources=[])
+    return DaylogConfig(root=tmp_path, sources=[], user_name="Sam", agent_name="Ari")
 
 
 def _turn(ts: str, text: str, who: str = USER, channel: str = "voice",
@@ -71,13 +71,89 @@ def test_render_writes_timeline_with_hash_and_autonomous_marker(tmp_path: Path) 
     out = render_day(cfg, "2026-09-04")
     assert out is not None
     text = out.read_text(encoding="utf-8")
-    assert "**Suti:** morning question" in text
-    assert "**Narada:** morning answer" in text
+    assert "**Sam:** morning question" in text
+    assert "**Ari:** morning answer" in text
     # The zero-human session is a derived marker, not inline turns.
     assert "[autonomous: claude:smriti" in text
     assert "loop iteration output" not in text
     turns = read_day_turns(cfg.day_jsonl("2026-09-04"))
     assert read_input_hash(out) == input_hash(turns)
+
+
+def test_render_names_default_to_user_and_agent(tmp_path: Path) -> None:
+    cfg = DaylogConfig(root=tmp_path, sources=[])
+    _seed_day(cfg)
+    text = render_day(cfg, "2026-09-04").read_text(encoding="utf-8")  # type: ignore[union-attr]
+    assert "**User:** morning question" in text and "**Agent:** morning answer" in text
+
+
+# A day captured before the speakers became roles: "who" holds the reference
+# installation's names. Ids are as stored; the last two turns are one
+# unattended session.
+_LEGACY_DAY = "\n".join(json.dumps(r) for r in [
+    {"id": "claude:abcdef12:aaaaaaaaaaaa", "ts": "2026-11-02T21:05:00Z",
+     "channel": "claude:proj", "who": "suti", "text": "Morning. Can you look at the index?",
+     "session": "abcdef1234"},
+    {"id": "claude:abcdef12:bbbbbbbbbbbb", "ts": "2026-11-02T21:06:10Z",
+     "channel": "claude:proj", "who": "narada",
+     "text": "Yes. Two things:\n1. stale rows\r\n2. a lock", "session": "abcdef1234"},
+    {"id": "voice:20261103:cccccccccccc", "ts": "2026-11-03T02:00:00Z", "channel": "voice",
+     "who": "suti", "text": "Remind me about the parcel", "session": "20261103-120000"},
+    {"id": "voice:20261103:dddddddddddd", "ts": "2026-11-03T02:00:05Z", "channel": "voice",
+     "who": "narada", "text": "Noted.", "session": "20261103-120000"},
+    {"id": "codex:feed1234:eeeeeeeeeeee", "ts": "2026-11-03T05:00:00Z",
+     "channel": "codex:auto", "who": "narada", "text": "autonomous step one",
+     "session": "feed1234"},
+    {"id": "codex:feed1234:ffffffffffff", "ts": "2026-11-03T05:20:00Z",
+     "channel": "codex:auto", "who": "narada", "text": "autonomous step two",
+     "session": "feed1234"},
+]) + "\n"
+
+# What render_day wrote for _LEGACY_DAY before the speakers became roles
+# (recorded from a run of that code, UTC+10).
+_LEGACY_RENDER = """---
+date: 2026-11-03
+input_hash: a1d98fd4f3012c12
+generated_by: smriti nightly (render)
+---
+
+# Day log — 2026-11-03
+
+- `07:05` [claude:proj] **Suti:** Morning. Can you look at the index?
+- `07:06` **Narada:** Yes. Two things:
+  1. stale rows
+  2. a lock
+- `12:00` [voice] **Suti:** Remind me about the parcel
+- `12:00` **Narada:** Noted.
+
+## Autonomous sessions
+
+- [autonomous: codex:auto, 15:00–15:20, 2 turns]
+"""
+
+
+def test_a_legacy_day_renders_byte_identically_with_the_reference_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+
+    from smriti.daylog.config import load_config
+
+    monkeypatch.setenv("SMRITI_DAY_UTC_OFFSET", "10")
+    (tmp_path / ".smriti").mkdir()
+    (tmp_path / ".smriti" / "daylog.json").write_text(
+        json.dumps({"user_name": "Suti", "agent_name": "Narada"}), encoding="utf-8")
+    cfg = load_config(tmp_path)
+    path = cfg.day_jsonl("2026-11-03")
+    path.parent.mkdir(parents=True)
+    path.write_text(_LEGACY_DAY, encoding="utf-8")
+    out = render_day(cfg, "2026-11-03")
+    assert out is not None
+    # render_day writes in text mode, so the platform's line ending is part of the bytes.
+    assert out.read_bytes() == _LEGACY_RENDER.replace("\n", os.linesep).encode("utf-8")
+    turns = read_day_turns(path)
+    assert [t.who for t in turns] == [USER, AGENT, USER, AGENT, AGENT, AGENT]
+    assert input_hash(turns) == "a1d98fd4f3012c12"  # unchanged: past digests stay current
 
 
 def test_render_marker_retracts_when_human_turn_arrives(tmp_path: Path) -> None:
@@ -161,6 +237,19 @@ def test_rollup_scan_finds_closed_weeks_and_repairs_stale(
     render_day(cfg, "2026-09-01")
     digest_mod.digest_day(cfg, "2026-09-01", [])
     assert [p.out_path.name for p in enumerate_stale_periods(cfg, today)] == ["week1.md"]
+
+
+def test_the_rollup_prompt_names_the_configured_agent(tmp_path: Path) -> None:
+    from smriti.daylog.rollup import _system_prompt
+
+    assert _system_prompt("week", _cfg(tmp_path)).startswith("You are Ari's memory rollup")
+    assert _system_prompt("year").startswith("You are Agent's memory rollup writer")
+    reference = DaylogConfig(root=tmp_path, user_name="Suti", agent_name="Narada")
+    assert _system_prompt("week", reference) == (
+        "You are Narada's memory rollup writer. You receive the digests that make up one "
+        "week. Compress them into the week's highlights: what happened, what was decided, "
+        "what changed, what stayed open. Markdown, specific, no preamble. Keep it to "
+        "roughly a third of the input length.")
 
 
 def test_rollup_body_keeps_every_input_of_a_long_year(tmp_path: Path) -> None:
@@ -414,6 +503,7 @@ def test_presence_line_reports_other_channels_only(tmp_path: Path) -> None:
     ])
     line = presence_line(exclude_channel="claude:smriti", now=now, cfg=cfg)
     assert "telegram" in line and "3 min ago" in line
+    assert '(Sam: "Is the voice still working?")' in line
     assert "old turn" not in line and "own channel" not in line
 
 

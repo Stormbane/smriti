@@ -1,6 +1,6 @@
 """The daily digest — one read-compose-emit LLM call per day, a few for a long day.
 
-Primary seat: ``claude_cli`` (Suti's ruling 2026-09-04); fallback:
+Primary seat: ``claude_cli`` (the maintainer's ruling, 2026-09-04); fallback:
 ``codex_cli``. The subprocess is constrained to no tools/MCP — it holds
 no ``smriti_write`` license; anything notable belongs in the digest
 file itself, which lives in the tree and gets indexed (spec: review
@@ -62,12 +62,18 @@ _SECTIONS = (
     "Be specific and faithful to the log; omit empty sections; no preamble."
 )
 
+# The one-call prompt names the two parties by their configured names.
 _SYSTEM = (
-    "You are Narada's nightly digest writer. You receive one day's complete "
-    "communication log between Suti and Narada across every channel (voice, "
+    "You are {agent}'s nightly digest writer. You receive one day's complete "
+    "communication log between {user} and {agent} across every channel (voice, "
     "Telegram, Claude Code sessions, Codex), plus a sample of autonomous "
-    "session activity. " + _SECTIONS
+    "session activity. "
 )
+
+
+def _system_prompt(cfg: DaylogConfig) -> str:
+    """The one-call digest prompt, naming ``cfg``'s user and agent."""
+    return _SYSTEM.format(user=cfg.user_name, agent=cfg.agent_name) + _SECTIONS
 
 _PART_SYSTEM = (
     "You are the first pass of a nightly digest writer. One day's communication "
@@ -381,7 +387,7 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]]) 
         user = f"Day log for {day}:\n\n{log_text}"
         if autonomous:
             user += f"\n\nAutonomous activity sample:\n{autonomous}"
-        text = compose(_SYSTEM, user, attempts_log)
+        text = compose(_system_prompt(cfg), user, attempts_log)
         coverage = _Coverage(1, len(log_text), len(log_text))
     else:
         plan = _plan(log_text)
