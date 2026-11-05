@@ -64,8 +64,24 @@ def test_parsed_commands_are_the_dispatched_ones(facts: Any) -> None:
     assert len(facts.commands) == len(set(facts.commands))
 
 
+def _every_tool(facts: Any) -> list[str]:
+    return [*facts.tools, *(t for tools in facts.profile_tools.values() for t in tools)]
+
+
 def test_tool_names_are_unique(facts: Any) -> None:
-    assert facts.tools and len(facts.tools) == len(set(facts.tools))
+    every = _every_tool(facts)
+    assert facts.tools and len(every) == len(set(every))
+
+
+def test_the_static_tool_lists_are_the_served_ones(facts: Any) -> None:
+    # Guards the parser in doc_facts.py: what it reads is what the code serves.
+    from smriti.mcp.tools import TOOLS
+    from smriti.profiles import load_profile
+
+    assert facts.tools == tuple(t.name for t in TOOLS)
+    assert facts.profile_tools, "no profile tools found"
+    for name, tools in facts.profile_tools.items():
+        assert tools == tuple(t.name for t in load_profile(name).tools)
 
 
 def test_readme_tables_name_every_command_and_tool(facts: Any) -> None:
@@ -74,7 +90,7 @@ def test_readme_tables_name_every_command_and_tool(facts: Any) -> None:
     stored = doc_facts.stored_snippet(text) or ""
     prose = text.replace(stored, "")
     missing = [f"smriti {c}" for c in facts.commands if f"`smriti {c}" not in prose]
-    missing += [t for t in facts.tools if f"`{t}" not in prose]
+    missing += [t for t in _every_tool(facts) if f"`{t}" not in prose]
     assert not missing, f"README.md tables don't mention: {', '.join(missing)}"
 
 

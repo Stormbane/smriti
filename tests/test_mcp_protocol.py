@@ -12,7 +12,9 @@ from smriti.mcp.server import call_tool, handle_message
 from smriti.mcp.tool import Tool, ToolError
 from smriti.mcp.tools import TOOLS
 
-TOOLS_DIR = Path(__file__).resolve().parents[1] / "src" / "smriti" / "mcp" / "tools"
+SRC = Path(__file__).resolve().parents[1] / "src" / "smriti"
+TOOL_MODULES = sorted([*(SRC / "mcp" / "tools").glob("*.py"),
+                       *(SRC / "profiles").rglob("*.py")])
 
 
 def _call(name: str, arguments: Any) -> dict[str, Any]:
@@ -121,10 +123,10 @@ def _returns_error_text(node: ast.Return) -> bool:
             and value.value.startswith("Error"))
 
 
-@pytest.mark.parametrize("module", sorted(p.name for p in TOOLS_DIR.glob("*.py")))
+@pytest.mark.parametrize("module", [p.relative_to(SRC).as_posix() for p in TOOL_MODULES])
 def test_no_handler_reports_failure_as_text(module: str) -> None:
     """Refusals raise ToolError; an "Error:" string would read as success to a caller."""
-    tree = ast.parse((TOOLS_DIR / module).read_text(encoding="utf-8"))
+    tree = ast.parse((SRC / module).read_text(encoding="utf-8"))
     bad = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Return) and _returns_error_text(n)]
     assert not bad, f"{module} returns error text at lines {bad}; raise ToolError instead"
 

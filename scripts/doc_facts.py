@@ -6,7 +6,9 @@ Counts, by static parsing (stdlib only; nothing is imported or run):
   subparsers object in ``src/smriti/cli.py``, plus the nested
   subcommands of any command that has its own subparsers;
 - MCP tools: the ``name`` of every ``Tool(...)`` in the groups that
-  ``src/smriti/mcp/tools/__init__.py`` joins into ``TOOLS``;
+  ``src/smriti/mcp/tools/__init__.py`` joins into ``TOOLS`` (the core),
+  and, listed apart, in the groups each profile's
+  ``src/smriti/profiles/<name>/__init__.py`` joins into its own ``TOOLS``;
 - test functions: ``test*`` functions at module level and in ``Test*``
   classes under ``tests/`` (pytest collects more items than this,
   because some tests are parametrised).
@@ -34,6 +36,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLI_PATH = REPO_ROOT / "src" / "smriti" / "cli.py"
 MCP_TOOLS_DIR = REPO_ROOT / "src" / "smriti" / "mcp" / "tools"
+PROFILES_DIR = REPO_ROOT / "src" / "smriti" / "profiles"
 TESTS_DIR = REPO_ROOT / "tests"
 DOC_FILES = ("README.md", "CLAUDE.md", "AGENTS.md")
 
@@ -46,7 +49,8 @@ BEGIN_PREFIX = "<!-- doc-facts:begin"
 class Facts:
     commands: tuple[str, ...]
     subcommands: dict[str, tuple[str, ...]]
-    tools: tuple[str, ...]
+    tools: tuple[str, ...]  # the core's
+    profile_tools: dict[str, tuple[str, ...]]  # profile name -> the tools it adds
     test_functions: int
     test_files: int
 
@@ -140,8 +144,8 @@ def cli_commands(path: Path = CLI_PATH) -> tuple[list[str], dict[str, list[str]]
     return top, nested
 
 
-def _module_tools(path: Path) -> ast.Tuple:
-    """The module-level ``TOOLS = (...)`` tuple in ``path``."""
+def _module_tools(path: Path) -> ast.Tuple | None:
+    """The module-level ``TOOLS = (...)`` tuple in ``path``, or None."""
     for node in _parse(path).body:
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
             target, value = node.targets[0], node.value
@@ -151,26 +155,47 @@ def _module_tools(path: Path) -> ast.Tuple:
             continue
         if isinstance(target, ast.Name) and target.id == "TOOLS" and isinstance(value, ast.Tuple):
             return value
-    raise RuntimeError(f"no module-level TOOLS tuple found in {path}")
+    return None
 
 
-def mcp_tools(tools_dir: Path = MCP_TOOLS_DIR) -> list[str]:
-    """Tool names in ``tools/list`` order.
+def _required_tools(path: Path) -> ast.Tuple:
+    tools = _module_tools(path)
+    if tools is None:
+        raise RuntimeError(f"no module-level TOOLS tuple found in {path}")
+    return tools
 
-    ``tools/__init__.py`` joins the groups (``TOOLS = (*memory.TOOLS, ...)``);
-    each group module lists ``Tool(name="...", ...)`` entries.
+
+def joined_tools(init: Path) -> list[str]:
+    """Tool names, in order, of the groups that *init* joins into ``TOOLS``.
+
+    *init* joins the groups (``TOOLS = (*memory.TOOLS, ...)``); each group is
+    a module beside it that lists ``Tool(name="...", ...)`` entries.
     """
     names: list[str] = []
-    for group in _module_tools(tools_dir / "__init__.py").elts:
+    for group in _required_tools(init).elts:
         if not (isinstance(group, ast.Starred) and isinstance(group.value, ast.Attribute)
                 and isinstance(group.value.value, ast.Name)):
-            raise RuntimeError(f"unexpected entry in {tools_dir / '__init__.py'} TOOLS")
-        for entry in _module_tools(tools_dir / f"{group.value.value.id}.py").elts:
+            raise RuntimeError(f"unexpected entry in {init} TOOLS")
+        for entry in _required_tools(init.parent / f"{group.value.value.id}.py").elts:
             name = next((kw.value.value for kw in getattr(entry, "keywords", [])
                          if kw.arg == "name" and isinstance(kw.value, ast.Constant)), None)
             if isinstance(name, str):
                 names.append(name)
     return names
+
+
+def mcp_tools(tools_dir: Path = MCP_TOOLS_DIR) -> list[str]:
+    """The core's tool names in ``tools/list`` order."""
+    return joined_tools(tools_dir / "__init__.py")
+
+
+def profile_tools(profiles_dir: Path = PROFILES_DIR) -> dict[str, list[str]]:
+    """Each profile's added tool names, by profile; a profile without ``TOOLS`` adds none."""
+    found: dict[str, list[str]] = {}
+    for init in sorted(profiles_dir.glob("*/__init__.py")):
+        if _module_tools(init) is not None:
+            found[init.parent.name] = joined_tools(init)
+    return found
 
 
 def _is_test(node: ast.AST) -> bool:
@@ -197,11 +222,13 @@ def count_tests(tests_dir: Path = TESTS_DIR) -> tuple[int, int]:
 def collect(repo_root: Path = REPO_ROOT) -> Facts:
     top, nested = cli_commands(repo_root / "src" / "smriti" / "cli.py")
     tools = mcp_tools(repo_root / "src" / "smriti" / "mcp" / "tools")
+    profiles = profile_tools(repo_root / "src" / "smriti" / "profiles")
     functions, files = count_tests(repo_root / "tests")
     return Facts(
         commands=tuple(top),
         subcommands={k: tuple(v) for k, v in nested.items()},
         tools=tuple(tools),
+        profile_tools={k: tuple(v) for k, v in profiles.items()},
         test_functions=functions,
         test_files=files,
     )
@@ -221,7 +248,10 @@ def snippet(facts: Facts) -> str:
         f"- **CLI:** {len(facts.commands)} `smriti` subcommands: "
         f"{ticks(tuple(sorted(facts.commands)))}."
         + (f" Nested: {nested}." if nested else ""),
-        f"- **MCP:** {len(facts.tools)} tools: {ticks(facts.tools)}.",
+        f"- **MCP:** {len(facts.tools)} core tools: {ticks(facts.tools)}.",
+        *(f"- **MCP, `{name}` profile:** {len(tools)} more tools when it is enabled: "
+          f"{ticks(tools)}."
+          for name, tools in sorted(facts.profile_tools.items()) if tools),
         f"- **Tests:** {facts.test_functions} test functions in {facts.test_files} files "
         "under `tests/` (pytest collects more, because some are parametrised).",
         END,

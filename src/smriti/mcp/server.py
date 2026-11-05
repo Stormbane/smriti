@@ -1,8 +1,10 @@
 """The MCP protocol: JSON-RPC 2.0 over stdio, one message per line.
 
 ``handle_message`` answers one request; ``main`` reads stdin until it
-closes. Tools are looked up by name in a table built from
-:data:`smriti.mcp.tools.TOOLS`.
+closes. Tools are looked up by name among
+:func:`smriti.mcp.tools.active_tools`: the core's, plus those of the
+profile the memory root's config names. The table is read per request,
+so it follows the root (``SMRITI_ROOT``) and its config.
 """
 
 from __future__ import annotations
@@ -14,15 +16,13 @@ from typing import Any
 
 from smriti.core.safe_names import PATH_ARGUMENTS, UnsafeName, safe_name
 from smriti.mcp.tool import Tool, ToolError
-from smriti.mcp.tools import TOOLS
+from smriti.mcp.tools import active_tools
 
 log = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "smriti", "version": "0.1.0"}
 CAPABILITIES: dict[str, Any] = {"tools": {}}
-
-_BY_NAME: dict[str, Tool] = {tool.name: tool for tool in TOOLS}
 
 Message = dict[str, Any]
 
@@ -77,12 +77,12 @@ def handle_message(msg: Message) -> Message | None:
             "capabilities": CAPABILITIES,
         })
     if method == "tools/list":
-        return _response(id, {"tools": [tool.listing() for tool in TOOLS]})
+        return _response(id, {"tools": [tool.listing() for tool in active_tools()]})
     if method == "tools/call":
         name = params.get("name")
         if not isinstance(name, str):
             return _error(id, -32602, "Invalid params: name must be a string")
-        tool = _BY_NAME.get(name)
+        tool = next((t for t in active_tools() if t.name == name), None)
         if tool is None:
             return _error(id, -32601, f"Unknown tool: {name}")
         return _response(id, call_tool(tool, params.get("arguments", {})))

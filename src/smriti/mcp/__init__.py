@@ -2,7 +2,9 @@
 
 - :mod:`smriti.mcp.server` — the JSON-RPC protocol and the tool table;
 - :mod:`smriti.mcp.tool` — what a tool is, and :class:`~smriti.mcp.tool.ToolError`;
-- :mod:`smriti.mcp.tools` — the tools, one module per group.
+- :mod:`smriti.mcp.tools` — the core tools, one module per group, and
+  :func:`~smriti.mcp.tools.active_tools`, which adds the configured
+  profile's (:mod:`smriti.profiles`).
 
 Run it with ``python -m smriti.mcp`` (or ``python -m smriti.mcp_server``,
 the name installed configs use). Pin the interpreter's absolute path in the

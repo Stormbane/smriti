@@ -16,6 +16,10 @@ appends to them. ``kind`` selects the adapter module.
 speaker roles (``smriti.daylog.model.USER`` and ``AGENT``): the day-log
 render, the presence line and the nightly prompts use them. They
 default to "User" and "Agent".
+
+``profile`` names an optional profile, ``smriti.profiles.<name>``, that
+adds one installation's tools, wake sections and morning persona to the
+core (see :mod:`smriti.profiles`). Unset, the core runs alone.
 """
 
 from __future__ import annotations
@@ -49,6 +53,8 @@ class DaylogConfig:
     # Display names of the two speaker roles.
     user_name: str = DEFAULT_USER_NAME
     agent_name: str = DEFAULT_AGENT_NAME
+    # The optional profile (smriti.profiles.<name>); "" means none.
+    profile: str = ""
 
     def speaker(self, who: str) -> str:
         """The display name for a turn's role; anything but the user is the agent."""
@@ -143,4 +149,7 @@ def load_config(root: Path | None = None) -> DaylogConfig:
         cfg.user_name = user_name.strip()
     if isinstance(agent_name, str) and agent_name.strip():
         cfg.agent_name = agent_name.strip()
+    profile = raw.get("profile")
+    if isinstance(profile, str):
+        cfg.profile = profile.strip()
     return cfg

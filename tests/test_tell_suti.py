@@ -1,4 +1,8 @@
-"""tell_suti: the MCP door to notify_suti.py. Nothing here sends a real message."""
+"""tell_suti: the reference profile's MCP door to notify_suti.py.
+
+Nothing here sends a real message. The tool exists only with the
+reference profile enabled, so every test runs with it.
+"""
 
 from __future__ import annotations
 
@@ -9,14 +13,15 @@ from pathlib import Path
 import pytest
 
 from smriti.mcp.server import handle_message
-from smriti.mcp.tools import TOOLS, outbox
+from smriti.mcp.tools import active_tools
 from smriti.daylog import notify
 from smriti.daylog.config import DaylogConfig, load_config
 from smriti.daylog.notify import Delivery, NotifyError, parse_channels, send
+from smriti.profiles.reference import outbox
 
 
 @pytest.fixture(autouse=True)
-def _no_real_sender(monkeypatch: pytest.MonkeyPatch) -> None:
+def _no_real_sender(monkeypatch: pytest.MonkeyPatch, reference_profile: Path) -> None:
     """Any path that would reach the real notify_suti.py fails the test."""
 
     def _refuse(text: str, level: str) -> Delivery:
@@ -47,7 +52,7 @@ def _call(arguments: dict) -> dict:
 
 class TestTellSutiTool:
     def test_listed_with_schema(self) -> None:
-        tools = {t.name: t.listing() for t in TOOLS}
+        tools = {t.name: t.listing() for t in active_tools()}
         assert "tell_suti" in tools
         schema = tools["tell_suti"]["inputSchema"]
         assert schema["required"] == ["text"]

@@ -1,4 +1,5 @@
-"""Tools that reach the user: tell now, ask, propose a goal shift, resolve an ask."""
+"""The reference profile's tools that reach its user: tell now, ask, propose a goal shift,
+resolve an ask. Names, schemas and files are the reference installation's own."""
 
 from __future__ import annotations
 
