@@ -105,13 +105,18 @@ installer therefore asks two questions before it changes anything:
    in `<root>/.smriti/daylog.json`. Only that key changes: the file's
    other keys are kept, and `extra_sources` still adds its own sources.
    Yes removes an empty `"sources": []`, so the defaults apply again; a
-   list of your own sources is left alone.
+   list of your own sources is left alone. A running `smriti logd`
+   rereads `daylog.json` when it changes, so the choice reaches it on its
+   next pass, within a few seconds.
 2. **"Is `<url>` a private repository that only you can read?"** Asked
    only when the memory root is a git repository with a remote named
    `origin`; otherwise the installer says there is no remote and skips
-   it. smriti never sets up git-crypt. When the answer is no, or nobody
-   answered, the installer prints the steps; [PRIVACY.md](PRIVACY.md#what-is-pushed-in-the-clear)
-   has them too.
+   it. When `origin` has several push URLs, `git push origin` pushes to
+   each, so the question names them all: "Are `<a>` and `<b>` all private
+   repositories that only you can read?" smriti never sets up git-crypt.
+   When the answer is no, or nobody answered, the installer prints the
+   steps; [PRIVACY.md](PRIVACY.md#what-is-pushed-in-the-clear) has them
+   too.
 
 | Flag | Answers |
 |---|---|
@@ -130,7 +135,7 @@ How each question is settled, in order:
 | | Capture | Remote |
 |---|---|---|
 | A flag | The flag | The flag (ignored, with a note, when there is no remote) |
-| Answered before, by a flag or at a prompt | Kept; not asked again | Kept, while `origin` has the same URL |
+| Answered before, by a flag or at a prompt | Kept; not asked again | Kept, while `origin` has the same push URLs; adding, removing or changing one asks again |
 | A terminal (stdin and stdout) | Asked. A new root needs `y` or `n`; on an existing one, Enter keeps what `daylog.json` does now | Asked; needs `y` or `n` |
 | No terminal, no flag, new root | **Off**: `"sources": []`, with a note | Not confirmed private: the summary says so and prints the git-crypt steps |
 | No terminal, no flag, existing root | `daylog.json` is left as it is, with a note | The same |
@@ -144,14 +149,19 @@ changing anything: capture would otherwise ignore it and run on the
 defaults.
 
 The answers are recorded in `<root>/.smriti/privacy.json` (when, how,
-and the remote's URL without credentials), and the installer's last lines
-say what is captured, what is committed, and where and how it is pushed.
-For that it asks git which `log/` files are ignored and which are already
-tracked: an ignore rule doesn't untrack a day committed before it, and
-each backup's `git add -A` keeps committing its changes. The day-log is
-reported encrypted only when every committed day-log file is marked
-`filter=git-crypt`, the clone has `filter.git-crypt.clean` and `.smudge`
-configured, and `git-crypt status` reports each tracked day encrypted. A
+and the remote's push URLs without credentials), and the installer's last
+lines say what is captured, what is committed, and where and how it is
+pushed. For that it asks git about every kind of file under `log/` that
+holds a conversation or a summary of one: `DD.jsonl`, its `DD.md` render,
+`DD-digest.md`, and the `weekN.md`, `MM.md` and `YYYY.md` rollups. The
+day-log counts as kept out of git only when every kind is ignored and no
+such file is already tracked or waiting on disk. An ignore rule doesn't
+untrack a day committed before it, and each backup's `git add -A` keeps
+committing its changes; files capture wrote before the first backup go
+with it, even after `--no-capture`. The day-log is reported encrypted
+only when every kind, and every such file, is marked `filter=git-crypt`,
+the clone has `filter.git-crypt.clean` and `.smudge` configured, and
+`git-crypt status` reports each tracked day encrypted. A
 `.gitattributes` line alone isn't enough: git passes a filter it has no
 configuration for straight through. Without `git-crypt` on PATH the
 protection is "unverified", and the summary still warns about plaintext.

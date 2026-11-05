@@ -19,9 +19,10 @@ ordinary memory tree, because that is what leaves the machine.
 
 The backup (`<root>/.smriti/backup.py`, run by the hourly `smriti-backup`
 task and by the nightly witness step) runs `git add -A`, commits, and
-pushes to `origin master`. Whatever git tracks reaches the remote as
-plain text, unless git-crypt encrypts it first. **smriti does not set up
-git-crypt.** With the memory template's `.gitignore`, that is:
+pushes to `origin master`: to every push URL `origin` has, not only the
+first. Whatever git tracks reaches the remote as plain text, unless
+git-crypt encrypts it first. **smriti does not set up git-crypt.** With
+the memory template's `.gitignore`, that is:
 
 - **Your conversations, when capture is on.** `log/YYYY/MM/DD.jsonl` and
   its render `DD.md` hold every message you typed and every reply the
@@ -74,7 +75,8 @@ has the full rules.
 
 Do one of these before the backups run (`smriti tasks install`):
 
-- Make the repository private, and keep it that way.
+- Make the repository private, and keep it that way; with several push
+  URLs (`git remote get-url --push --all origin`), each of them.
 - Or remove the remote: `git -C <root> remote remove origin`. The backup
   then commits on this machine only.
 - Or set up [git-crypt](https://github.com/AGWA/git-crypt):
@@ -83,7 +85,7 @@ Do one of these before the backups run (`smriti tasks install`):
   cd <root>
   git-crypt init
   git-crypt export-key <a file outside the tree>   # lose it and nothing decrypts
-  # in .gitattributes, at least:
+  # in .gitattributes, at least all of log/ (the digests and rollups too):
   #   log/** filter=git-crypt diff=git-crypt
   # or everything but git's own files:
   #   * filter=git-crypt diff=git-crypt
