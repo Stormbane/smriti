@@ -391,20 +391,28 @@ a recheck.
   the ledger entry before composing; a failed compose releases it, a claim 30 min
   old with no send is taken over under the entry's edit lock, and a run that lost
   its claim doesn't send. A barrier test of two overlapping runs sends once.
-- **H11.4 implemented** (2026-11-05; awaiting the phase's Codex diff review). The
+- **H11.4 implemented** (2026-11-06; Codex diff review done, recheck pending). The
   backup pushes the current branch to its upstream, or to `origin` under the same
   name when it has none, setting the upstream; `needs_push` compares against the
   same ref; a detached HEAD isn't pushed and logs `push_skipped`. Tests on `main`
-  repos with a bare remote. The copy deployed in each memory root
-  (`<root>/.smriti/backup.py`) must be redeployed. Left: the installer's privacy
-  check names `origin`'s push URLs, so a branch whose upstream is on another
-  remote is pushed somewhere it doesn't name.
-- **H11.9 implemented** (2026-11-05; awaiting the phase's Codex diff review).
+  repos with a bare remote. Review (P1): the installer's privacy check still
+  inspected `origin`, so it could confirm a private remote while backups went to
+  another. It now resolves the destination by the backup's rule
+  (`privacy.backup_remote`, a copy, since the script can't import smriti; a test
+  holds them together on eight repositories and checks that a real push lands
+  where the installer said), and keys the saved answer on that remote's name and
+  URLs. The copy deployed in each memory root (`<root>/.smriti/backup.py`) must be
+  redeployed.
+- **H11.9 implemented** (2026-11-06; Codex diff review done, recheck pending).
   Named locks live in `<runtime>/locks` (owner-only on POSIX). While
   `oslock.LEGACY_LOCKS` is on, each also takes its old file in
   `<tempdir>/smriti-locks`, always after the private one, so pre-H11.9 processes
-  and new ones exclude each other; a refused runtime directory falls back to the
-  old file alone, with a warning. A later release ends the transition by setting
+  and new ones exclude each other. A lock never takes files its rivals don't: a
+  refused runtime directory falls back to the old file alone only while the old
+  files are on (with them off it fails closed: review P2), and an old file that
+  can't be opened fails closed, because an old holder's descriptor outlives a
+  permission change (review P2, which removed a POSIX "private alone" shortcut).
+  A later release ends the transition by setting
   `LEGACY_LOCKS = False` (`SMRITI_LEGACY_LOCKS=0` ends it for one install
   sooner), once no pre-H11.9 process can be running, and only where every process
   of the user resolves the same runtime directory: on POSIX one started without
