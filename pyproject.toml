@@ -94,5 +94,12 @@ module = "sqlite_vec"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+# Third-party vendored sources are preserved upstream; strict checks cover our code.
 module = "smriti._vendored.*"
 follow_imports = "skip"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+# The optional OpenAI provider SDK is not installed by the read/dev extras.
+module = ["openai", "openai.*"]
+ignore_missing_imports = true

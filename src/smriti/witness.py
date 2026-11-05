@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import time
 import urllib.request
 from collections.abc import Iterator
@@ -30,6 +31,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+if sys.platform == "win32":
+    _CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW
+else:
+    _CREATE_NO_WINDOW = 0
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +66,7 @@ def _git(root: Path, *args: str, timeout: int = 60) -> subprocess.CompletedProce
     return subprocess.run(
         ["git", *args], cwd=str(root), capture_output=True, text=True,
         encoding="utf-8", errors="replace", timeout=timeout, check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        creationflags=_CREATE_NO_WINDOW,
     )
 
 

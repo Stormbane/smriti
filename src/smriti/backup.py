@@ -16,6 +16,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+if sys.platform == "win32":
+    _CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW
+else:
+    _CREATE_NO_WINDOW = 0
+
 
 def trigger(
     tag: str,
@@ -65,7 +70,7 @@ def trigger(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env=env,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            creationflags=_CREATE_NO_WINDOW,
         )
         with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=timeout)

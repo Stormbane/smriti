@@ -19,6 +19,7 @@ import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from smriti.integrations.common import (
     EQUIVALENT,
@@ -65,7 +66,7 @@ def _script_targets(command: str, home: Path) -> list[Path]:
     return targets
 
 
-def _all_hook_commands(hooks: dict) -> list[str]:
+def _all_hook_commands(hooks: dict[str, Any]) -> list[str]:
     """Every command string under list-shaped hook-event entries.
 
     Skips non-event tables that share the ``hooks`` namespace (Codex
