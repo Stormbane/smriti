@@ -43,6 +43,8 @@ import shutil
 import sys
 import tomllib
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 
 from smriti.integrations.common import (
     DEFICIENT,
@@ -59,6 +61,7 @@ from smriti.integrations.common import (
     migrate_agent_doc,
     write_managed_doc,
 )
+from smriti.integrations.common.managed_doc import DocState
 
 HOME = Path.home()
 CODEX = HOME / ".codex"
@@ -123,9 +126,9 @@ context.
 """
 
 
-def _import_tomli_w() -> object:
+def _import_tomli_w() -> ModuleType:
     try:
-        import tomli_w  # type: ignore[import-untyped]
+        import tomli_w
     except ImportError:
         print(
             "[codex] tomli-w not installed — required to write config.toml.\n"
@@ -136,7 +139,7 @@ def _import_tomli_w() -> object:
     return tomli_w
 
 
-def _read_toml(path: Path) -> dict:
+def _read_toml(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
@@ -146,7 +149,7 @@ def _read_toml(path: Path) -> dict:
         sys.exit(1)
 
 
-def _write_toml(path: Path, data: dict) -> None:
+def _write_toml(path: Path, data: dict[str, Any]) -> None:
     tomli_w = _import_tomli_w()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(tomli_w.dumps(data), encoding="utf-8")
@@ -309,7 +312,7 @@ def _agents_md_block(memory_root: Path) -> str:
     )
 
 
-def agent_doc_state():
+def agent_doc_state() -> DocState:
     """Classify ~/.codex/AGENTS.md without modifying it."""
     return classify_doc(AGENTS_MD)
 

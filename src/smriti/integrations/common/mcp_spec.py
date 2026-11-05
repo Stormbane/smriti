@@ -13,6 +13,13 @@ classifier, so generator and checker can never drift).
 from __future__ import annotations
 
 import sys
+from typing import TypedDict
+
+
+class MCPCommand(TypedDict):
+    command: str
+    args: list[str]
+
 
 # What every harness writes into its MCP server registry.
 # Adapters convert this dict to their config-file's native format.
@@ -25,7 +32,7 @@ import sys
 # ModuleNotFoundError, surfaced to the harness as "Connection closed"
 # (brain/chat sessions, 2026-09-06). An existing bare-"python"
 # registration no longer matches, so installers repair it in place.
-SMRITI_MCP_COMMAND: dict[str, object] = {
+SMRITI_MCP_COMMAND: MCPCommand = {
     "command": sys.executable,
     "args": ["-m", "smriti.mcp_server"],
 }

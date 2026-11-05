@@ -41,6 +41,7 @@ from smriti.integrations.common import (
     migrate_agent_doc,
     write_managed_doc,
 )
+from smriti.integrations.common.managed_doc import DocState
 
 HOME = Path.home()
 CLAUDE = HOME / ".claude"
@@ -261,7 +262,7 @@ def _claude_md_block(memory_root: Path) -> str:
     )
 
 
-def agent_doc_state():
+def agent_doc_state() -> DocState:
     """Classify ~/.claude/CLAUDE.md without modifying it."""
     return classify_doc(CLAUDE_MD)
 

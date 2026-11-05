@@ -20,10 +20,12 @@ for everyone else.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
 from pathlib import Path
+from typing import cast
 
 _ON = {"1", "full", "on", "true", "yes"}
 _VALID_FRAMINGS = ("raw", "codex-json")
@@ -78,7 +80,7 @@ def run(
             pass
 
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        cast(io.TextIOWrapper, sys.stdout).reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, OSError):
         pass
 

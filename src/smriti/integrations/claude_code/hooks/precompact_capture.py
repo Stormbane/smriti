@@ -57,6 +57,7 @@ import sys
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, cast
 
 
 STAGING_ROOT = Path.home() / ".claude" / "narada-staging-events"
@@ -109,25 +110,25 @@ def marker_path_for(session_id: str) -> Path:
     return STAGING_ROOT / ".markers" / f"{session_id}.json"
 
 
-def load_marker(session_id: str) -> dict:
+def load_marker(session_id: str) -> dict[str, Any]:
     """Read the per-session marker, or return a fresh one."""
     path = marker_path_for(session_id)
     if not path.exists():
         return {"session_id": session_id, "last_line": 0, "turn_count": 0}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
     except Exception as e:
         log(f"marker corrupt, resetting: {e}")
         return {"session_id": session_id, "last_line": 0, "turn_count": 0}
 
 
-def save_marker(marker: dict) -> None:
+def save_marker(marker: dict[str, Any]) -> None:
     path = marker_path_for(marker["session_id"])
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(marker, indent=2), encoding="utf-8")
 
 
-def extract_turn(entry: dict) -> tuple[str, str, str] | None:
+def extract_turn(entry: dict[str, Any]) -> tuple[str, str, str] | None:
     """Return (role, timestamp, content) for a user/assistant turn,
     or None if this JSONL entry isn't a turn we want to capture.
 
@@ -233,7 +234,7 @@ def write_event(
 
 
 def process_transcript(
-    transcript: Path, marker: dict, trigger: str, entity: str, cwd: str
+    transcript: Path, marker: dict[str, Any], trigger: str, entity: str, cwd: str
 ) -> int:
     """Read the transcript from the marker position, write any new turns
     as event files. Return the number of turns written."""
