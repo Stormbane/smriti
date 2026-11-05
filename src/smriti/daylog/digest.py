@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from smriti.daylog.config import DaylogConfig
-from smriti.daylog.model import Turn, day_tz
+from smriti.daylog.model import USER, Turn, day_tz
 from smriti.daylog.render import AUTONOMOUS_HEADING, input_hash
 from smriti.daylog.writer import read_day_turns
 from smriti.llm import LLMError, LLMRequest, get_provider
@@ -151,7 +151,7 @@ def _autonomous_sample(turns: list[Turn]) -> str:
         by_session.setdefault((t.channel, t.session), []).append(t)
     parts: list[str] = []
     for (channel, _session), group in sorted(by_session.items(), key=lambda kv: kv[1][0].ts):
-        if any(t.who == "suti" for t in group):
+        if any(t.who == USER for t in group):
             continue
         sample = group[:3] + (group[-2:] if len(group) > 5 else [])
         parts.append(f"[{channel}] " + " / ".join(t.text[:200] for t in sample))

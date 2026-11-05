@@ -4,7 +4,7 @@ Source: ``<tree>/heartbeat/voice-transcripts/YYYY_MM/<stamp>-<room>.md``
 — markdown written live by the voice worker (redaction already applied
 upstream at write time). Turn lines look like:
 
-    - `16:23:20` **assistant:** Hey Suti, ...
+    - `16:23:20` **assistant:** Hey Sam, ...
     - `16:23:31` **user:** ...
 
 Line times are UTC clock times; the date comes from the filename stamp
@@ -19,7 +19,7 @@ from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 from smriti.daylog.adapters import ExtractResult, complete_lines
-from smriti.daylog.model import Turn
+from smriti.daylog.model import AGENT, USER, Turn
 
 _NAME_RE = re.compile(r"^(\d{8})-(\d{6})-(.+)\.md$")
 # Real lines put the colon inside the bold ("**assistant:**"); accept it
@@ -68,7 +68,7 @@ class VoiceMdAdapter:
                 Turn(
                     ts=ts,
                     channel="voice",
-                    who="suti" if speaker == "user" else "narada",
+                    who=USER if speaker == "user" else AGENT,
                     text=text.strip(),
                     session=session,
                 )

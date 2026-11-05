@@ -307,7 +307,7 @@ def test_presence_only_output_without_matches(fake_recall, monkeypatch, tmp_path
 
     cfg = load_config()  # resolves to the isolated SMRITI_ROOT tree
     append_turns(cfg, [Turn(
-        ts=datetime.now(timezone.utc), channel="telegram", who="suti",
+        ts=datetime.now(timezone.utc), channel="telegram", who="user",
         text="are you around?", session="t1",
     )])
     target = tmp_path / "thing.md"

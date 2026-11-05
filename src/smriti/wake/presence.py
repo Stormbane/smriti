@@ -690,6 +690,7 @@ def _app_chats(src: WakeSources) -> _Group:
 
 def _voice(src: WakeSources) -> _Group:
     from smriti.daylog.adapters.voice_md import VoiceMdAdapter
+    from smriti.daylog.model import AGENT, USER
 
     group = _Group("Voice")
     last: datetime | None = None
@@ -706,7 +707,7 @@ def _voice(src: WakeSources) -> _Group:
         turns = [t for t in turns if t.ts >= src.since]
         if not turns:
             continue
-        said, reply = _last_exchange([(t.who, t.text) for t in turns], "suti", "narada")
+        said, reply = _last_exchange([(t.who, t.text) for t in turns], USER, AGENT)
         room = path.stem[16:] or path.stem
         group.items.append(_Item(turns[-1].ts, (
             f"{room} ({len(turns)} turns): Suti: {_clip(said, 160)} -> "

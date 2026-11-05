@@ -286,7 +286,7 @@ def test_render_indents_every_line_break(tmp_path: Path) -> None:
 
     cfg = DaylogConfig(root=tmp_path, sources=[])
     append_turns(cfg, [Turn(
-        ts=parse_ts(f"{DAY}T02:00:00Z"), channel="voice", who="suti",  # type: ignore[arg-type]
+        ts=parse_ts(f"{DAY}T02:00:00Z"), channel="voice", who="user",  # type: ignore[arg-type]
         text="one\rtwo\r\nthree\n## four", session="s1")])
     rendered = render_day(cfg, DAY)
     assert rendered is not None

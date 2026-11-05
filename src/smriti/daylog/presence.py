@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from smriti.daylog.config import DaylogConfig, load_config
-from smriti.daylog.model import Turn, day_key, day_tz
+from smriti.daylog.model import USER, Turn, day_key, day_tz
 from smriti.daylog.writer import read_day_turns
 
 _WINDOW_MIN = 15
@@ -52,7 +52,7 @@ def presence_line(
         parts: list[str] = []
         for channel, turn in sorted(by_channel.items(), key=lambda kv: kv[1].ts, reverse=True):
             age_min = max(0, int((now - turn.ts).total_seconds() // 60))
-            who = "Suti" if turn.who == "suti" else "Narada"
+            who = "Suti" if turn.who == USER else "Narada"
             preview = turn.text.replace("\n", " ").strip()[:_PREVIEW_CHARS]
             parts.append(f'{channel} {age_min} min ago ({who}: "{preview}")')
         return "Active on other channels: " + "; ".join(parts[:3])

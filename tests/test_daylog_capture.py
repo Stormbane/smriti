@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,7 @@ from smriti.daylog.adapters.voice_md import VoiceMdAdapter
 from smriti.daylog.collect import collect_once
 from smriti.daylog.config import DaylogConfig, SourceSpec
 from smriti.daylog.lock import LockTimeout, writer_lock
-from smriti.daylog.model import Turn, local_day, parse_ts
+from smriti.daylog.model import AGENT, USER, Turn, local_day, make_turn_id, parse_ts
 from smriti.daylog.scrub import scrub
 from smriti.daylog.state import DaylogState
 from smriti.daylog.writer import append_turns, load_day_ids, read_day_turns
@@ -27,7 +28,7 @@ def _cfg(tmp_path: Path, sources: list[SourceSpec] | None = None) -> DaylogConfi
     return DaylogConfig(root=tmp_path, sources=sources or [])
 
 
-def _turn(ts: str, text: str = "hello", who: str = "suti", channel: str = "voice") -> Turn:
+def _turn(ts: str, text: str = "hello", who: str = USER, channel: str = "voice") -> Turn:
     parsed = parse_ts(ts)
     assert parsed is not None
     return Turn(ts=parsed, channel=channel, who=who, text=text, session="s1")
@@ -54,6 +55,59 @@ def test_turn_id_stable_across_rederivation() -> None:
 def test_local_day_handles_naive_timestamps() -> None:
     naive = datetime(2026, 9, 4, 20, 0, 0)  # treated as UTC
     assert local_day(naive).isoformat() == "2026-09-05"
+
+
+# Ids the code minted before the speakers became roles, recorded from a run of
+# that code: make_turn_id("claude:proj", "abcdef1234", _ID_TS, "suti"|"narada", ...).
+_ID_TS = datetime(2026, 11, 3, 9, 15, 30, tzinfo=timezone.utc)
+_LEGACY_IDS = {
+    (USER, "Hello there"): "claude:proj:abcdef12:2245e5b2b10b",
+    (AGENT, "Hi!"): "claude:proj:abcdef12:3a1498b2078d",
+}
+
+
+def _legacy_turn_id(channel: str, session: str, ts: datetime, who: str, text: str) -> str:
+    """The id formula before roles: the speaker's name hashed as stored."""
+    stamp = ts.astimezone(timezone.utc).isoformat()
+    digest = hashlib.sha1(f"{stamp}|{who}|{text}".encode("utf-8")).hexdigest()[:12]
+    return f"{channel}:{(session or '-')[:8]}:{digest}"
+
+
+@pytest.mark.parametrize("role,legacy", [(USER, "suti"), (AGENT, "narada")])
+def test_a_role_turn_keeps_the_id_its_legacy_name_had(role: str, legacy: str) -> None:
+    text = "Hello there" if role == USER else "Hi!"
+    expected = _LEGACY_IDS[(role, text)]
+    assert _legacy_turn_id("claude:proj", "abcdef1234", _ID_TS, legacy, text) == expected
+    assert make_turn_id("claude:proj", "abcdef1234", _ID_TS, role, text) == expected
+    assert make_turn_id("claude:proj", "abcdef1234", _ID_TS, legacy, text) == expected
+    turn = Turn(ts=_ID_TS, channel="claude:proj", who=role, text=text, session="abcdef1234")
+    assert turn.id == expected
+
+
+def test_legacy_who_is_read_as_its_role() -> None:
+    stored = {"id": "voice:s1:0123456789ab", "ts": "2026-09-04T01:00:00Z", "channel": "voice",
+              "who": "suti", "text": "hi", "session": "s1"}
+    turn = Turn.from_json(stored)
+    assert turn is not None and turn.who == USER and turn.id == stored["id"]
+    reply = Turn.from_json({**stored, "who": "narada", "id": ""})
+    assert reply is not None and reply.who == AGENT
+    assert reply.to_json()["who"] == AGENT  # new records carry the role
+
+
+def test_recapturing_a_legacy_day_appends_nothing(tmp_path: Path) -> None:
+    """A day written with ``who: "suti"`` dedups against the same turn captured as a role."""
+    cfg = _cfg(tmp_path)
+    ts = parse_ts("2026-09-04T01:00:00Z")
+    assert ts is not None
+    legacy = {"id": _legacy_turn_id("voice", "s1", ts, "suti", "hello"),
+              "ts": "2026-09-04T01:00:00Z", "channel": "voice", "who": "suti",
+              "text": "hello", "session": "s1"}
+    path = cfg.day_jsonl("2026-09-04")
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+    appended, _ = append_turns(cfg, [_turn("2026-09-04T01:00:00Z", "hello", who=USER)])
+    assert appended == 0
+    assert [t.who for t in read_day_turns(path)] == [USER]
 
 
 # ---------------------------------------------------------------- scrub
@@ -122,7 +176,7 @@ def test_claude_adapter_extracts_and_maps_telegram(tmp_path: Path) -> None:
         ]},
     )
     result = ClaudeJsonlAdapter().extract(path, blob)
-    assert [t.who for t in result.turns] == ["suti", "narada"]
+    assert [t.who for t in result.turns] == [USER, AGENT]
     assert all(t.channel == "telegram" for t in result.turns)
     assert result.turns[1].text == "Let me check the speech system."
     assert result.errors == 0
@@ -198,8 +252,8 @@ def test_codex_adapter_keeps_conversation_drops_commentary(tmp_path: Path) -> No
     )
     result = CodexRolloutAdapter().extract(path, blob)
     assert [(t.who, t.text) for t in result.turns] == [
-        ("suti", "hi"),
-        ("narada", "Hi Suti — what shall we work on?"),
+        (USER, "hi"),
+        (AGENT, "Hi Suti — what shall we work on?"),
     ]
     assert all(t.channel == "codex:beautiful-tree" for t in result.turns)
     assert result.turns[0].session == "01900000"
@@ -221,7 +275,7 @@ def test_voice_adapter_parses_turns_and_midnight_rollover(tmp_path: Path) -> Non
     assert len(result.turns) == 2
     assert result.turns[0].ts.day == 3
     assert result.turns[1].ts.day == 4  # crossed midnight UTC
-    assert result.turns[0].who == "suti"
+    assert result.turns[0].who == USER
     assert result.turns[1].channel == "voice"
     assert result.errors == 0
 

@@ -2,9 +2,9 @@
 
 Source: ``~/.codex/sessions/YYYY/MM/DD/rollout-<stamp>-<uuid>.jsonl``.
 
-Kept: ``event_msg`` records with payload type ``user_message`` (Suti)
-and ``agent_message`` whose phase is ``final_answer`` or absent
-(Narada). ``commentary``-phase agent messages are status narration
+Kept: ``event_msg`` records with payload type ``user_message`` (role
+``user``) and ``agent_message`` whose phase is ``final_answer`` or absent
+(role ``agent``). ``commentary``-phase agent messages are status narration
 during tool work, not conversation — dropped, as are all other record
 types (``response_item``, ``session_meta``, ...).
 
@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 
 from smriti.daylog.adapters import ExtractResult, complete_lines, project_of
-from smriti.daylog.model import Turn, parse_ts
+from smriti.daylog.model import AGENT, USER, Turn, parse_ts
 
 _UUID_RE = re.compile(r"([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$")
 
@@ -76,12 +76,12 @@ class CodexRolloutAdapter:
                 continue
             ptype = payload.get("type")
             if ptype == "user_message":
-                who = "suti"
+                who = USER
             elif ptype == "agent_message":
                 phase = payload.get("phase")
                 if phase not in (None, "", "final_answer"):
                     continue
-                who = "narada"
+                who = AGENT
             else:
                 continue
             text = payload.get("message")

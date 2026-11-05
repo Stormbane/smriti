@@ -18,7 +18,7 @@ import re
 from pathlib import Path
 
 from smriti.daylog.config import DaylogConfig
-from smriti.daylog.model import Turn, day_tz
+from smriti.daylog.model import USER, Turn, day_tz
 from smriti.daylog.writer import read_day_turns
 
 _HASH_RE = re.compile(r"^input_hash:\s*(\S+)\s*$", re.MULTILINE)
@@ -49,7 +49,7 @@ def _split_autonomous(turns: list[Turn]) -> tuple[list[Turn], list[list[Turn]]]:
     conversational: list[Turn] = []
     autonomous: list[list[Turn]] = []
     for group in by_session.values():
-        if any(t.who == "suti" for t in group):
+        if any(t.who == USER for t in group):
             conversational.extend(group)
         else:
             autonomous.append(group)
@@ -81,7 +81,7 @@ def render_day(cfg: DaylogConfig, day: str) -> Path | None:
         clock = t.ts.astimezone(tz).strftime("%H:%M")
         channel = f" [{t.channel}]" if t.channel != last_channel else ""
         last_channel = t.channel
-        speaker = "Suti" if t.who == "suti" else "Narada"
+        speaker = "Suti" if t.who == USER else "Narada"
         # Every line break, \r included, so each continuation line is indented
         # (a lone \r would come back from read_text as an unindented line).
         text = t.text.strip().replace("\r\n", "\n").replace("\r", "\n")

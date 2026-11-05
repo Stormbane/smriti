@@ -11,7 +11,7 @@ import pytest
 
 from smriti.daylog import digest as digest_mod
 from smriti.daylog.config import DaylogConfig
-from smriti.daylog.model import Turn, parse_ts
+from smriti.daylog.model import AGENT, USER, Turn, parse_ts
 from smriti.daylog.morning import run_morning
 from smriti.daylog.nightly import run_nightly
 from smriti.daylog.render import input_hash, read_input_hash, render_day
@@ -46,7 +46,7 @@ def _cfg(tmp_path: Path) -> DaylogConfig:
     return DaylogConfig(root=tmp_path, sources=[])
 
 
-def _turn(ts: str, text: str, who: str = "suti", channel: str = "voice",
+def _turn(ts: str, text: str, who: str = USER, channel: str = "voice",
           session: str = "s1") -> Turn:
     parsed = parse_ts(ts)
     assert parsed is not None
@@ -56,8 +56,8 @@ def _turn(ts: str, text: str, who: str = "suti", channel: str = "voice",
 def _seed_day(cfg: DaylogConfig, day_utc: str = "2026-09-04") -> None:
     append_turns(cfg, [
         _turn(f"{day_utc}T01:00:00Z", "morning question"),
-        _turn(f"{day_utc}T01:00:05Z", "morning answer", who="narada"),
-        _turn(f"{day_utc}T02:00:00Z", "loop iteration output", who="narada",
+        _turn(f"{day_utc}T01:00:05Z", "morning answer", who=AGENT),
+        _turn(f"{day_utc}T02:00:00Z", "loop iteration output", who=AGENT,
               channel="claude:smriti", session="auto1"),
     ])
 

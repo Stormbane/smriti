@@ -5,9 +5,9 @@ Telegram typed-chat brain runs as ``claude -p`` sessions, so its
 transcripts arrive through this same adapter; workdirs containing
 ``chat-sessions`` map to the ``telegram`` channel.
 
-Kept: real human turns (type=user, string or text-block content) and
-Narada's text (type=assistant text blocks). Dropped: tool calls and
-results, thinking blocks, ``isMeta`` records, sidechain (subagent)
+Kept: real human turns (type=user, string or text-block content; role
+``user``) and the agent's text (type=assistant text blocks; role
+``agent``). Dropped: tool calls and results, thinking blocks, ``isMeta`` records, sidechain (subagent)
 records, harness wrapper payloads (``<command-name>``,
 ``<local-command-stdout>``, ``<task-notification>``,
 ``<system-reminder>``), and every non-message record type.
@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 
 from smriti.daylog.adapters import ExtractResult, complete_lines, project_of
-from smriti.daylog.model import Turn, parse_ts
+from smriti.daylog.model import AGENT, USER, Turn, parse_ts
 
 _WRAPPER_RE = re.compile(
     r"^\s*<(?:command-name|command-message|command-args|local-command-stdout|"
@@ -97,7 +97,7 @@ class ClaudeJsonlAdapter:
                 Turn(
                     ts=ts,
                     channel=channel_for(path, str(obj.get("cwd", "") or "")),
-                    who="suti" if rtype == "user" else "narada",
+                    who=USER if rtype == "user" else AGENT,
                     text=text,
                     session=str(obj.get("sessionId", "") or session),
                 )
