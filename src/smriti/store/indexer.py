@@ -727,7 +727,7 @@ def _fill_some_pending(db: Path) -> None:
 
 def fill_pending_vectors(*, db: Path | None = None,
                          embed: Callable[[list[str]], Embedded] | None = None,
-                         max_chunks: int = 64) -> int:
+                         max_chunks: int = 64, busy_ms: int | None = None) -> int:
     """Make the vectors of sources indexed while the embedder was unavailable.
 
     Takes pending sources in order until ``max_chunks`` chunks (always at
@@ -736,13 +736,14 @@ def fill_pending_vectors(*, db: Path | None = None,
     identity there. A source rewritten meanwhile is left to its writer.
     Returns how many sources now have their vectors. Raises
     :class:`StaleEmbedding` when the vectors aren't the index's model, and
-    whatever ``embed`` raises.
+    whatever ``embed`` raises. ``busy_ms`` bounds the wait for another
+    writer (the service keeps it short, so a repair never holds up queries).
     """
     if db is None:
         db = smriti_db_path()
     if not db.exists():
         return 0
-    conn = ensure_schema(db, None)
+    conn = ensure_schema(db, None, busy_ms=busy_ms)
     try:
         if not conn.has_vec:
             return 0

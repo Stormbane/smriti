@@ -1,0 +1,749 @@
+"""H10.2: the embedding service, its transport and its lifecycle.
+
+Services run in threads of this process (or, where processes matter, as
+subprocesses) against temporary roots and runtime directories, with the
+stub provider: no test here loads a real model.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import secrets
+import socket
+import stat
+import struct
+import subprocess
+import sys
+import threading
+import time
+from collections.abc import Callable, Iterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+import smriti.store.indexer as indexer
+from smriti._vendored.memsearch.embeddings.stub import StubEmbedding
+from smriti.embed.client import ServiceEmbedding, service_state, stop_service
+from smriti.embed.identity import EmbeddingIdentity, EmbeddingUnavailable
+from smriti.embed.protocol import (
+    MAX_FRAME,
+    PREAUTH_MAX,
+    PROTOCOL,
+    client_proof,
+    recv_frame,
+    send_frame,
+)
+from smriti.embed.runtime import (
+    Discovery,
+    RuntimeDirError,
+    clear_discovery,
+    load_key,
+    private_dir_problem,
+    read_discovery,
+    runtime_dir,
+    service_paths,
+    write_discovery,
+)
+from smriti.embed.service import EmbedService
+
+STUB = EmbeddingIdentity("stub", "stub-384", "", 384)
+SRC = Path(__file__).resolve().parents[1] / "src"
+
+
+def stub(texts: list[str]) -> list[list[float]]:
+    return asyncio.run(StubEmbedding().embed(texts))
+
+
+class Services:
+    """In-thread services, published in the runtime directory as ``serve`` would."""
+
+    def __init__(self) -> None:
+        self.running: list[tuple[EmbedService, threading.Thread]] = []
+        self.reasons: dict[str, str] = {}
+
+    def start(self, root: Path, provider: Any = None, *, publish: bool = True,
+              **kw: Any) -> EmbedService:
+        runtime = runtime_dir()
+        paths = service_paths(runtime, root)
+        holder: list[EmbedService] = []
+
+        def on_state(state: str) -> None:
+            svc = holder[0]
+            write_discovery(paths, Discovery(os.getpid(), state, svc.instance, port=svc.port,
+                                             identity=svc.identity, root=str(paths.root)))
+
+        svc = EmbedService(provider=provider or StubEmbedding(), key=load_key(runtime),
+                           db=root / ".smriti" / "index.db",
+                           on_state=on_state if publish else None, **kw)
+        holder.append(svc)
+        svc.bind()
+
+        def run() -> None:
+            reason = svc.run()
+            if publish:
+                clear_discovery(paths, svc.instance)
+            self.reasons[svc.instance] = reason  # last: once it is here, the service is gone
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        deadline = time.monotonic() + 5
+        while svc.state != "ready" and time.monotonic() < deadline:
+            time.sleep(0.005)
+        self.running.append((svc, t))
+        return svc
+
+    def stop_all(self) -> None:
+        for svc, _ in self.running:
+            svc.stop("the test is over")
+        for _, t in self.running:
+            t.join(15)
+
+
+@pytest.fixture()
+def services() -> Iterator[Services]:
+    s = Services()
+    yield s
+    s.stop_all()
+
+
+@pytest.fixture()
+def root(tmp_path: Path) -> Path:
+    (tmp_path / ".smriti").mkdir()
+    return tmp_path
+
+
+def _raw_authenticated(port: int, key: bytes) -> socket.socket:
+    """A peer that knows the key and completes the handshake by hand."""
+    s = socket.create_connection(("127.0.0.1", port), timeout=2)
+    nonce = secrets.token_hex(16)
+    send_frame(s, {"op": "hello", "proto": PROTOCOL, "nonce": nonce}, time.monotonic() + 2)
+    hello = recv_frame(s, time.monotonic() + 2, PREAUTH_MAX)
+    send_frame(s, {"op": "auth", "proof": client_proof(key, nonce, hello["nonce"])},
+               time.monotonic() + 2)
+    return s
+
+
+def _closed_within(s: socket.socket, seconds: float) -> bool:
+    """True when the server closes ``s`` within ``seconds``."""
+    s.settimeout(seconds)
+    try:
+        return s.recv(1) == b""
+    except (ConnectionResetError, ConnectionAbortedError):
+        return True
+    except TimeoutError:
+        return False
+
+
+def _wait(cond: Callable[[], bool], seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if cond():
+            return True
+        time.sleep(0.02)
+    return cond()
+
+
+# ── Round trip ───────────────────────────────────────────────────────
+
+
+def test_round_trip_gives_the_vectors_an_in_process_model_would(
+        root: Path, services: Services) -> None:
+    svc = services.start(root)
+    client = ServiceEmbedding(root, spawn=False)
+    texts = ["Ari keeps the lamps lit.", "Sam planted marigolds beside the well.", ""]
+
+    got = client.embed_with_identity(texts, kind="query")
+
+    assert got.identity == STUB
+    assert got.vectors == stub(texts)  # identical, not merely close
+    assert client.last_instance == svc.instance and svc.stats.served == 1
+    many = [f"text number {i}" for i in range(150)]  # more than one request's worth
+    assert client.embed_with_identity(many).vectors == stub(many)
+    assert svc.stats.served == 1 + 3
+
+
+def test_a_wrong_key_is_refused_both_ways(root: Path, services: Services,
+                                          tmp_path_factory: pytest.TempPathFactory,
+                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    svc = services.start(root)
+    paths = service_paths(runtime_dir(), root)
+    real_key = load_key(runtime_dir())
+
+    # A client holding another key finds the service's proof wrong, and sends nothing.
+    other = tmp_path_factory.mktemp("other-run")
+    other_paths = service_paths(other, root)
+    other_paths.discovery.write_text(paths.discovery.read_text(encoding="utf-8"),
+                                     encoding="utf-8")
+    monkeypatch.setenv("SMRITI_RUNTIME_DIR", str(other))
+    assert load_key(other) != real_key
+    with pytest.raises(EmbeddingUnavailable, match="failed authentication"):
+        ServiceEmbedding(root, spawn=False).embed_with_identity(["secret words"])
+    assert svc.stats.served == 0 and svc.stats.auth_failures == 0
+
+    # A peer without the key that sends a proof anyway is closed on, unanswered.
+    s = socket.create_connection(("127.0.0.1", svc.port), timeout=2)
+    with s:
+        nonce = secrets.token_hex(16)
+        send_frame(s, {"op": "hello", "proto": PROTOCOL, "nonce": nonce}, time.monotonic() + 2)
+        hello = recv_frame(s, time.monotonic() + 2, PREAUTH_MAX)
+        send_frame(s, {"op": "auth", "proof": client_proof(b"\0" * 32, nonce, hello["nonce"])},
+                   time.monotonic() + 2)
+        send_frame(s, {"op": "embed", "kind": "query", "texts": ["x"], "budget_ms": 1000},
+                   time.monotonic() + 2)
+        assert _closed_within(s, 2)
+    assert svc.stats.auth_failures == 1 and svc.stats.served == 0
+
+
+def test_an_impostor_on_the_port_is_detected(root: Path) -> None:
+    received: list[dict[str, Any]] = []
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(4)
+    port = listener.getsockname()[1]
+
+    def impostor() -> None:
+        conn, _ = listener.accept()
+        with conn:
+            try:
+                received.append(recv_frame(conn, time.monotonic() + 2, PREAUTH_MAX))
+                send_frame(conn, {"proto": PROTOCOL, "instance": "imposter",
+                                  "nonce": secrets.token_hex(16), "proof": "0" * 64},
+                           time.monotonic() + 2)
+                while True:
+                    received.append(recv_frame(conn, time.monotonic() + 2, MAX_FRAME))
+            except (OSError, ValueError):
+                pass
+
+    t = threading.Thread(target=impostor, daemon=True)
+    t.start()
+    write_discovery(service_paths(runtime_dir(), root),
+                    Discovery(os.getpid(), "ready", "real-instance", port=port, identity=STUB))
+    try:
+        with pytest.raises(EmbeddingUnavailable, match="failed authentication"):
+            ServiceEmbedding(root, spawn=False).embed_with_identity(["the private words"])
+    finally:
+        t.join(5)
+        listener.close()
+    assert [f.get("op") for f in received] == ["hello"]  # no proof, no texts reached it
+    assert "private words" not in repr(received)
+
+
+# ── Bounds and deadlines ─────────────────────────────────────────────
+
+
+def test_stalled_handshakes_and_partial_frames_time_out_without_blocking_others(
+        root: Path, services: Services) -> None:
+    svc = services.start(root, handshake_s=0.5, request_read_s=0.5)
+    key = load_key(runtime_dir())
+    silent = socket.create_connection(("127.0.0.1", svc.port))
+    half_header = socket.create_connection(("127.0.0.1", svc.port))
+    half_header.sendall(b"\x00\x00")
+    half_frame = socket.create_connection(("127.0.0.1", svc.port))
+    half_frame.sendall(struct.pack(">I", 100) + b"0123456789")
+    half_request = _raw_authenticated(svc.port, key)
+    half_request.sendall(struct.pack(">I", 1000) + b"{\"op\": \"embed\"")
+    stalled = [silent, half_header, half_frame, half_request]
+    try:
+        assert _wait(lambda: svc.active_connections == 4, 2)
+        t0 = time.monotonic()
+        got = ServiceEmbedding(root, spawn=False).embed_with_identity(["meanwhile"], kind="query")
+        assert got.vectors == stub(["meanwhile"]) and time.monotonic() - t0 < 0.4
+        for s in stalled:
+            assert _closed_within(s, 2.0)
+        assert _wait(lambda: svc.active_connections == 0, 2)
+    finally:
+        for s in stalled:
+            s.close()
+
+
+def test_oversize_frames_and_requests_are_refused(root: Path, services: Services) -> None:
+    svc = services.start(root)
+    key = load_key(runtime_dir())
+    with _raw_authenticated(svc.port, key) as s:  # a frame over the limit: closed, not buffered
+        s.sendall(struct.pack(">I", MAX_FRAME + 1))
+        assert _closed_within(s, 2)
+    with socket.create_connection(("127.0.0.1", svc.port)) as s:  # pre-auth frames are tiny
+        s.sendall(struct.pack(">I", PREAUTH_MAX + 1))
+        assert _closed_within(s, 2)
+    for texts in ([f"t{i}" for i in range(65)], [1, 2], []):
+        with _raw_authenticated(svc.port, key) as s:
+            send_frame(s, {"op": "embed", "kind": "write", "texts": texts, "budget_ms": 1000},
+                       time.monotonic() + 2)
+            reply = recv_frame(s, time.monotonic() + 2)
+        assert reply["ok"] is False and reply["code"] == "request"
+    assert svc.stats.served == 0
+
+
+class Gated(StubEmbedding):
+    """The stub, holding its first call until released, and recording what it embedded."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = threading.Event()
+        self.entered = threading.Event()
+        self.seen: list[list[str]] = []
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        if not self.entered.is_set():
+            self.entered.set()
+            self.release.wait(10)
+        self.seen.append(texts)
+        return await super().embed(texts)
+
+
+def test_a_full_queue_says_busy_and_expired_requests_are_dropped_unrun(
+        root: Path, services: Services) -> None:
+    gated = Gated()
+    svc = services.start(root, gated, queue_max=3)
+    out: dict[str, Any] = {}
+
+    def call(name: str, text: str, write_s: float) -> None:
+        try:
+            out[name] = ServiceEmbedding(root, spawn=False, write_s=write_s).embed_with_identity(
+                [text])
+        except EmbeddingUnavailable as exc:
+            out[name] = exc
+
+    first = threading.Thread(target=call, args=("first", "holds the model", 10))
+    first.start()
+    assert gated.entered.wait(5)
+    call("gives-up", "abandoned while queued", 0.3)  # waits behind it, then gives up
+    queued = [threading.Thread(target=call, args=(f"q{i}", f"queued {i}", 10)) for i in range(2)]
+    for t in queued:
+        t.start()
+    # The abandoned request still holds its place until the model reaches it.
+    assert _wait(lambda: svc._queue.qsize() == 3, 2)
+    call("refused", "one too many", 10)
+    gated.release.set()
+    first.join(10)
+    for t in queued:
+        t.join(10)
+
+    assert isinstance(out["gives-up"], EmbeddingUnavailable)
+    assert isinstance(out["refused"], EmbeddingUnavailable) and "busy" in str(out["refused"])
+    assert out["first"].vectors == stub(["holds the model"])
+    assert all(out[f"q{i}"].vectors == stub([f"queued {i}"]) for i in range(2))
+    assert ["abandoned while queued"] not in gated.seen  # dropped, never run
+    assert svc.stats.dropped == 1 and svc.stats.busy == 1
+
+
+def test_queries_go_ahead_of_write_batches(root: Path, services: Services) -> None:
+    gated = Gated()
+    services.start(root, gated)
+    done: list[str] = []
+
+    def call(text: str, kind: str) -> None:
+        ServiceEmbedding(root, spawn=False).embed_with_identity([text], kind=kind)
+        done.append(text)
+
+    blocker = threading.Thread(target=call, args=("first", "write"))
+    blocker.start()
+    assert gated.entered.wait(5)
+    writes = [threading.Thread(target=call, args=(f"write {i}", "write")) for i in range(3)]
+    for t in writes:
+        t.start()
+    time.sleep(0.2)
+    query = threading.Thread(target=call, args=("the query", "query"))
+    query.start()
+    time.sleep(0.2)
+    gated.release.set()
+    for t in [blocker, *writes, query]:
+        t.join(10)
+    assert [t for t in gated.seen if t != ["first"]][0] == ["the query"]
+
+
+def test_sustained_unauthenticated_connections_stay_bounded_and_clients_degrade_in_time(
+        root: Path, services: Services) -> None:
+    svc = services.start(root)
+    stop = threading.Event()
+    peak = [0]
+
+    def flood() -> None:
+        held: list[socket.socket] = []
+        while not stop.is_set():
+            try:
+                held.append(socket.create_connection(("127.0.0.1", svc.port), timeout=0.5))
+            except OSError:
+                time.sleep(0.01)
+            if len(held) > 40:
+                held.pop(0).close()
+        for s in held:
+            s.close()
+
+    def watch() -> None:
+        while not stop.is_set():
+            peak[0] = max(peak[0], svc.active_connections,
+                          sum(t.name == "smriti-embed-conn" for t in threading.enumerate()))
+            time.sleep(0.002)
+
+    threads = [threading.Thread(target=flood) for _ in range(4)] + [threading.Thread(target=watch)]
+    for t in threads:
+        t.start()
+    try:
+        time.sleep(1.0)
+        outcomes = []
+        for _ in range(3):
+            t0 = time.monotonic()
+            try:
+                ServiceEmbedding(root, spawn=False).embed_with_identity(["legit"], kind="query")
+                outcomes.append(("served", time.monotonic() - t0))
+            except EmbeddingUnavailable as exc:
+                outcomes.append((str(exc), time.monotonic() - t0))
+    finally:
+        stop.set()
+        for t in threads:
+            t.join(10)
+    assert all(elapsed < 3.5 for _, elapsed in outcomes), outcomes  # the 3 s query deadline
+    assert peak[0] <= 32 and svc.stats.refused > 0
+    assert _wait(lambda: svc.active_connections == 0, 3)
+    got = ServiceEmbedding(root, spawn=False).embed_with_identity(["after"], kind="query")
+    assert got.vectors == stub(["after"])
+
+
+# ── Lifecycle ────────────────────────────────────────────────────────
+
+
+def test_idle_exit_racing_a_request_retries_on_a_fresh_service(
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
+    deciding, proceed = threading.Event(), threading.Event()
+
+    def hold_the_drain(reason: str) -> None:
+        deciding.set()
+        proceed.wait(5)
+
+    paths = service_paths(runtime_dir(), root)
+    first = services.start(root, idle_s=0.3, on_drain=hold_the_drain)
+    as_read = read_discovery(paths)  # what a client saw just before the service went idle
+    assert as_read is not None and as_read.state == "ready"
+    client = ServiceEmbedding(root, spawn=True)
+    started: list[EmbedService] = []
+    client.start_service = lambda paths: bool(started.append(services.start(root)) or True)
+    real_ready = client._ready_service
+    looks: list[str] = []
+
+    def ready(paths: Any, deadline: float) -> Discovery:
+        if not looks:
+            looks.append("stale")
+            return as_read  # the request goes to the service that is exiting
+        looks.append("fresh")
+        return real_ready(paths, deadline)
+
+    monkeypatch.setattr(client, "_ready_service", ready)
+    assert deciding.wait(5)  # it has decided it is idle; it accepts nothing more
+    out: dict[str, Any] = {}
+
+    def request() -> None:
+        try:
+            out["got"] = client.embed_with_identity(["arrives as it exits"])
+        except EmbeddingUnavailable as exc:
+            out["got"] = exc
+
+    t = threading.Thread(target=request)
+    t.start()
+    time.sleep(0.2)  # the request reaches the closing service
+    proceed.set()
+    t.join(15)
+
+    assert not isinstance(out["got"], Exception), out
+    assert out["got"].vectors == stub(["arrives as it exits"])
+    assert _wait(lambda: first.instance in services.reasons, 5)
+    assert "idle" in services.reasons[first.instance]
+    assert looks == ["stale", "fresh"]  # one EOF, one fresh try
+    assert len(started) == 1 and client.last_instance == started[0].instance
+
+
+def test_a_stop_finishes_the_work_in_flight(root: Path, services: Services) -> None:
+    gated = Gated()
+    svc = services.start(root, gated)
+    out: dict[str, Any] = {}
+    t = threading.Thread(target=lambda: out.setdefault(
+        "got", ServiceEmbedding(root, spawn=False).embed_with_identity(["in flight"])))
+    t.start()
+    assert gated.entered.wait(5)
+    svc.stop("smriti embed stop")
+    time.sleep(0.2)
+    assert svc.instance not in services.reasons  # it waits for the request
+    gated.release.set()
+    t.join(10)
+    assert out["got"].vectors == stub(["in flight"])
+    assert _wait(lambda: svc.instance in services.reasons, 5)
+
+
+def test_a_drain_follows_an_index_identity_change(
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
+    (root / "a.md").write_text("# A\n\nSome text.\n", encoding="utf-8")
+    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: StubEmbedding())
+    indexer.index_tree(root=root, db=root / ".smriti" / "index.db")
+    svc = services.start(root, identity_check_s=0.05)
+    client = ServiceEmbedding(root, spawn=False)
+    assert client.embed_with_identity(["before"]).identity == STUB
+
+    class Tiny:
+        model_name, dimension = "tiny-8", 8
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0] + [0.0] * 7 for _ in texts]
+
+    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: Tiny())
+    indexer.index_tree(full=True, root=root, db=root / ".smriti" / "index.db")
+
+    assert _wait(lambda: svc.instance in services.reasons, 5)
+    assert "index now records" in services.reasons[svc.instance]
+    assert read_discovery(service_paths(runtime_dir(), root)) is None
+    with pytest.raises(EmbeddingUnavailable, match="not running"):
+        client.embed_with_identity(["after"])
+
+
+def test_mixed_client_versions_coexist_and_another_protocol_degrades(
+        root: Path, services: Services) -> None:
+    svc = services.start(root)
+    old = ServiceEmbedding(root, spawn=False, version="0.1.0")
+    new = ServiceEmbedding(root, spawn=False, version="0.2.0.dev0")
+    assert old.embed_with_identity(["one"]).vectors == stub(["one"])
+    assert new.embed_with_identity(["two"]).vectors == stub(["two"])
+    assert old.last_instance == new.last_instance == svc.instance
+
+    future = ServiceEmbedding(root, spawn=True, protocol=PROTOCOL + 1)
+    spawned: list[object] = []
+    future.start_service = lambda paths: bool(spawned.append(paths))
+    with pytest.raises(EmbeddingUnavailable, match="protocol"):
+        future.embed_with_identity(["three"])
+    assert not spawned  # it neither replaces the service nor starts another
+    assert old.embed_with_identity(["four"]).vectors == stub(["four"])
+    assert old.last_instance == svc.instance and svc.state == "ready"
+
+
+def _st(mode: int, uid: int) -> os.stat_result:
+    return os.stat_result((mode, 0, 0, 1, uid, 0, 0, 0, 0, 0))
+
+
+def test_a_foreign_owned_or_world_writable_runtime_directory_is_refused() -> None:
+    d = stat.S_IFDIR
+    assert private_dir_problem(_st(d | 0o700, 1000), 1000) is None
+    assert private_dir_problem(_st(d | 0o755, 1000), 1000) is None  # tightened, not refused
+    assert "owned by uid 0" in str(private_dir_problem(_st(d | 0o700, 0), 1000))
+    assert "write" in str(private_dir_problem(_st(d | 0o777, 1000), 1000))
+    assert "write" in str(private_dir_problem(_st(d | 0o720, 1000), 1000))
+    assert "symbolic link" in str(private_dir_problem(_st(stat.S_IFLNK | 0o700, 1000), 1000))
+    assert "not a directory" in str(private_dir_problem(_st(stat.S_IFREG | 0o600, 1000), 1000))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX ownership and modes")
+def test_runtime_dir_checks_ownership_and_modes_on_posix(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = tmp_path / "run"
+    monkeypatch.setenv("SMRITI_RUNTIME_DIR", str(run))
+    assert stat.S_IMODE(runtime_dir().stat().st_mode) == 0o700
+    run.chmod(0o755)
+    runtime_dir()
+    assert stat.S_IMODE(run.stat().st_mode) == 0o700
+    run.chmod(0o777)
+    with pytest.raises(RuntimeDirError, match="write"):
+        runtime_dir()
+    run.chmod(0o700)
+    real_uid = os.getuid()
+    monkeypatch.setattr(os, "getuid", lambda: real_uid + 1)
+    with pytest.raises(RuntimeDirError, match="owned by"):
+        runtime_dir()
+    monkeypatch.setattr(os, "getuid", lambda: real_uid)
+    key = run / "embed.key"
+    load_key(run)
+    assert stat.S_IMODE(key.stat().st_mode) == 0o600
+    key.chmod(0o644)
+    with pytest.raises(RuntimeDirError, match="only this user"):
+        load_key(run)
+
+
+def test_the_key_is_made_once_atomically_and_never_replaced(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    start = threading.Barrier(8)
+    keys: list[bytes] = []
+
+    def make() -> None:
+        start.wait()
+        keys.append(load_key(run))
+
+    threads = [threading.Thread(target=make) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(set(keys)) == 1 and len(keys[0]) == 32
+    assert [p.name for p in run.iterdir()] == ["embed.key"]  # no temporaries left
+    (run / "embed.key").write_text("not a key", encoding="ascii")
+    with pytest.raises(RuntimeDirError, match="malformed"):
+        load_key(run)
+    assert (run / "embed.key").read_text(encoding="ascii") == "not a key"
+
+
+def test_a_timed_out_write_followed_only_by_reads_ends_with_nothing_pending(
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Round 2, finding 3: vectors left pending by a write that timed out must be
+    filled even if no write or index run ever follows, only reads."""
+    from smriti.store.schema import open_readonly, pending_vectors
+    from smriti.store.search import search_with_status
+
+    (root / "a.md").write_text("# A\n\nSome text.\n", encoding="utf-8")
+    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: StubEmbedding())
+    db = root / ".smriti" / "index.db"
+    indexer.index_tree(root=root, db=db)
+    gated = Gated()  # the write's embedding takes longer than the write waits
+    services.start(root, gated, pending_poll_s=0.05)
+    client = ServiceEmbedding(root, spawn=False, write_s=0.3)
+    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: client)
+    note = root / "lantern.md"
+    note.write_text("# Lantern\n\nAri hung a brass lantern by the door.\n", encoding="utf-8")
+
+    result = indexer.index_file_result(note, root=root, db=db)
+    assert result.chunks and result.vectors_pending  # saved, keyword-searchable, vectors to come
+    gated.release.set()
+
+    def pending() -> int:
+        conn = open_readonly(db)
+        try:
+            return pending_vectors(conn)
+        finally:
+            conn.close()
+
+    deadline = time.monotonic() + 10
+    reads = 0
+    while time.monotonic() < deadline and pending():
+        conn = open_readonly(db)  # only reads, through the same service
+        try:
+            assert search_with_status(conn, "brass lantern", use_reranker=False).results
+            reads += 1
+        finally:
+            conn.close()
+        time.sleep(0.05)
+    assert pending() == 0 and reads
+    conn = open_readonly(db)
+    try:
+        outcome = search_with_status(conn, "brass lantern", use_reranker=False)
+    finally:
+        conn.close()
+    assert outcome.keyword_only == "" and outcome.results[0].source == "lantern.md"
+    assert outcome.results[0].score > 0.9  # its vector is in: it scores on both legs
+
+
+def test_a_starting_service_fills_pending_vectors_unasked(
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
+    from smriti.store.schema import open_readonly, pending_vectors
+
+    class Down(StubEmbedding):
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("no embedder")
+
+    db = root / ".smriti" / "index.db"
+    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: StubEmbedding())
+    (root / "a.md").write_text("# A\n\nSome text.\n", encoding="utf-8")
+    indexer.index_tree(root=root, db=db)
+    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: Down())
+    for name in ("b", "c"):
+        (root / f"{name}.md").write_text(f"# {name}\n\nWritten while down.\n", encoding="utf-8")
+        assert indexer.index_file_result(root / f"{name}.md", root=root, db=db).vectors_pending
+
+    def pending() -> int:
+        conn = open_readonly(db)
+        try:
+            return pending_vectors(conn)
+        finally:
+            conn.close()
+
+    assert pending() == 2
+    svc = services.start(root, repair_batch=1)  # one source a step
+    assert _wait(lambda: pending() == 0, 10)
+    assert svc.stats.repaired == 2 and svc.stats.served == 0
+
+
+# ── Real processes ───────────────────────────────────────────────────
+
+
+def _service_env(runtime: Path) -> dict[str, str]:
+    path = os.pathsep.join(p for p in (str(SRC), os.environ.get("PYTHONPATH", "")) if p)
+    return dict(os.environ, SMRITI_RUNTIME_DIR=str(runtime), SMRITI_EMBED_PROVIDER="stub",
+                SMRITI_EMBED_SERVICE="1", PYTHONPATH=path)
+
+
+def _kill(procs: list[subprocess.Popen[bytes]]) -> None:
+    for p in procs:
+        if p.poll() is None:
+            p.kill()
+        p.wait(10)
+
+
+def test_simultaneous_cold_starts_give_one_service(root: Path) -> None:
+    runtime = runtime_dir()
+    env = _service_env(runtime)
+    start = threading.Barrier(4)
+    procs: list[subprocess.Popen[bytes]] = []
+    lock = threading.Lock()
+
+    def launch() -> None:
+        start.wait()
+        p = subprocess.Popen([sys.executable, "-m", "smriti", "embed", "serve", "--root",
+                              str(root)], env=env, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        with lock:
+            procs.append(p)
+
+    threads = [threading.Thread(target=launch) for _ in range(4)]
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        paths = service_paths(runtime, root)
+        assert _wait(lambda: (d := read_discovery(paths)) is not None and d.state == "ready", 60)
+        assert _wait(lambda: sum(p.poll() is None for p in procs) == 1, 30)
+        [alive] = [p for p in procs if p.poll() is None]
+        assert all(p.returncode == 0 for p in procs if p is not alive)
+        found = read_discovery(paths)
+        assert found is not None and found.pid == alive.pid
+        cli = [sys.executable, "-m", "smriti", "embed"]
+        status = subprocess.run([*cli, "status", "--root", str(root)], env=env,
+                                capture_output=True, text=True, timeout=60)
+        assert "ready" in status.stdout and status.returncode == 0
+        got = ServiceEmbedding(root, spawn=False).embed_with_identity(["hello"])
+        assert got.vectors == stub(["hello"])
+        stopped = subprocess.run([*cli, "stop", "--root", str(root)], env=env,
+                                 capture_output=True, text=True, timeout=90)
+        assert "stopped" in stopped.stdout, stopped
+        assert alive.wait(30) == 0
+        assert read_discovery(paths) is None
+    finally:
+        _kill(procs)
+
+
+def test_clients_starting_a_cold_service_at_once_share_one(
+        root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = runtime_dir()
+    for key, value in _service_env(runtime).items():
+        monkeypatch.setenv(key, value)
+    start = threading.Barrier(4)
+    clients = [ServiceEmbedding(root) for _ in range(4)]
+    out: list[Any] = [None] * 4
+
+    def call(i: int) -> None:
+        start.wait()
+        try:
+            out[i] = clients[i].embed_with_identity([f"cold {i}"])
+        except EmbeddingUnavailable as exc:
+            out[i] = exc
+
+    threads = [threading.Thread(target=call, args=(i,)) for i in range(4)]
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(90)
+        assert all(o is not None and not isinstance(o, Exception) for o in out), out
+        assert [o.vectors for o in out] == [stub([f"cold {i}"]) for i in range(4)]
+        assert len({c.last_instance for c in clients}) == 1
+        state = service_state(root)
+        assert state.state == "ready", state
+    finally:
+        print(stop_service(root))
+        _kill([p for c in clients for p in c._children])

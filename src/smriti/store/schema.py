@@ -117,6 +117,8 @@ def open_readonly(db_path: Path) -> IndexDB:
 def ensure_schema(
     db_path: Path,
     dimension: int | None,
+    *,
+    busy_ms: int | None = None,
 ) -> IndexDB:
     """Open (or create) the index database and ensure all tables exist.
 
@@ -130,6 +132,9 @@ def ensure_schema(
         requires a full re-index). None when the caller has no vectors to
         write (their embedding failed): nothing is recorded, and the first
         vectors set the size.
+    busy_ms:
+        How long to wait for another writer's lock (at least 1000 ms); by
+        default ``SMRITI_DB_BUSY_TIMEOUT_MS`` or 10 s.
 
     Returns
     -------
@@ -142,10 +147,11 @@ def ensure_schema(
     # session's MCP server can hold the write lock for minutes (observed
     # 2026-09-04), so the 03:00 nightly indexes with a much longer wait
     # while interactive writers keep the snappier default.
-    try:
-        busy_ms = int(os.environ.get("SMRITI_DB_BUSY_TIMEOUT_MS", "10000"))
-    except ValueError:
-        busy_ms = 10_000
+    if busy_ms is None:
+        try:
+            busy_ms = int(os.environ.get("SMRITI_DB_BUSY_TIMEOUT_MS", "10000"))
+        except ValueError:
+            busy_ms = 10_000
     busy_ms = max(busy_ms, 1000)
     conn = sqlite3.connect(str(db_path), timeout=max(busy_ms / 1000.0, 1.0))
     conn.execute(f"PRAGMA busy_timeout={busy_ms}")

@@ -272,6 +272,29 @@ def _cmd_logd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_embed(args: argparse.Namespace) -> int:
+    from smriti.core.tree import tree_root
+
+    root = Path(args.root).expanduser().resolve() if args.root else tree_root()
+    if args.embed_cmd == "serve":
+        from smriti.embed.service import serve
+
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s",
+                            force=True)
+        return serve(root, idle_s=args.idle)
+    if args.embed_cmd == "stop":
+        from smriti.embed.client import stop_service
+
+        outcome = stop_service(root)
+        print(f"Embedding service: {outcome}")
+        return 0 if outcome == "not running" or outcome.startswith("stopped") else 1
+    from smriti.embed.client import service_state
+
+    state = service_state(root)
+    print(f"Embedding service: {state.describe()}")
+    return 0 if state.state in ("ready", "off", "not running", "starting") else 1
+
+
 def _cmd_backup(args: argparse.Namespace) -> int:
     from smriti.backup import trigger
 
@@ -412,6 +435,22 @@ def main(argv: list[str] | None = None) -> int:
     p_logd.add_argument("--once", action="store_true", help="Run a single pass and exit")
     p_logd.add_argument("--ensure", action="store_true",
                         help="Keepalive: start a detached daemon if none is running")
+    p_embed = sub.add_parser(
+        "embed", help="The shared embedding service: one model for every session's server"
+    )
+    embed_root = argparse.ArgumentParser(add_help=False)
+    embed_root.add_argument("--root", type=str, default=None,
+                            help="Memory root (default: SMRITI_ROOT or ~/.narada)")
+    p_embed_sub = p_embed.add_subparsers(dest="embed_cmd", required=True)
+    p_embed_serve = p_embed_sub.add_parser(
+        "serve", parents=[embed_root],
+        help="Run the service in the foreground (clients start it on demand)")
+    p_embed_serve.add_argument("--idle", type=float, default=None,
+                               help="Exit after this many seconds without a request "
+                                    "(default SMRITI_EMBED_IDLE_S, or 900)")
+    p_embed_sub.add_parser("status", parents=[embed_root], help="Show the service's state")
+    p_embed_sub.add_parser("stop", parents=[embed_root],
+                           help="Drain the service now and wait for it to exit")
     p_backup = sub.add_parser(
         "backup", help="Commit the memory tree now if it changed (the hourly task runs this)"
     )
@@ -488,8 +527,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
-    # Eval must enter its sandbox before any default-root access.
-    if args.command != "eval":
+    # Eval must enter its sandbox before any default-root access; the
+    # embedding service never touches the private store.
+    if args.command not in ("eval", "embed"):
         # Wire private layer if vault already exists (idempotent)
         from smriti.core.tree import tree_root as _tree_root
         from smriti.private.store import PrivateStore as _PrivateStore
@@ -510,6 +550,7 @@ def _run(args: argparse.Namespace) -> int:
         "witness": _cmd_witness,
         "morning": _cmd_morning,
         "logd": _cmd_logd,
+        "embed": _cmd_embed,
         "backup": _cmd_backup,
         "tasks": _cmd_tasks,
     }

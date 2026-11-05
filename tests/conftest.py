@@ -37,6 +37,11 @@ def _isolated_memory_root(tmp_path_factory: pytest.TempPathFactory,
     # The day boundary follows the machine's zone by default; tests mustn't
     # (CI runs in UTC). Tests of that default delete this.
     monkeypatch.setenv("SMRITI_DAY_UTC_OFFSET", "10")
+    # No test starts the embedding service unless it asks to (and then only
+    # against temporary roots); its key, lock and discovery files go to a
+    # temporary runtime directory, never the user's.
+    monkeypatch.setenv("SMRITI_EMBED_SERVICE", "0")
+    monkeypatch.setenv("SMRITI_RUNTIME_DIR", str(tmp_path_factory.mktemp("run")))
     metrics._instance = None  # re-resolve the metrics path under the temp root
     yield root
     metrics._instance = None
