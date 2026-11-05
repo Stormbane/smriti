@@ -1,27 +1,24 @@
 """The day-log writer lock.
 
-One OS-visible exclusive lock guards every write to the day-log or its
-state file. Held per append burst, never for a process lifetime, so the
+One exclusive lock guards every write to the day-log or its state file.
+It is held per append burst, never for a process's lifetime, so the
 nightly task interleaves with a healthy running daemon (spec: review
 round 2, finding 1).
 
-Implementation: ``O_CREAT | O_EXCL`` lockfile containing the holder's
-PID. Stale locks (holder no longer alive, or file older than
-``STALE_AFTER_S``) are broken. Works on Windows and POSIX without
-dependencies.
+It is an OS-level lock (``smriti.core.oslock``): the kernel releases it
+when its holder exits or crashes, so there is no stale lock to break and
+no race over who takes it over, and a long holder is never broken by age.
+The lock file lives in the temp directory, keyed by the configured lock
+path, not inside the memory tree, where a locked byte range would make
+``git add`` fail on Windows.
 """
 
 from __future__ import annotations
 
 import contextlib
 import os
-import time
 from collections.abc import Iterator
 from pathlib import Path
-
-STALE_AFTER_S = 300.0
-_POLL_S = 0.05
-
 
 class LockTimeout(RuntimeError):
     """The writer lock could not be acquired within the deadline."""
@@ -62,43 +59,14 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _read_pid(lock_path: Path) -> int:
-    try:
-        return int(lock_path.read_text(encoding="ascii").strip() or "0")
-    except (OSError, ValueError):
-        return 0
-
-
-def _break_if_stale(lock_path: Path) -> None:
-    pid = _read_pid(lock_path)
-    stale_by_pid = pid != 0 and not _pid_alive(pid)
-    try:
-        age = time.time() - lock_path.stat().st_mtime
-    except OSError:
-        return  # already gone
-    if stale_by_pid or age > STALE_AFTER_S:
-        with contextlib.suppress(OSError):
-            lock_path.unlink()
-
-
 @contextlib.contextmanager
 def writer_lock(lock_path: Path, timeout_s: float = 10.0) -> Iterator[None]:
-    """Acquire the exclusive writer lock, or raise :class:`LockTimeout`."""
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    deadline = time.monotonic() + timeout_s
-    while True:
-        try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            break
-        except FileExistsError:
-            _break_if_stale(lock_path)
-            if time.monotonic() >= deadline:
-                raise LockTimeout(f"writer lock busy: {lock_path}") from None
-            time.sleep(_POLL_S)
-    try:
-        os.write(fd, str(os.getpid()).encode("ascii"))
-        os.close(fd)
+    """Hold the exclusive writer lock for ``lock_path``, or raise :class:`LockTimeout`."""
+    from smriti.core.oslock import exclusive_lock
+    from smriti.core.oslock import lock_path as os_lock_path
+
+    key = os_lock_path("daylog-writer", str(Path(lock_path).resolve()))
+    with exclusive_lock(key, wait_s=timeout_s) as held:
+        if not held:
+            raise LockTimeout(f"writer lock busy: {lock_path}")
         yield
-    finally:
-        with contextlib.suppress(OSError):
-            lock_path.unlink()

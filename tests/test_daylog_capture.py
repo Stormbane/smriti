@@ -273,11 +273,48 @@ def test_writer_lock_excludes_and_releases(tmp_path: Path) -> None:
         pass  # released cleanly
 
 
-def test_writer_lock_breaks_stale_pid(tmp_path: Path) -> None:
+def test_writer_lock_survives_a_crashed_holder(tmp_path: Path) -> None:
+    """The OS releases the lock when its holder dies, however it dies."""
+    import subprocess
+    import sys
+
     lock_path = tmp_path / "w.lock"
-    lock_path.write_text("999999999", encoding="ascii")  # dead pid
+    code = "\n".join([
+        "import os, sys",
+        "from pathlib import Path",
+        "from smriti.daylog.lock import writer_lock",
+        "with writer_lock(Path(sys.argv[1])):",
+        "    os._exit(0)  # die holding it, no cleanup",
+    ])
+    subprocess.run([sys.executable, "-c", code, str(lock_path)], check=True, timeout=60)
     with writer_lock(lock_path, timeout_s=2.0):
-        assert lock_path.read_text(encoding="ascii") == str(os.getpid())
+        pass
+
+
+def test_writer_lock_is_never_broken_by_age(tmp_path: Path) -> None:
+    """A long holder keeps the lock, however old its lock file looks."""
+    from smriti.core.oslock import lock_path as os_lock_path
+
+    lock_path = tmp_path / "w.lock"
+    entered, release = threading.Event(), threading.Event()
+
+    def hold() -> None:
+        with writer_lock(lock_path):
+            entered.set()
+            release.wait(timeout=10)
+
+    t = threading.Thread(target=hold)
+    t.start()
+    assert entered.wait(timeout=5)
+    key = os_lock_path("daylog-writer", str(lock_path.resolve()))
+    old = time.time() - 3600
+    os.utime(key, (old, old))  # the old implementation broke anything over 300 s
+    with pytest.raises(LockTimeout):
+        with writer_lock(lock_path, timeout_s=0.3):
+            pass
+    release.set()
+    t.join(timeout=5)
+    assert not lock_path.exists(), "no lock file inside the tree"
 
 
 # -------------------------------------------------------------- collect
