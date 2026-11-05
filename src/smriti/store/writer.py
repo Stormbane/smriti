@@ -155,6 +155,9 @@ def write_entry_result(
     source_hint:
         Optional provenance label (e.g. ``"heartbeat"``, ``"manual"``,
         ``"precompact"``, a session UUID).  Stored in frontmatter.
+
+        Credential-shaped strings in ``content``, ``title`` and
+        ``source_hint`` are masked first (:func:`smriti.daylog.scrub.scrub`).
     root:
         Tree root (defaults to ``tree_root()``).
     reindex:
@@ -187,9 +190,16 @@ def write_entry_result(
     else:
         entry_path = _flat_path(root, branch, now_local)
 
+    # Strings shaped like credentials are masked before anything reaches the
+    # disk, as capture masks them in each turn: the tree is committed and
+    # pushed, and an agent writes down whatever it was shown, pasted keys too.
+    from smriti.daylog.scrub import scrub
+
+    content = scrub(content)
     # Folded to one line: a newline in either could forge frontmatter keys.
-    heading = one_line(title or "") or f"Entry {now_local.strftime('%Y-%m-%d %H:%M')}"
-    source = one_line(source_hint or "")
+    heading = (one_line(scrub(title or ""))
+               or f"Entry {now_local.strftime('%Y-%m-%d %H:%M')}")
+    source = one_line(scrub(source_hint or ""))
 
     # Build the entry block
     entry_lines = [

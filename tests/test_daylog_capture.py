@@ -152,6 +152,37 @@ def test_scrub_passes_ordinary_text() -> None:
     assert scrub(text) == text
 
 
+def test_a_memory_write_is_scrubbed_as_capture_is(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """H11.1: smriti_write saved what the agent sent verbatim, pasted keys and
+    all, into a tree that the backup commits and pushes."""
+    import smriti.store.writer as store_writer
+    from smriti.mcp.server import handle_message
+
+    key = "sk-ant-api03-" + "abcdefghijklmnop1234"
+    token = "ghp_" + "ABCDEFGHIJKLMNOPQRST1234"
+    root = tmp_path / "tree"
+    root.mkdir()
+    monkeypatch.setenv("SMRITI_ROOT", str(root))
+    monkeypatch.setattr(store_writer, "_reindex_one",  # the index is not the point here
+                        lambda path, root: store_writer.Written(path))
+    reply = handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "smriti_write", "arguments": {
+            "content": f"Sam pasted the key {key} by mistake.\npassword: hunter2hunter2\n",
+            "title": f"Rotate {token}", "source": f"session with Bearer {token}",
+            "branch": "notes"}}})
+    assert reply is not None and not reply["result"].get("isError"), reply
+    [entry] = [p for p in root.rglob("*.md") if p.name != "index.md"]
+    text = entry.read_text(encoding="utf-8")
+    assert key not in text and token not in text and "hunter2hunter2" not in text
+    assert "Sam pasted the key [redacted] by mistake." in text
+    assert "# Rotate [redacted]" in text and "source: session with Bearer [redacted]" in text
+
+    plain = store_writer.write_entry("Ari kept the lamps lit; nothing secret here.",
+                                     branch="notes", root=root, reindex=False)
+    assert "Ari kept the lamps lit; nothing secret here." in plain.read_text(encoding="utf-8")
+
+
 # ------------------------------------------------------- claude adapter
 
 

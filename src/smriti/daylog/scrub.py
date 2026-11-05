@@ -1,8 +1,10 @@
-"""Secret scrub applied to every turn before persistence.
+"""Secret scrub applied to every turn, and every memory write, before persistence.
 
-Session transcripts, unlike journal entries, can contain pasted
-credentials. The day-log lives in a backed-up git repo, so credential
-shapes are masked at capture. This is a targeted scrub for
+Session transcripts can contain pasted credentials, and so can what an
+agent writes to memory (``smriti_write``, ``smriti write``): it writes
+down what it was shown. The tree lives in a backed-up git repo, so
+credential shapes are masked at capture (``smriti.daylog.writer``) and
+at write (``smriti.store.writer``). This is a targeted scrub for
 high-confidence credential patterns, not a PII framework (spec:
 review round 1, finding 7): anything it doesn't recognise is kept.
 """
