@@ -505,6 +505,96 @@ def test_an_older_read_that_commits_first_does_not_win(
     assert index_tree(root=mini_tree, db=db_path)["indexed"] == 0  # recorded as it is on disk
 
 
+@pytest.mark.parametrize("full", [True, False])
+def test_when_the_file_moves_on_again_the_newer_index_stays(
+        mini_tree: Path, monkeypatch: pytest.MonkeyPatch, full: bool) -> None:
+    """This run reads A; another writer indexes B; the file becomes C. Neither
+    read is current, so B (possibly newer) stays and the next run indexes C."""
+    import sqlite3
+    import threading
+
+    import smriti.store.indexer as indexer_mod
+
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+    real = indexer_mod._get_embedding_provider()
+    mind = mini_tree / "mind.md"
+    mind.write_text("# Mind\n\nVersion A, which this run reads.\n", encoding="utf-8")
+
+    def b_is_indexed_then_c_lands() -> None:
+        mind.write_text("# Mind\n\nVersion B, indexed by another writer.\n", encoding="utf-8")
+        indexer_mod.index_file(mind, root=mini_tree, db=db_path)
+        mind.write_text("# Mind\n\nVersion C, not yet indexed by anyone at all.\n",
+                        encoding="utf-8")
+
+    class ThreeVersions:
+        model_name, dimension = real.model_name, real.dimension
+        fired = False
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            if not ThreeVersions.fired:
+                ThreeVersions.fired = True
+                writer = threading.Thread(target=b_is_indexed_then_c_lands)
+                writer.start()
+                writer.join()
+            return await real.embed(texts)
+
+    def indexed_text() -> str:
+        conn = sqlite3.connect(str(db_path))
+        text = " ".join(r[0] for r in conn.execute(
+            "SELECT content FROM chunks WHERE source = 'mind.md'"))
+        conn.close()
+        return text
+
+    monkeypatch.setattr(indexer_mod, "_get_embedding_provider", ThreeVersions)
+    index_tree(full=full, root=mini_tree, db=db_path)
+    assert "Version B" in indexed_text()
+    monkeypatch.undo()
+    assert index_tree(root=mini_tree, db=db_path)["indexed"] == 1
+    assert "Version C" in indexed_text()
+
+
+def test_two_writes_indexed_out_of_order_keep_the_newer(
+        mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two sessions append to one file; the first index_file finishes last.
+    Its older read must not replace the second's."""
+    import sqlite3
+    import threading
+
+    import smriti.store.indexer as indexer_mod
+
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+    real = indexer_mod._get_embedding_provider()
+    note = mini_tree / "threads" / "shared-day.md"
+    note.write_text("# Day\n\nThe first session's entry.\n", encoding="utf-8")
+
+    def the_second_session() -> None:
+        with note.open("a", encoding="utf-8") as f:
+            f.write("\nThe second session's entry.\n")
+        indexer_mod.index_file(note, root=mini_tree, db=db_path)
+
+    class SecondFinishesFirst:
+        model_name, dimension = real.model_name, real.dimension
+        fired = False
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            if not SecondFinishesFirst.fired:
+                SecondFinishesFirst.fired = True
+                second = threading.Thread(target=the_second_session)
+                second.start()
+                second.join()
+            return await real.embed(texts)
+
+    monkeypatch.setattr(indexer_mod, "_get_embedding_provider", SecondFinishesFirst)
+    assert indexer_mod.index_file(note, root=mini_tree, db=db_path) == 0
+    conn = sqlite3.connect(str(db_path))
+    text = " ".join(r[0] for r in conn.execute(
+        "SELECT content FROM chunks WHERE source = 'threads/shared-day.md'"))
+    conn.close()
+    assert "second session" in text
+
+
 def test_only_a_full_reindex_changes_the_vector_dimension(
         mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import sqlite3

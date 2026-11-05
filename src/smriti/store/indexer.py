@@ -350,15 +350,17 @@ def index_tree(
         conn.execute("BEGIN IMMEDIATE")
         # Other writers (index_file, behind every smriti_write) may have
         # published sources while this run embedded. Read under the write
-        # lock. A later commit isn't a later read, so the disk decides: a
-        # source someone else re-recorded keeps their chunks when their
-        # record is the file as it is now, or when this run has nothing
-        # for it; otherwise this run's read replaces theirs.
+        # lock. A later commit isn't a later read, so the disk decides: for
+        # a source someone else re-recorded, this run's read replaces theirs
+        # only when it is exactly the file as it is now. Otherwise theirs
+        # stays (it may be newer), and if neither is current the next run,
+        # finding the disk unlike the record, indexes it again.
         now_recorded = _recorded_sources(conn)
-        ours = {src for src, _ in read_sources}
+        ours = {src: (st.st_mtime_ns, st.st_size) for src, st in read_sources}
         keep = {
             s for s, rec in now_recorded.items()
-            if rec != recorded.get(s) and (s not in ours or _disk_record(root / s) == rec)
+            if rec != recorded.get(s)
+            and (s not in ours or _disk_record(root / s) != ours[s])
         }
         if full and conn.has_vec and meta_dim != dim:
             # Every stored vector is the wrong size, so everything goes,
@@ -498,7 +500,12 @@ def index_file(path: Path, *, root: Path | None = None, db: Path | None = None) 
     only its chunks, delete-then-insert. Same leak guard as
     ``index_tree`` — never leave a transaction open on failure.
 
-    Returns the number of chunks indexed.
+    Two sessions writing one file can finish out of order, so the same
+    rule as ``index_tree`` decides: when another writer has recorded the
+    source differently, this read replaces theirs only if it is the file
+    as it is now.
+
+    Returns the number of chunks indexed (0 when another read stands).
     """
     if root is None:
         root = tree_root()
@@ -517,6 +524,17 @@ def index_file(path: Path, *, root: Path | None = None, db: Path | None = None) 
 
     conn = ensure_schema(db, provider.dimension)
     try:
+        mine = (st.st_mtime_ns, st.st_size)
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT mtime_ns, size FROM sources WHERE source = ?", (rel_source,)
+        ).fetchone()
+        if row is not None and tuple(row) != mine and _disk_record(path) != mine:
+            log.info("index_file %s: the file moved on since this read; the indexed "
+                     "read stands, and the next index run catches up", rel_source)
+            conn.rollback()
+            conn.close()
+            return 0
         _delete_source(conn, rel_source)
         _record_source(conn, rel_source, st)
         now = datetime.now(timezone.utc).isoformat()
