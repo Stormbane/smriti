@@ -1,7 +1,9 @@
 # smriti runtime state. It is rebuilt or regenerated, churns on every
 # session, and some of it holds raw text, so it doesn't belong in a memory
 # backup. The memory itself (identity, mind, journal, people, projects,
-# notes, digests and rollups under log/) is what gets committed.
+# notes, and under log/ the captured conversations with their renders,
+# digests and rollups) is what gets committed, and it is pushed to the
+# remote in plaintext unless git-crypt encrypts it.
 
 # Search index (rebuilt by `smriti index`) and SQLite side files.
 .smriti/index.db
