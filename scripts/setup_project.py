@@ -265,9 +265,9 @@ def setup_mirror(
         make_junction(mirror / "src-docs", src_dir)
 
     # Native directories for smriti-side memory (not junctioned). These hold
-    # durable, cascade-aware artifacts that live in the memory tree, not in
-    # the project repo:
-    #   findings/   -- lessons learned (cascade upward to cross-project)
+    # durable artifacts that live in the memory tree, not in the project
+    # repo, each with an index.md that smriti keeps current:
+    #   findings/   -- lessons learned
     #   decisions/  -- ADRs with rationale
     #   research/   -- exploration without commitment
     for sub in ("findings", "decisions", "research"):
@@ -277,7 +277,7 @@ def setup_mirror(
         if not idx.exists():
             idx.write_text(
                 f"# {sub.title()} -- {project.name}\n\n"
-                f"_Cascade-maintained index. Updated automatically when "
+                f"_Maintained by smriti. Updated automatically when "
                 f"new entries are added._\n",
                 encoding="utf-8",
             )

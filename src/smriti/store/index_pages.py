@@ -1,22 +1,27 @@
-"""Structural cascade: regenerate parent index.md files from directory listings.
+"""Keep each directory's index.md listing in step with its files.
 
-When a file is written, every existing index.md between it and the tree
-root is regenerated. No LLM is involved.
+When an entry is written, every existing ``index.md`` between it and the
+tree root is regenerated from its directory's listing: one wikilink per
+subdirectory and markdown file, described by the file's first heading.
+Deterministic; no LLM is involved.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import time
 from pathlib import Path
 
+from smriti.core.files import edit_lock, write_atomic
 from smriti.core.tree import tree_root
+from smriti.metrics import get_logger
 
 log = logging.getLogger(__name__)
 
 
-def _generate_index(directory: Path, root: Path) -> str:
-    """Generate an index.md body from a directory's contents."""
+def _render_index(directory: Path, root: Path) -> str:
+    """Render an index.md body from a directory's contents."""
     entries = sorted(directory.iterdir())
     lines = [f"# {directory.name.replace('-', ' ').title()}", ""]
 
@@ -44,14 +49,13 @@ def _generate_index(directory: Path, root: Path) -> str:
     return "\n".join(lines)
 
 
-def structural_cascade(path: Path, root: Path | None = None) -> list[Path]:
-    """Regenerate parent index.md files up the tree.
+def update_index_pages(path: Path, root: Path | None = None) -> list[Path]:
+    """Regenerate the index.md of each directory from *path* up to *root*.
 
-    Returns the list of index.md files that were updated.
-    Does NOT touch MEMORY.md or trunk-level files.
+    Only directories that already have an index.md are updated; none is
+    created, and the root's own directory is never touched. Returns the
+    index.md files whose content changed.
     """
-    import time
-
     t0 = time.monotonic()
 
     if root is None:
@@ -60,25 +64,27 @@ def structural_cascade(path: Path, root: Path | None = None) -> list[Path]:
     updated: list[Path] = []
     current = path.parent if path.is_file() else path
 
-    from smriti.core.files import edit_lock, write_atomic
-
     while current != root and current.is_relative_to(root):
         index_file = current / "index.md"
         if index_file.exists():
             # Listed under the lock, so of two writers in one directory the
             # later one lists both files and its index is the one that stays.
             with edit_lock(index_file):
-                new_content = _generate_index(current, root)
+                new_content = _render_index(current, root)
                 old_content = index_file.read_text(encoding="utf-8")
                 changed = new_content.strip() != old_content.strip()
                 if changed:
                     write_atomic(index_file, new_content)
             if changed:
                 updated.append(index_file)
-                log.info("Structural cascade: updated %s", index_file.relative_to(root))
+                log.info("Updated index page %s", index_file.relative_to(root))
 
         current = current.parent
 
-    from smriti.metrics import get_logger
-    get_logger().log("structural_cascade", trigger_path=str(path.relative_to(root)), indexes_updated=len(updated), elapsed_ms=int((time.monotonic() - t0) * 1000))
+    get_logger().log(
+        "index_pages_updated",
+        trigger_path=str(path.relative_to(root)),
+        indexes_updated=len(updated),
+        elapsed_ms=int((time.monotonic() - t0) * 1000),
+    )
     return updated

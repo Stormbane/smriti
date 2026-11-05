@@ -172,7 +172,7 @@ def write_entry(
         _reindex_one(entry_path, root)
 
     # Keep the index.md listings of the parent directories current.
-    _structural_cascade(entry_path, root)
+    _update_index_pages(entry_path, root)
 
     return entry_path
 
@@ -211,13 +211,13 @@ def _reindex_one(path: Path, root: Path) -> None:
         log.warning("Reindex after write failed: %s", exc)
 
 
-def _structural_cascade(path: Path, root: Path) -> None:
+def _update_index_pages(path: Path, root: Path) -> None:
     """Regenerate the parent index.md files; a failure never blocks the write."""
     try:
-        from smriti.store.cascade import structural_cascade
+        from smriti.store.index_pages import update_index_pages
 
-        updated = structural_cascade(path, root)
+        updated = update_index_pages(path, root)
         if updated:
-            log.info("Structural cascade updated %d index files", len(updated))
+            log.info("Updated %d index pages", len(updated))
     except Exception as exc:
-        log.warning("Structural cascade failed: %s", exc)
+        log.warning("Index page update failed: %s", exc)
