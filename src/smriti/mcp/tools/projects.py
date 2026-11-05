@@ -193,8 +193,8 @@ def handle_record_finding(arguments: Arguments) -> str:
                 idx_text = (
                     "# Cross-Project Findings\n\n"
                     "Findings that touched multiple projects, indexed by tag. "
-                    "Cascade-maintained -- each tag dir collects links to "
-                    "per-project findings.\n\n"
+                    "Maintained by smriti_record_finding -- each tag dir collects "
+                    "links to per-project findings.\n\n"
                 )
             if idx_line not in idx_text:
                 write_atomic(idx_path, idx_text.rstrip() + "\n" + idx_line + "\n")
