@@ -127,7 +127,8 @@ class TestPatchConfigTomlMergeBehavior:
             'matcher = "startup|resume"\n'
             "[[hooks.SessionStart.hooks]]\n"
             'type = "command"\n'
-            'command = \'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/.narada" python "$HOME/.narada/.smriti/wake.py"\'\n',
+            'command = \'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/.narada" '
+            'python "$HOME/.narada/.smriti/wake.py"\'\n',
             encoding="utf-8",
         )
 

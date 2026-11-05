@@ -154,7 +154,9 @@ class TestSmritiWriteWrongPlace:
 
 
 class TestMCPServerProtocol:
-    def _call_mcp(self, method: str, params: dict | None = None, tree_root: Path | None = None) -> dict:
+    def _call_mcp(
+        self, method: str, params: dict | None = None, tree_root: Path | None = None
+    ) -> dict:
         request = {
             "jsonrpc": "2.0",
             "id": 1,

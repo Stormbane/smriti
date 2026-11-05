@@ -47,7 +47,9 @@ def wake_tree(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _run_wake(wake_tree: Path, env_vars: dict | None = None, cwd: str | None = None) -> subprocess.CompletedProcess:
+def _run_wake(
+    wake_tree: Path, env_vars: dict | None = None, cwd: str | None = None
+) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env.pop("SMRITI_WAKE", None)
     env["SMRITI_ROOT"] = str(wake_tree)  # Point wake.py at the test tree
@@ -147,8 +149,12 @@ class TestRecentJournal:
     def test_journal_tail_emitted(self, wake_tree: Path) -> None:
         journal = wake_tree / "journal" / "2026" / "04" / "week3"
         journal.mkdir(parents=True)
-        (journal / "04-15.md").write_text("---\ndate: 2026-04-15\n---\n\n# Yesterday\n\nYesterday's thoughts.\n")
-        (journal / "04-16.md").write_text("---\ndate: 2026-04-16\n---\n\n# Today\n\nToday's thoughts.\n")
+        (journal / "04-15.md").write_text(
+            "---\ndate: 2026-04-15\n---\n\n# Yesterday\n\nYesterday's thoughts.\n"
+        )
+        (journal / "04-16.md").write_text(
+            "---\ndate: 2026-04-16\n---\n\n# Today\n\nToday's thoughts.\n"
+        )
 
         result = _run_wake(wake_tree, {"SMRITI_WAKE": "1"})
         assert "RECENT JOURNAL" in result.stdout
@@ -194,4 +200,6 @@ class TestWakeEdgeCases:
 
         result = _run_wake(wake_tree, {"SMRITI_WAKE": "1"})
         assert result.returncode == 0
-        assert len(result.stdout) <= 10000, f"Wake output {len(result.stdout)} chars exceeds 10K limit"
+        assert len(result.stdout) <= 10000, (
+            f"Wake output {len(result.stdout)} chars exceeds 10K limit"
+        )

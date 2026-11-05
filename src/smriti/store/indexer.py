@@ -479,7 +479,13 @@ def index_tree(
             provider.model_name,
         )
         metrics = get_logger()
-        metrics.log("index_completed", **stats, elapsed_ms=int((_time.monotonic() - t0) * 1000), model=provider.model_name, dimension=dim)
+        metrics.log(
+            "index_completed",
+            **stats,
+            elapsed_ms=int((_time.monotonic() - t0) * 1000),
+            model=provider.model_name,
+            dimension=dim,
+        )
         return stats
     except BaseException:
         # Never leak an open write transaction from a long-lived

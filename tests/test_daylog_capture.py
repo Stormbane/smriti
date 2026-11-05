@@ -129,7 +129,9 @@ def test_recapturing_a_legacy_day_appends_nothing(tmp_path: Path) -> None:
         "npm_" + "abcdefghijklmnopqrstuvwxyz0123456789",
         "123456789:" + "AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawB",
         "https://hooks.slack.com/" + "services/T000/B000/XXXXXXXXXXXXXXXX",
-        "eyJhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiIxMjM0NTY3ODkwIn0." + "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+        "eyJhbGciOiJIUzI1NiJ9."
+        + "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+        + "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
     ],
 )
 def test_scrub_masks_credentials(secret: str) -> None:

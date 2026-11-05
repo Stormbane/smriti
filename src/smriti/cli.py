@@ -339,7 +339,8 @@ def _cmd_metrics(args: argparse.Namespace) -> int:
     print(f"  Tokens in:   {summary.get('total_tokens_in', 0):,}")
     print(f"  Tokens out:  {summary.get('total_tokens_out', 0):,}")
     print(f"  Est. cost:   ${summary.get('total_cost_usd', 0):.4f}")
-    print(f"  Searches:    {summary.get('search_count', 0)} (avg {summary.get('avg_search_ms', 0):.0f}ms)")
+    print(f"  Searches:    {summary.get('search_count', 0)} "
+          f"(avg {summary.get('avg_search_ms', 0):.0f}ms)")
     print(f"  Index runs:  {summary.get('index_runs', 0)}")
     print(f"  Writes:      {summary.get('writes', 0)}")
     return 0

@@ -292,7 +292,9 @@ def test_nightly_renders_digests_and_writes_status(
     cfg = _cfg(tmp_path)
     _seed_day(cfg)  # UTC 2026-09-04 => UTC+10 2026-09-04 (early-morning turns)
     # 17:05 UTC = 03:05 UTC+10 on 09-05 => target day is the just-closed 09-04.
-    status = run_nightly(cfg, witness=False, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc), reindex=False)
+    status = run_nightly(
+        cfg, witness=False, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc), reindex=False
+    )
     assert status["target_day"] == "2026-09-04"
     assert cfg.day_md("2026-09-04").exists()
     assert cfg.day_digest("2026-09-04").exists()
@@ -383,7 +385,9 @@ def test_dirty_marker_survives_when_day_changes_under_digest(
             return super().call(request)
 
     monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: RacingProvider())
-    run_nightly(cfg, witness=False, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc), reindex=False)
+    run_nightly(
+        cfg, witness=False, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc), reindex=False
+    )
     # The digest is stale relative to the raced-in turn: marker kept.
     assert "2026-07-01" in DaylogState.load(cfg.state_path).dirty_days
 

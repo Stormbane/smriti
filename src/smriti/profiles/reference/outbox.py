@@ -169,7 +169,10 @@ def handle_resolve_outbox(arguments: Arguments) -> str:
     if not file or not item or not resolution:
         raise ToolError("file, item, and resolution are required.")
     if resolution not in ("answered", "deferred", "accepted", "rejected"):
-        raise ToolError(f"resolution must be one of answered|deferred|accepted|rejected (got {resolution!r}).")
+        raise ToolError(
+            "resolution must be one of answered|deferred|accepted|rejected "
+            f"(got {resolution!r})."
+        )
 
     # Strip a trailing .md if the caller passed one.
     if file.endswith(".md"):
@@ -178,7 +181,11 @@ def handle_resolve_outbox(arguments: Arguments) -> str:
     root = tree_root()
     path = root / "outbox" / f"{file}.md"
     if not path.exists():
-        available = sorted(p.stem for p in (root / "outbox").glob("*.md")) if (root / "outbox").exists() else []
+        available = (
+            sorted(p.stem for p in (root / "outbox").glob("*.md"))
+            if (root / "outbox").exists()
+            else []
+        )
         raise ToolError(
             f"outbox file {file!r} not found at {path}. "
             f"Available: {', '.join(available) or '(none)'}."
@@ -308,7 +315,9 @@ TOOLS = (
                 },
                 "source": {
                     "type": "string",
-                    "description": "Optional wikilink or path to the originating thread/concept page.",
+                    "description": (
+                        "Optional wikilink or path to the originating thread/concept page."
+                    ),
                 },
                 "urgency": {
                     "type": "string",
@@ -340,7 +349,9 @@ TOOLS = (
                 },
                 "proposed_change": {
                     "type": "string",
-                    "description": "Concrete suggested change (new goal, modification, retirement).",
+                    "description": (
+                        "Concrete suggested change (new goal, modification, retirement)."
+                    ),
                 },
                 "source": {
                     "type": "string",

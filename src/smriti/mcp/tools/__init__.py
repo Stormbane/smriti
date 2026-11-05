@@ -22,11 +22,12 @@ TOOLS: tuple[Tool, ...] = (*memory.TOOLS, *projects.TOOLS)
 
 
 def active_tools(root: Path | None = None) -> tuple[Tool, ...]:
-    """Every tool for the install at *root*, in ``tools/list`` order: the core's, then the profile's.
+    """Every tool for the install at *root*, in ``tools/list`` order.
 
-    A profile that can't be loaded costs only its own tools: the core's
-    are still served, and the reason goes to the server's log. A profile
-    tool never replaces a core tool of the same name.
+    The core's come first, then the profile's. A profile that can't be
+    loaded costs only its own tools: the core's are still served, and the
+    reason goes to the server's log. A profile tool never replaces a core
+    tool of the same name.
     """
     from smriti.daylog.config import load_config
     from smriti.profiles import ProfileError, load_profile

@@ -97,7 +97,9 @@ def _write_status(cfg: DaylogConfig, result: dict[str, object]) -> None:
         log.warning("morning status not written: %s", exc)
 
 
-def run_morning(cfg: DaylogConfig | None = None, *, now: datetime | None = None) -> dict[str, object]:
+def run_morning(
+    cfg: DaylogConfig | None = None, *, now: datetime | None = None
+) -> dict[str, object]:
     cfg = cfg or load_config()
     now = now or datetime.now(tz=day_tz(cfg.root))
     local_date = now.astimezone(day_tz(cfg.root)).date()

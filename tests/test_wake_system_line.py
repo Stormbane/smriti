@@ -61,7 +61,9 @@ def test_a_broken_report_never_breaks_the_wake(tmp_path: Path) -> None:
 
 
 def test_many_reds_stay_within_the_cap(tmp_path: Path) -> None:
-    _report(tmp_path, [_c(f"check_{i}", "red", f"A long check title number {i}") for i in range(30)])
+    _report(
+        tmp_path, [_c(f"check_{i}", "red", f"A long check title number {i}") for i in range(30)]
+    )
     line = _system_line(tmp_path, NOW)
     assert len(line) <= SYSTEM_LINE_CAP + 1 and line.endswith("… ---\n")
 

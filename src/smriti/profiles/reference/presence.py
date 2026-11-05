@@ -288,7 +288,9 @@ def hands_section(src: WakeSources) -> str:
     if any(has(n) for n in _NOTES_SERVERS):
         lines.append("- Notes (his lists): notes_list, notes_get, and the notes edit tools.")
     elif notes.is_file():
-        lines.append("- Notes (his lists): read brain/notes.json in the memory tree; no notes tool.")
+        lines.append(
+            "- Notes (his lists): read brain/notes.json in the memory tree; no notes tool."
+        )
     if has("smriti"):
         lines.append(
             "- Memory: smriti_read(query) before guessing; smriti_write(content, branch); "

@@ -155,7 +155,9 @@ def handle_write_handoff(arguments: Arguments) -> str:
 
     with handoff_lock(root, wait_s=5.0) as held:
         if not held:
-            raise ToolError("a session is reading the handoff right now; nothing was written. Try again.")
+            raise ToolError(
+                "a session is reading the handoff right now; nothing was written. Try again."
+            )
         try:
             write_atomic(path, fm + body)
         except FileBusy:

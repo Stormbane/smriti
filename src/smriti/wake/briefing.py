@@ -238,7 +238,9 @@ def pending_handoff(memory_root: Path) -> tuple[Path, str] | None:
     return (path, text) if text and text.strip() else None
 
 
-_WRITTEN_RE = re.compile(r"^written:\s*(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})", re.MULTILINE)
+_WRITTEN_RE = re.compile(
+    r"^written:\s*(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})", re.MULTILINE
+)
 
 
 @contextmanager

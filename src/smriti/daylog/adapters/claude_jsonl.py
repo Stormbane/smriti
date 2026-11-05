@@ -7,8 +7,8 @@ transcripts arrive through this same adapter; workdirs containing
 
 Kept: real human turns (type=user, string or text-block content; role
 ``user``) and the agent's text (type=assistant text blocks; role
-``agent``). Dropped: tool calls and results, thinking blocks, ``isMeta`` records, sidechain (subagent)
-records, harness wrapper payloads (``<command-name>``,
+``agent``). Dropped: tool calls and results, thinking blocks, ``isMeta``
+records, sidechain (subagent) records, harness wrapper payloads (``<command-name>``,
 ``<local-command-stdout>``, ``<task-notification>``,
 ``<system-reminder>``), and every non-message record type.
 """

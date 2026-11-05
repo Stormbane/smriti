@@ -213,7 +213,10 @@ def handle_record_finding(arguments: Arguments) -> str:
         from smriti.core.files import edit_lock, write_atomic
 
         idx_path = cp_root / "index.md"
-        idx_line = f"- [[semantic/concepts/cross-project/findings/{_slugify(tags[0])}]] -- {title} ({project}, {date_str})"
+        idx_line = (
+            f"- [[semantic/concepts/cross-project/findings/{_slugify(tags[0])}]]"
+            f" -- {title} ({project}, {date_str})"
+        )
         with edit_lock(idx_path):
             if idx_path.exists():
                 idx_text = idx_path.read_text(encoding="utf-8")
@@ -400,10 +403,14 @@ def handle_update_feature_status(arguments: Arguments) -> str:
 
         # Read, mutate frontmatter
         text = current_path.read_text(encoding="utf-8")
-        text = _re.sub(r"^status:\s*\S+", f"status: {new_status}", text, count=1, flags=_re.MULTILINE)
+        text = _re.sub(
+            r"^status:\s*\S+", f"status: {new_status}", text, count=1, flags=_re.MULTILINE
+        )
         if new_status == "shipped":
             date_str = datetime.now().astimezone().strftime("%Y-%m-%d")
-            text = _re.sub(r"^shipped:\s*\S*", f"shipped: {date_str}", text, count=1, flags=_re.MULTILINE)
+            text = _re.sub(
+                r"^shipped:\s*\S*", f"shipped: {date_str}", text, count=1, flags=_re.MULTILINE
+            )
 
         # Append notes if provided
         if notes:
@@ -413,7 +420,9 @@ def handle_update_feature_status(arguments: Arguments) -> str:
                 else "## Status notes"
             )
             # Replace stub if it's the placeholder; else append
-            stub_re = _re.compile(rf"^{_re.escape(section_title)}\n\n_Filled during build\._", _re.MULTILINE)
+            stub_re = _re.compile(
+                rf"^{_re.escape(section_title)}\n\n_Filled during build\._", _re.MULTILINE
+            )
             if stub_re.search(text):
                 text = stub_re.sub(f"{section_title}\n\n{notes}", text)
             else:
@@ -451,7 +460,9 @@ TOOLS = (
                 },
                 "line": {
                     "type": "string",
-                    "description": "Full markdown task line to append (e.g. '- [ ] **Build X** ...').",
+                    "description": (
+                        "Full markdown task line to append (e.g. '- [ ] **Build X** ...')."
+                    ),
                 },
                 "kind": {
                     "type": "string",
@@ -496,7 +507,10 @@ TOOLS = (
                 "tags": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Concept tags for cross-project rollup (e.g. ['design-pattern', 'prompt-engineering']).",
+                    "description": (
+                        "Concept tags for cross-project rollup "
+                        "(e.g. ['design-pattern', 'prompt-engineering'])."
+                    ),
                 },
                 "source": {
                     "type": "string",
@@ -552,7 +566,10 @@ TOOLS = (
                 "project": {"type": "string"},
                 "slug": {
                     "type": "string",
-                    "description": "Short kebab-case slug, used as filename. Stable for the feature's lifetime.",
+                    "description": (
+                        "Short kebab-case slug, used as filename. "
+                        "Stable for the feature's lifetime."
+                    ),
                 },
                 "title": {"type": "string"},
                 "goal": {
@@ -597,7 +614,9 @@ TOOLS = (
                 },
                 "notes": {
                     "type": "string",
-                    "description": "Implementation notes (for shipped) or rationale (for abandoned).",
+                    "description": (
+                        "Implementation notes (for shipped) or rationale (for abandoned)."
+                    ),
                 },
             },
             "required": ["project", "slug", "new_status"],

@@ -24,7 +24,9 @@ def test_raw_queries_are_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     assert query_fields("debug me")["query"] == "debug me"
 
 
-def test_search_metrics_carry_no_query_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_search_metrics_carry_no_query_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import json
 
     import smriti.metrics as metrics

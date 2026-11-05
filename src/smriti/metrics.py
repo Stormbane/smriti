@@ -120,8 +120,16 @@ class MetricsLogger:
             evt = e.get("event", "unknown")
             by_type[evt] = by_type.get(evt, 0) + 1
 
-            total_tokens_in += e.get("judge_tokens_in", 0) + e.get("executor_tokens_in", 0) + e.get("total_tokens_in", 0)
-            total_tokens_out += e.get("judge_tokens_out", 0) + e.get("executor_tokens_out", 0) + e.get("total_tokens_out", 0)
+            total_tokens_in += (
+                e.get("judge_tokens_in", 0)
+                + e.get("executor_tokens_in", 0)
+                + e.get("total_tokens_in", 0)
+            )
+            total_tokens_out += (
+                e.get("judge_tokens_out", 0)
+                + e.get("executor_tokens_out", 0)
+                + e.get("total_tokens_out", 0)
+            )
             total_cost += e.get("total_cost_usd", 0.0) + e.get("cost_usd", 0.0)
 
             if evt == "search_query":
