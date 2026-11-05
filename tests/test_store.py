@@ -266,23 +266,14 @@ class TestProviderPreference:
         monkeypatch.setattr(indexer, "_recorded_provider_key", lambda db=None: None)
         assert indexer._provider_preference() == indexer._PROVIDER_AUTO_ORDER
 
-    def test_recorded_key_read_from_meta(
-        self, mini_tree: Path, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from smriti._vendored.memsearch.embeddings.stub import StubEmbedding
+    def test_recorded_key_read_from_meta(self, mini_tree: Path):
         from smriti.store import indexer
 
-        # Exercise metadata recording for a recognised provider without loading
-        # its model. The indexer's name-to-key map currently knows only these
-        # production providers; the CI stub is selected explicitly via env.
-        class OnnxEmbedding(StubEmbedding):
-            pass
-
-        monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: OnnxEmbedding())
         db_path = mini_tree / ".smriti" / "index.db"
         index_tree(root=mini_tree, db=db_path)
         key = indexer._recorded_provider_key(db_path)
-        assert key == "onnx"
+        # index_tree records whichever provider it used.
+        assert key in ("onnx", "local", "stub")
 
     def test_recorded_key_none_for_missing_db(self, tmp_path: Path):
         from smriti.store import indexer

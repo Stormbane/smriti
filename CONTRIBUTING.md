@@ -42,10 +42,9 @@ python -m pytest -q --ignore=tests/test_perf.py
 The stub hashes words into normalised 384-dimensional vectors. It tests indexing
 and retrieval plumbing, not semantic similarity. Mark a test `needs_model` only
 when its assertions require semantic quality; the collection hook skips those
-tests when the stub is selected. Keep the override set throughout a stub-index
-test: the indexer's persistent provider-key map currently recognises only ONNX
-and local providers. Use disposable indexes, never a real memory index, for stub
-runs. Offline mode also prevents the optional reranker from downloading a model.
+tests when the stub is selected. An index built with the stub records it, and
+later runs against that index keep using it. Use disposable indexes, never a
+real memory index, for stub runs. Offline mode also prevents the optional reranker from downloading a model.
 
 To exercise the normal model path, unset `SMRITI_EMBED_PROVIDER` and run the same
 pytest command. The selected provider needs its model installed or cached. Unset

@@ -36,17 +36,19 @@ _PROVIDER_AUTO_ORDER = ("onnx", "local")
 
 # Map provider class name → registry key, for recording the selection
 # in the index's meta table (the class doesn't know its registry key).
-_PROVIDER_KEYS = {"OnnxEmbedding": "onnx", "LocalEmbedding": "local"}
+_PROVIDER_KEYS = {"OnnxEmbedding": "onnx", "LocalEmbedding": "local", "StubEmbedding": "stub"}
 
 
 def provider_key(provider: object) -> str | None:
-    """Registry key ("onnx"/"local") for a provider instance, if known."""
+    """Registry key ("onnx"/"local"/"stub") for a provider instance, if known."""
     return _PROVIDER_KEYS.get(type(provider).__name__)
 
 
 def _provider_for_model(model: str) -> str | None:
     """Legacy inference: which registry provider serves this model name."""
     name = model.lower()
+    if name.startswith("stub-"):
+        return "stub"
     if "bge-m3" in name:
         return "onnx"
     if "minilm" in name or "mpnet" in name or "sentence-transformers" in name:

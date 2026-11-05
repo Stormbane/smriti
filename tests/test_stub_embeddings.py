@@ -67,3 +67,10 @@ def test_environment_selects_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = indexer._get_embedding_provider.__wrapped__()
     assert provider.model_name == "stub-384"
     assert provider.dimension == 384
+
+
+def test_an_index_built_with_the_stub_remembers_it() -> None:
+    from smriti.store import indexer
+
+    assert indexer.provider_key(get_provider("stub")) == "stub"
+    assert indexer._provider_for_model("stub-384") == "stub"
