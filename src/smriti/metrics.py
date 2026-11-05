@@ -15,8 +15,10 @@ Usage::
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -175,6 +177,22 @@ class MetricsLogger:
 
 
 # ── Singleton ────────────────────────────────────────────────────────
+
+def query_fields(query: str) -> dict[str, Any]:
+    """How a search query is recorded: a short hash and its length, not its text.
+
+    A query can carry anything an agent was asked or read, and these logs
+    live inside the memory tree. Set ``SMRITI_LOG_QUERIES=1`` to record the
+    text as well, for local retrieval analysis.
+    """
+    fields: dict[str, Any] = {
+        "query_sha": hashlib.sha1(query.encode("utf-8")).hexdigest()[:12],
+        "query_len": len(query),
+    }
+    if os.environ.get("SMRITI_LOG_QUERIES", "") == "1":
+        fields["query"] = query
+    return fields
+
 
 _instance: MetricsLogger | None = None
 

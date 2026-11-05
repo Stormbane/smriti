@@ -8,7 +8,8 @@ Called from:
   - smriti wake          -> --push
   - smriti_write path    -> (commit only)
 
-Content is git-crypt encrypted; commit messages are NOT. Keep tags generic
+If the repo uses git-crypt (recommended; the installer doesn't set it up),
+content is encrypted but commit messages are NOT. Keep tags generic
 (session-end / sleep / wake / write) so metadata leaks nothing.
 
 Best-effort: failures exit 0 and the next trigger catches up. Every outcome

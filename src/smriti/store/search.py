@@ -299,8 +299,8 @@ def search(
                         chunk_id=cand["chunk_id"],
                     )
                 )
-            from smriti.metrics import get_logger
-            get_logger().log("search_query", query=query, query_len=len(query), vec_candidates=len(vec_scores), fts_candidates=len(fts_scores), final_results=len(results), reranked=True, elapsed_ms=int((_time.monotonic() - t0) * 1000), top_score=results[0].score if results else 0, top_source=results[0].source if results else "")
+            from smriti.metrics import get_logger, query_fields
+            get_logger().log("search_query", **query_fields(query), vec_candidates=len(vec_scores), fts_candidates=len(fts_scores), final_results=len(results), reranked=True, elapsed_ms=int((_time.monotonic() - t0) * 1000), top_score=results[0].score if results else 0, top_source=results[0].source if results else "")
             return results[:top_k]
         except Exception as exc:
             log.debug("Reranker not available, using combined score: %s", exc)
@@ -318,6 +318,6 @@ def search(
                 chunk_id=cand["chunk_id"],
             )
         )
-    from smriti.metrics import get_logger
-    get_logger().log("search_query", query=query, query_len=len(query), vec_candidates=len(vec_scores), fts_candidates=len(fts_scores), final_results=len(results), reranked=False, elapsed_ms=int((_time.monotonic() - t0) * 1000), top_score=results[0].score if results else 0, top_source=results[0].source if results else "")
+    from smriti.metrics import get_logger, query_fields
+    get_logger().log("search_query", **query_fields(query), vec_candidates=len(vec_scores), fts_candidates=len(fts_scores), final_results=len(results), reranked=False, elapsed_ms=int((_time.monotonic() - t0) * 1000), top_score=results[0].score if results else 0, top_source=results[0].source if results else "")
     return results

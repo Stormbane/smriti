@@ -6,6 +6,7 @@ import json
 import time
 from pathlib import Path
 
+from smriti.metrics import query_fields
 from smriti.recall.config import RecallConfig, load_config
 from smriti.recall.types import RecallResponse
 
@@ -63,7 +64,7 @@ def run_recall(
 
     entry: dict = {
         "ts": time.time(),
-        "query": query,
+        **query_fields(query),
         "elapsed_ms": response.elapsed_ms,
         "backend": response.backend,
         "match_count_total": len(response.matches),

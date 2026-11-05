@@ -1,0 +1,28 @@
+# smriti runtime state. It is rebuilt or regenerated, churns on every
+# session, and some of it holds raw text, so it doesn't belong in a memory
+# backup. The memory itself (identity, mind, journal, people, projects,
+# notes, digests and rollups under log/) is what gets committed.
+
+# Search index (rebuilt by `smriti index`) and SQLite side files.
+.smriti/index.db
+.smriti/index.db-*
+*.db-wal
+*.db-shm
+
+# Telemetry and logs.
+.smriti/metrics.jsonl
+.smriti/recall.jsonl
+.smriti/last-activity
+.smriti/llm-workdir/
+
+# The parked pipeline's task queue.
+.smriti/queue.json
+
+# Day-log daemon state and locks.
+log/.state.json
+log/*.lock
+log/.gen/
+
+# The private store's key never leaves this machine; back it up yourself.
+# (private/.gitignore says the same, as a second line of defence.)
+private/.key

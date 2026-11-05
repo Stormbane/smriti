@@ -30,7 +30,8 @@ def trigger(
     ----------
     tag:
         Short label for the commit message (e.g. "write", "sleep-start").
-        Content is encrypted; tags are not. Keep them generic.
+        Commit messages are never encrypted (even with git-crypt, which
+        the installer doesn't set up), so keep tags generic.
     push:
         If True, also push to origin after committing.
     root:
