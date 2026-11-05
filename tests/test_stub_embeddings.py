@@ -64,7 +64,7 @@ def test_environment_selects_stub(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setenv("SMRITI_EMBED_PROVIDER", "stub")
     # Bypass the cache without disturbing the provider used by other tests.
-    provider = indexer._get_embedding_provider.__wrapped__()
+    provider = indexer._local_provider.__wrapped__()
     assert provider.model_name == "stub-384"
     assert provider.dimension == 384
 

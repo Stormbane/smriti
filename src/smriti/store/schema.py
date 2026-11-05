@@ -19,7 +19,15 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+# 3: sources.vectors (a source whose vectors are pending) and the embedding
+# identity in meta (smriti.embed.identity).
+SCHEMA_VERSION = 3
+
+# The size chunks_vec gets when it must exist before any vector does (a first
+# write whose vectors are pending). The first vectors resize it to their own
+# (smriti.embed.identity.bind_identity), so nothing is ever stored at this size
+# unless that is the model's.
+_PLACEHOLDER_DIM = 384
 
 
 @dataclass
@@ -108,7 +116,7 @@ def open_readonly(db_path: Path) -> IndexDB:
 
 def ensure_schema(
     db_path: Path,
-    dimension: int,
+    dimension: int | None,
 ) -> IndexDB:
     """Open (or create) the index database and ensure all tables exist.
 
@@ -119,7 +127,9 @@ def ensure_schema(
         automatically.
     dimension:
         Embedding vector dimension (set at schema creation time; changing it
-        requires a full re-index).
+        requires a full re-index). None when the caller has no vectors to
+        write (their embedding failed): nothing is recorded, and the first
+        vectors set the size.
 
     Returns
     -------
@@ -159,7 +169,7 @@ def ensure_schema(
 
 def _ensure_schema_inner(
     conn: sqlite3.Connection,
-    dimension: int,
+    dimension: int | None,
 ) -> IndexDB:
 
     has_vec = _load_sqlite_vec(conn)
@@ -205,17 +215,27 @@ def _ensure_schema_inner(
     # The incremental index skips a file only while its mtime and size
     # still match. (Comparing mtime with the time of indexing missed an
     # edit made while a run was embedding: its mtime predated the run.)
+    # vectors = 0: the source's chunks are indexed for keyword search but
+    # their vectors are pending (the embedder was unavailable); repairs fill
+    # them in. Writers from before the column existed always embedded, so
+    # its default, for their rows and theirs to come, is 1.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sources (
             source   TEXT PRIMARY KEY,
             mtime_ns INTEGER NOT NULL,
-            size     INTEGER NOT NULL
+            size     INTEGER NOT NULL,
+            vectors  INTEGER NOT NULL DEFAULT 1
         )
     """)
+    _add_sources_vectors(conn)
     conn.execute(
-        "INSERT OR IGNORE INTO meta (key, value) VALUES ('dimension', ?)",
-        (str(dimension),),
+        "CREATE INDEX IF NOT EXISTS idx_sources_pending ON sources (source) WHERE vectors = 0"
     )
+    if dimension is not None:
+        conn.execute(
+            "INSERT OR IGNORE INTO meta (key, value) VALUES ('dimension', ?)",
+            (str(dimension),),
+        )
 
     # ── FTS5 ─────────────────────────────────────────────────────────
     if has_fts:
@@ -258,15 +278,45 @@ def _ensure_schema_inner(
 
     # ── sqlite-vec ───────────────────────────────────────────────────
     if has_vec:
+        size = dimension if dimension is not None else _recorded_dimension(conn)
         conn.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
-                embedding float[{dimension}]
+                embedding float[{size}]
             )
         """)
-        log.info("sqlite-vec enabled (dimension=%d)", dimension)
+        log.info("sqlite-vec enabled (dimension=%d)", size)
     else:
         log.warning("sqlite-vec not available — vector search disabled")
 
     conn.commit()
 
     return IndexDB(conn=conn, has_vec=has_vec, has_fts=has_fts)
+
+
+def _add_sources_vectors(conn: sqlite3.Connection) -> None:
+    """Migrate a schema-2 ``sources`` table: add ``vectors``, every existing source having them."""
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(sources)").fetchall()}
+    if "vectors" in columns:
+        return
+    try:
+        conn.execute("ALTER TABLE sources ADD COLUMN vectors INTEGER NOT NULL DEFAULT 1")
+    except sqlite3.OperationalError as exc:
+        # Another process migrated it between the check and the ALTER.
+        if "duplicate column" not in str(exc).lower():
+            raise
+
+
+def _recorded_dimension(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT value FROM meta WHERE key = 'dimension'").fetchone()
+    try:
+        return int(row[0]) if row and row[0] else _PLACEHOLDER_DIM
+    except ValueError:
+        return _PLACEHOLDER_DIM
+
+
+def pending_vectors(conn: IndexDB | sqlite3.Connection) -> int:
+    """How many sources have their vectors pending (0 for an index from before the column)."""
+    try:
+        return int(conn.execute("SELECT COUNT(*) FROM sources WHERE vectors = 0").fetchone()[0])
+    except sqlite3.OperationalError:  # no sources table or no vectors column yet
+        return 0

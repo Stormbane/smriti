@@ -1,7 +1,9 @@
 """Search the smriti index with hybrid vector + keyword retrieval.
 
 The search flow:
-1. Embed the query with the same provider used for indexing.
+1. Embed the query with the same provider used for indexing; the embedding's
+   identity is checked against the index's in the snapshot the vectors are
+   read from (otherwise the search is keyword-only, and says why).
 2. Vector search via sqlite-vec (top-k by cosine distance).
 3. Keyword search via FTS5 (top-k by BM25 rank).
 4. Merge and deduplicate both result sets.
@@ -12,10 +14,11 @@ The search flow:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import sqlite3
 import struct
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TypedDict
 
@@ -48,6 +51,14 @@ class _Candidate(TypedDict):
     content: str
     trunk_distance: int
     chunk_id: str
+
+
+@dataclass
+class SearchOutcome:
+    """The results, and why the search was by keyword only when vectors were wanted."""
+
+    results: list[SearchResult]
+    keyword_only: str = ""  # the reason; "" when the vector leg ran (or wasn't asked for)
 
 
 def _serialize_f32(vec: list[float]) -> bytes:
@@ -150,6 +161,73 @@ def _vocab_table(conn: IndexDB | sqlite3.Connection) -> str | None:
         return None
 
 
+@contextmanager
+def _snapshot(conn: IndexDB) -> Iterator[None]:
+    """One read transaction: every read inside sees the same state of the index."""
+    raw = getattr(conn, "conn", None)
+    if not isinstance(raw, sqlite3.Connection) or raw.in_transaction:
+        yield
+        return
+    raw.execute("BEGIN")
+    try:
+        yield
+    finally:
+        raw.commit()
+
+
+def _fetch_candidate(conn: IndexDB, rowid: int) -> _Candidate | None:
+    row = conn.execute(
+        "SELECT id, source, heading, content, trunk_distance FROM chunks WHERE rowid = ?",
+        (rowid,),
+    ).fetchone()
+    if not row:
+        return None
+    return {"chunk_id": row[0], "source": row[1], "heading": row[2], "content": row[3],
+            "trunk_distance": row[4]}
+
+
+def _vector_leg(conn: IndexDB, query: str, candidate_k: int,
+                scores: dict[int, float], candidates: dict[int, _Candidate]) -> str:
+    """Fill ``scores`` and ``candidates`` from the vectors; return why not, or "".
+
+    The query's embedding carries the identity that made it, and it is
+    compared with the identity the index records in the same snapshot the
+    vectors are then read from: vectors of two models are never compared.
+    A mismatch is stale work (the model loaded here, or the service, came
+    before a migration): it is tried once more on a fresh embedding.
+    """
+    from smriti.embed.identity import recorded_identity, vec_table_dimension
+    from smriti.store.indexer import _embed, _forget_provider, _get_embedding_provider
+
+    mismatch = ""
+    for _attempt in range(2):
+        embedded = _embed(_get_embedding_provider(), [query], "query")
+        with _snapshot(conn):
+            recorded = recorded_identity(conn)
+            if recorded is not None and not recorded.compatible(embedded.identity):
+                mismatch = (f"the query was embedded with {embedded.identity.describe()}, "
+                            f"the index with {recorded.describe()}")
+            elif vec_table_dimension(conn) is None:
+                return "the index has no vectors yet"
+            else:
+                rows = conn.execute(
+                    """SELECT rowid, distance
+                       FROM chunks_vec
+                       WHERE embedding MATCH ?
+                       AND k = ?""",
+                    (_serialize_f32(embedded.vectors[0]), candidate_k),
+                ).fetchall()
+                normed = _normalize([1.0 - r[1] for r in rows])  # lower distance = higher
+                for (rowid, _), ns in zip(rows, normed, strict=True):
+                    scores[rowid] = ns
+                    cand = _fetch_candidate(conn, rowid)
+                    if cand is not None:
+                        candidates[rowid] = cand
+                return ""
+        _forget_provider()
+    return f"embedding identity mismatch: {mismatch}"
+
+
 def search(
     conn: IndexDB,
     query: str,
@@ -159,7 +237,21 @@ def search(
     use_reranker: bool = True,
     use_vectors: bool = True,
 ) -> list[SearchResult]:
-    """Search the index for chunks matching *query*.
+    """Search the index for chunks matching *query* (see :func:`search_with_status`)."""
+    return search_with_status(conn, query, top_k=top_k, candidate_k=candidate_k,
+                              use_reranker=use_reranker, use_vectors=use_vectors).results
+
+
+def search_with_status(
+    conn: IndexDB,
+    query: str,
+    *,
+    top_k: int = 5,
+    candidate_k: int = 20,
+    use_reranker: bool = True,
+    use_vectors: bool = True,
+) -> SearchOutcome:
+    """Search the index for chunks matching *query*, saying when it was keyword-only.
 
     Parameters
     ----------
@@ -182,49 +274,25 @@ def search(
     import time as _time
     t0 = _time.monotonic()
 
-    from smriti.store.indexer import _get_embedding_provider
-
     candidates: dict[int, _Candidate] = {}  # rowid → {source, heading, content, ...}
 
     # ── Vector search ────────────────────────────────────────────────
     has_vec = conn.has_vec and use_vectors
+    keyword_only = "" if has_vec or not use_vectors else "sqlite-vec is not available"
     vec_scores: dict[int, float] = {}
 
     if has_vec:
+        from smriti.store.indexer import _reason
+
         try:
-            provider = _get_embedding_provider()
-            q_embedding = asyncio.run(provider.embed([query]))[0]
-            rows = conn.execute(
-                """SELECT rowid, distance
-                   FROM chunks_vec
-                   WHERE embedding MATCH ?
-                   AND k = ?""",
-                (_serialize_f32(q_embedding), candidate_k),
-            ).fetchall()
-            if rows:
-                raw = [r[1] for r in rows]
-                normed = _normalize([1.0 - d for d in raw])  # lower distance = higher score
-                for (rowid, _), ns in zip(rows, normed, strict=True):
-                    vec_scores[rowid] = ns
-                    if rowid not in candidates:
-                        row = conn.execute(
-                            """SELECT id, source, heading, content, trunk_distance
-                               FROM chunks WHERE rowid = ?""",
-                            (rowid,),
-                        ).fetchone()
-                        if row:
-                            candidates[rowid] = {
-                                "chunk_id": row[0],
-                                "source": row[1],
-                                "heading": row[2],
-                                "content": row[3],
-                                "trunk_distance": row[4],
-                            }
-        except Exception as exc:  # noqa: BLE001 — logged; falls back to keyword-only
+            keyword_only = _vector_leg(conn, query, candidate_k, vec_scores, candidates)
+        except Exception as exc:  # noqa: BLE001 — logged and reported; falls back to keywords
+            log.warning("Vector search failed; searching by keyword only: %s", exc)
+            keyword_only = _reason(exc)
+        if keyword_only:
             # Fall back to exactly a keyword-only search: without this the
             # vector weight stayed in the sum with nothing behind it, and
             # every score silently lost half its range.
-            log.warning("Vector search failed; searching by keyword only: %s", exc)
             has_vec = False
             vec_scores.clear()
             candidates.clear()
@@ -276,7 +344,7 @@ def search(
             log.warning("FTS search failed: %s", exc)
 
     if not candidates:
-        return []
+        return SearchOutcome([], keyword_only)
 
     # ── Combined scoring ─────────────────────────────────────────────
     scored: list[tuple[int, float, _Candidate]] = []
@@ -324,11 +392,12 @@ def search(
                 fts_candidates=len(fts_scores),
                 final_results=len(results),
                 reranked=True,
+                keyword_only=bool(keyword_only),
                 elapsed_ms=int((_time.monotonic() - t0) * 1000),
                 top_score=results[0].score if results else 0,
                 top_source=results[0].source if results else "",
             )
-            return results[:top_k]
+            return SearchOutcome(results[:top_k], keyword_only)
         except Exception as exc:  # noqa: BLE001 — logged; the combined scores stand
             log.warning("Reranker failed; using the combined score: %s", exc)
 
@@ -353,8 +422,9 @@ def search(
         fts_candidates=len(fts_scores),
         final_results=len(results),
         reranked=False,
+        keyword_only=bool(keyword_only),
         elapsed_ms=int((_time.monotonic() - t0) * 1000),
         top_score=results[0].score if results else 0,
         top_source=results[0].source if results else "",
     )
-    return results
+    return SearchOutcome(results, keyword_only)
