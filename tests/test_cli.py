@@ -38,6 +38,27 @@ def test_read_works_while_a_writer_holds_the_index(
     assert "notes/lantern.md" in capsys.readouterr().out
 
 
+def test_status_opens_the_index_read_only(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """H11.5: `smriti status` opened the index with a plain, writable connection."""
+    from smriti.store.schema import ensure_schema
+
+    db = tree_root() / ".smriti" / "index.db"
+    ensure_schema(db, None).close()  # an index with nothing in it: no model needed
+    opened: list[str] = []
+    connect = sqlite3.connect
+
+    def spy(database: str, *args: object, **kwargs: object) -> sqlite3.Connection:
+        opened.append(str(database))
+        return connect(database, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sqlite3, "connect", spy)
+    assert cli.main(["status"]) == 0
+    assert opened and all(d.startswith("file:") and d.endswith("?mode=ro") for d in opened), \
+        opened
+    assert "Chunks:     0" in capsys.readouterr().out
+
+
 def test_a_failing_command_prints_one_line_and_exits_1(
         monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     def boom(args: object) -> int:

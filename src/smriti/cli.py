@@ -114,9 +114,8 @@ def _cmd_write(args: argparse.Namespace) -> int:
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
-    import sqlite3
-
     from smriti.core.tree import smriti_db_path, tree_root
+    from smriti.store.schema import open_readonly, pending_vectors
 
     db_path = smriti_db_path()
     root = tree_root()
@@ -128,23 +127,25 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print("Status:     Not indexed (run 'smriti index')")
         return 0
 
-    conn = sqlite3.connect(str(db_path))
-    chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-    source_count = conn.execute("SELECT COUNT(DISTINCT source) FROM chunks").fetchone()[0]
+    # Read-only, like smriti read and the MCP server: a status check has no
+    # business opening the index for writing, where it could hold up a writer.
+    conn = open_readonly(db_path)
+    try:
+        chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        source_count = conn.execute("SELECT COUNT(DISTINCT source) FROM chunks").fetchone()[0]
 
-    model_row = conn.execute("SELECT value FROM meta WHERE key = 'model'").fetchone()
-    model = model_row[0] if model_row else "unknown"
+        model_row = conn.execute("SELECT value FROM meta WHERE key = 'model'").fetchone()
+        model = model_row[0] if model_row else "unknown"
 
-    dim_row = conn.execute("SELECT value FROM meta WHERE key = 'dimension'").fetchone()
-    dim = dim_row[0] if dim_row else "unknown"
+        dim_row = conn.execute("SELECT value FROM meta WHERE key = 'dimension'").fetchone()
+        dim = dim_row[0] if dim_row else "unknown"
 
-    last_row = conn.execute("SELECT value FROM meta WHERE key = 'last_indexed'").fetchone()
-    last = last_row[0] if last_row else "never"
+        last_row = conn.execute("SELECT value FROM meta WHERE key = 'last_indexed'").fetchone()
+        last = last_row[0] if last_row else "never"
 
-    from smriti.store.schema import pending_vectors
-
-    pending = pending_vectors(conn)
-    conn.close()
+        pending = pending_vectors(conn)
+    finally:
+        conn.close()
 
     print(f"Files:      {source_count}")
     print(f"Chunks:     {chunk_count}")
