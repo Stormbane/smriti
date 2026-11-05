@@ -19,8 +19,22 @@ The package version remains 0.1.0; subsequent development is unreleased.
 - A wake briefing library, archived session handoffs, and an explanation of the
   self model in `docs/SELF.md`.
 
+### Removed
+
+- The parked deep-sleep pipeline (cognitive cascade, JUDGE, ingest and routing,
+  consolidation, threads, actionables, journal rollups, the wake-context rebuild),
+  its task queue, file watcher and daemon, and the `sleep`, `queue`, `daemon`,
+  `watch`, `ingest` and `merge-concepts` commands. `smriti eval` keeps its search
+  cases. The code is in the git history.
+
 ### Changed
 
+- The MCP server is a package, `smriti.mcp`: a `Tool` table in place of an
+  if/elif chain, and one error model (a handler raises `ToolError`; every failure
+  is an `isError` result). `python -m smriti.mcp_server` still works.
+- A long day is digested in up to four time-ordered parts and a merge call, and
+  any cut is recorded in the prompts and the digest's frontmatter.
+- `index.md` upkeep after a write lives in `smriti.store.index_pages`.
 - Evaluation uses a packaged synthetic corpus in a disposable sandbox; tests
   isolate memory roots and metrics from the real tree.
 - Documentation describes current behaviour, distinguishes parked pipelines, and
@@ -46,6 +60,15 @@ The package version remains 0.1.0; subsequent development is unreleased.
   provider selection for existing indexes, read-only SQLite access, and index
   transaction cleanup after failures.
 - Yearly rollup input budgeting and isolation of internal Claude CLI calls.
+- Concurrency: the day-log writer lock, the MCP read-modify-write handlers,
+  `index.md` upkeep and journal appends hold OS-level locks; the witness clears a
+  git lock only when no git runs; the incremental index tracks each source's
+  mtime and size as read; a full re-index commits in one transaction; and a
+  writer's read replaces another's only when it is the file as it is now.
+- Same-day, same-title findings and decisions no longer overwrite each other.
+- A failed index run reports its real error (the wrapper had no `rollback`).
+- A malformed MCP message gets an error instead of ending the server.
+- Session channels are named correctly from a cwd of any platform.
 
 ## [0.1.0] - 2026-04-15
 

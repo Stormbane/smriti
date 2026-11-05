@@ -80,6 +80,28 @@ New P1/P2 findings become H9.
 
 ## Status
 
-Updated as phases land.
+Updated as phases land. Each phase had a Codex diff review, fixes for every
+substantiated finding with a regression test that fails without the fix, and
+a recheck.
 
-- H1: in progress
+- **H1 done** (2026-11-05). Review: four rounds, four real findings, all in
+  the index's concurrency (a full run's deferred delete wiped concurrent
+  writes; a later commit is not a later read, twice; index_file writes out
+  of order). The rule that held: a read wins only when it is the file as it
+  is now. Writing the tests also found `IndexDB.rollback` missing, which had
+  hidden every failed index run's real error.
+- **H2 done** (2026-11-05; Codex implemented, Claude reviewed). CI's first
+  runs found what the development machine hid: ruff's default rule set
+  changing between releases (now stated and pinned), an undeclared
+  `watchdog`, Windows-only path parsing in the capture adapters, a
+  newline-shaped test bound, and macOS's sqlite3 unable to load sqlite-vec.
+  Green on all six jobs since.
+- **H3 done** (2026-11-05). `cli.py` 1,670 → 581 lines; the package 22k →
+  15k. Review: no findings. prana's dormant heartbeat still calls the removed
+  `smriti ingest` and `smriti sleep`; nothing runs it.
+- **H4 done** (2026-11-05). Review: one finding (a malformed tool name ended
+  the server), fixed; recheck clean.
+- **H5**: next.
+- **H6 done** (2026-11-05). Review: an unbounded marker trailer, then a lone
+  `\r` that let a heading in the last turn pose as the trailer; both fixed.
+- **H7, H8**: after H5.
