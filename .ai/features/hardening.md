@@ -400,7 +400,7 @@ a recheck.
   stack's stubs reached through huggingface_hub. Left for H11: during a cold start
   each search waits its full 3 s before falling back; it should fall back at once
   while the service says it is starting.
-- **H11**: in progress. Done: H11.1-H11.5, H11.9, H11.10. Next: H11.6, H11.7, H11.8.
+- **H11**: in progress. Done: H11.1-H11.7, H11.9, H11.10. Next: H11.8.
 - **H11.1, H11.5, H11.10 done** (2026-11-06, merged at `498ce0e` after a Codex diff
   review; its two findings, the capture override and the metrics scrub, fixed). Capture is off unless `daylog.json` says
   `"capture": true` (the default sources; the installer's `--capture` writes it) or
@@ -464,8 +464,18 @@ a recheck.
   `XDG_RUNTIME_DIR` (cron) resolves another, which the old file still covers for
   now. Old/new process contention tests for `edit_lock` and the writer lock fail
   against a plain move.
-- **H11.6 implemented** (2026-11-06, branch `hardening/h11d`; the Codex diff review
-  is still to come). The reference profile is `smriti-reference` in
-  `profiles/reference/`, loaded by entry point; smriti's wheel has none of it, and
-  the core's suite passes without it installed. The default root is `~/.smriti`,
-  with an existing `~/.narada` kept; `smriti status` names the rule.
+- **H11.6 done** (2026-11-06, merged at `a6c24c0`; Codex diff review, no findings).
+  The reference profile is `smriti-reference` in
+  `profiles/reference/`, loaded by entry point; smriti's wheel has none of it (a CI
+  step builds the wheel and checks), and the core's suite passes without it
+  installed. The default root is `~/.smriti`, with an existing `~/.narada` kept;
+  `smriti status` names the rule. Merge review: reading the entry points cost
+  145 ms a call in a 683-package environment, on every MCP request; they are now
+  read once per process, and again before a profile is reported missing. The
+  reference install switched over with its tools, wake sections and morning prompt
+  unchanged (compared before and after; three core descriptions now say `<root>`).
+- **H11.7 done** (2026-11-06). `v0.2.0` tagged at `ddf907b` and published as a
+  GitHub pre-release; the changelog gained the H11 changes it lacked; README and
+  PRIVACY.md disclose the model download (`gpahal/bge-m3-onnx-int8`, about 560 MB),
+  `HF_HUB_OFFLINE`, and the other network requests; PRIVACY.md's phases no longer
+  name the releases that would carry them.
