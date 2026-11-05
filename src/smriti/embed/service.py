@@ -523,12 +523,13 @@ def serve(root: Path, *, idle_s: float | None = None) -> int:
     # The first wait is short but not zero: a client recovering from a dead
     # service holds the lock for a moment (client._recover), and a starter
     # must not lose to that and leave no service at all.
-    for wait_s in (1.0, DRAIN_WAIT_S + 5.0):
+    # The second, longer attempt is only for waiting out a draining holder.
+    for attempt, wait_s in enumerate((1.0, DRAIN_WAIT_S + 5.0)):
         with exclusive_lock(paths.lock, wait_s=wait_s) as held:
             if held:
                 return _serve_locked(paths, key, idle_s)
         current = read_discovery(paths)
-        if wait_s or current is None or current.state != "draining":
+        if attempt > 0 or current is None or current.state != "draining":
             log.info("an embedding service for %s is already running", paths.root)
             return 0
     return 0

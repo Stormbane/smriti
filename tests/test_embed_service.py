@@ -863,6 +863,43 @@ def test_an_unreachable_service_that_holds_its_lock_is_left_alone(root: Path) ->
     assert found is not None and found.instance == "alive-but-busy" and started == []
 
 
+def test_a_replacement_waits_out_a_drain_longer_than_a_second(
+        root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex recheck of H10, P2: once the first lock attempt waited 1 s, `if wait_s`
+    was true on it, so a replacement gave up instead of waiting for a predecessor
+    that took longer than a second to drain."""
+    import smriti.embed.service as service
+    from smriti.core.oslock import exclusive_lock
+    from smriti.embed.runtime import Discovery, service_paths, write_discovery
+
+    paths = service_paths(runtime_dir(), root)
+    paths.lock.parent.mkdir(parents=True, exist_ok=True)
+    served: list[float] = []
+    monkeypatch.setattr(service, "_serve_locked",
+                        lambda *a, **k: served.append(time.monotonic()) or 0)
+    holding, release = threading.Event(), threading.Event()
+
+    def draining_predecessor() -> None:
+        with exclusive_lock(paths.lock, wait_s=5) as held:
+            assert held
+            write_discovery(paths, Discovery(pid=os.getpid(), state="draining",
+                                             instance="old"))
+            holding.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=draining_predecessor)
+    holder.start()
+    assert holding.wait(5)
+    threading.Timer(2.5, release.set).start()  # drains for longer than the first wait
+    t0 = time.monotonic()
+    try:
+        assert service.serve(root) == 0
+    finally:
+        release.set()
+        holder.join(10)
+    assert served and served[0] - t0 >= 2.0  # it waited, then took over
+
+
 def test_stop_reaches_a_service_that_was_still_starting(root: Path) -> None:
     """Codex review of H10, P2: `smriti embed stop` during the model load found the
     service "starting", sent no stop, and only watched the pid: the service came
@@ -881,6 +918,12 @@ def test_stop_reaches_a_service_that_was_still_starting(root: Path) -> None:
     proc = subprocess.Popen([sys.executable, "-c", slow_start, str(root)],
                             env=_service_env(runtime), stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL)
+    # Reap the child as soon as it exits, as a real parent would: on POSIX an
+    # unreaped child stays a zombie, which counts as alive, and stop_service
+    # would wait for it in vain.
+    exit_codes: list[int] = []
+    reaper = threading.Thread(target=lambda: exit_codes.append(proc.wait()), daemon=True)
+    reaper.start()
     try:
         paths = service_paths(runtime, root)
         assert _wait(lambda: (d := read_discovery(paths)) is not None
@@ -888,7 +931,8 @@ def test_stop_reaches_a_service_that_was_still_starting(root: Path) -> None:
         t0 = time.monotonic()
         outcome = stop_service(root, wait_s=20)
         assert outcome == f"stopped (pid {proc.pid})", outcome
-        assert proc.wait(10) == 0 and time.monotonic() - t0 < 15
+        reaper.join(10)
+        assert exit_codes == [0] and time.monotonic() - t0 < 15
         assert read_discovery(paths) is None
     finally:
         _kill([proc])
