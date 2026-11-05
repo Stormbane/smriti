@@ -7,7 +7,9 @@ from unittest.mock import patch
 
 import pytest
 
-from smriti.watcher import _on_change
+pytest.importorskip("watchdog")  # the parked watcher's dependency is in no extra
+
+from smriti.watcher import _on_change  # noqa: E402
 
 
 @pytest.fixture()
