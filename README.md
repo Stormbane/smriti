@@ -1,4 +1,5 @@
 # smriti
+[![CI](https://github.com/Stormbane/smriti/actions/workflows/ci.yml/badge.svg)](https://github.com/Stormbane/smriti/actions/workflows/ci.yml)
 
 *smṛti*, Sanskrit: "that which is remembered".
 
