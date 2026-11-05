@@ -302,6 +302,7 @@ rejection sound (66 sessions at 250 MB is still about 16.5 GB).
 | H11.6 | The reference profile moves out of the wheel into its own package (`smriti-reference`, or a plugin directory); the default root is neutral (`~/.smriti`) with `~/.narada` honoured where it exists. | A fresh install has no reference code; the reference install is unchanged. |
 | H11.7 | Release: tag `v0.2.0` with the changelog; the `read` extra's model download is disclosed (and `HF_HUB_OFFLINE` documented). | A tagged release. |
 | H11.8 | Outside review #5. | Grades recorded. |
+| H11.10 | A search falls back to keyword-only at once while the embedding service reports "starting", instead of waiting out its 3 s deadline on every query during a cold start. | A test with a starting service. |
 | H11.9 | `oslock`'s lock files move from the shared temp directory to the private per-user runtime directory (H10), through a transition that holds both the old and the new lock until no process with the old code can be running. | An old/new-process contention test for `edit_lock` and the day-log writer lock. |
 
 ## Status
@@ -352,22 +353,13 @@ a recheck.
   version from the development machine's.
 - **H9.12 done**: outside review #4 at `f1319a1`, Opus B (was B-), Sonnet B+ (was B).
   The findings are H11.
-- **H10.0-H10.3 and H10.5 implemented** (2026-11-05, branch `hardening/h10-embed`;
-  H10.4 was dropped for H11.9). Codex diff review: three P2 findings, each fixed
-  with a regression test that fails without it (a write made without sqlite-vec
-  was recorded as having vectors, so no repair ever filled it; a crashed
-  service whose pid still probed alive, a zombie or a reused pid, was knocked on
-  twice and never replaced; `smriti embed stop` during the model load never
-  sent the stop); the recheck is to come. An MCP
-  server with the service on measured 42-44 MB after searches and writes, with
-  no torch, onnxruntime or provider module loaded, against 1,028 MB before.
-  Choices the plan left open: the identity's revision is the hub snapshot hash
-  (blank, so unchecked, where a provider doesn't load from the hub); a blank
-  field matches anything; the service prefers the index's recorded provider to
-  `SMRITI_EMBED_PROVIDER`; Windows relies on the profile's ACLs, not an owner
-  check; one start per root every 10 s; a failed start is reported for 30 s
-  before another is tried. Found on the way and fixed: two writers creating a
-  new index failed one with "database is locked" (the WAL switch), and a
-  Windows sharing violation reading the key as another process renamed it into
-  place.
+- **H10 done** (2026-11-05). Live: an MCP server is 42 MB after searches (was
+  1,028 MB); one shared service holds the model (1,029 MB); a search with the model
+  warm takes 0.18 s. Cross-review: two plan rounds (nine findings, all accepted, one
+  differently; the ONNX benchmark kept as sizing), then a diff review (three P2s)
+  and a recheck (a P1 test that could only fail on POSIX, a P2 drain-wait slip), all
+  fixed with tests; CI on Linux then caught zombies counted as alive and the ML
+  stack's stubs reached through huggingface_hub. Left for H11: during a cold start
+  each search waits its full 3 s before falling back; it should fall back at once
+  while the service says it is starting.
 - **H11**: planned, after H10.
