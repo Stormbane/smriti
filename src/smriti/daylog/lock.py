@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -33,7 +34,7 @@ def _pid_alive(pid: int) -> bool:
         return bool(psutil.pid_exists(pid))
     except ImportError:
         pass
-    if os.name == "nt":
+    if sys.platform == "win32":  # sys.platform, so type checkers narrow it on every OS
         # Not os.kill(pid, 0): on Windows signal 0 is CTRL_C_EVENT, which
         # interrupts the target's console group instead of probing it.
         import ctypes

@@ -63,9 +63,15 @@ Before submitting:
 
 ```sh
 python -m ruff check src tests scripts
-python -m mypy --strict path/to/changed_module.py
+python -m mypy --strict src/smriti/core src/smriti/store src/smriti/daylog src/smriti/wake src/smriti/mcp src/smriti/profiles
+python -m mypy --strict --platform linux src/smriti/core src/smriti/store src/smriti/daylog src/smriti/wake src/smriti/mcp src/smriti/profiles
 python scripts/doc_facts.py --write
 ```
+
+CI type-checks on every OS, so check the other platforms too (`--platform linux`,
+`--platform darwin`, `--platform win32`). Guard platform-only code with
+`sys.platform == "win32"`, which type checkers narrow, rather than `os.name` or
+`hasattr`, which they don't.
 
 Run tests with both the stub and the normal model for embedding-related changes.
 The generated counts in README.md, AGENTS.md, and CLAUDE.md must travel with test or

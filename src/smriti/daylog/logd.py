@@ -80,7 +80,7 @@ def ensure_running(cfg: DaylogConfig | None = None) -> bool:
     # A hidden console, not DETACHED_PROCESS: a daemon with no console makes
     # every console child it runs (git, qmd) open a visible window.
     flags = 0
-    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+    if sys.platform == "win32":  # not hasattr: type checkers narrow sys.platform on every OS
         flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     # Keep a diagnosable trail: the daemon's output goes to a capped log
     # file, not DEVNULL — a 39-hour run that died silently on 2026-09-06
