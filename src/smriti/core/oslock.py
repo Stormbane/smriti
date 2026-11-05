@@ -47,10 +47,12 @@ rivals don't, which would let both into the critical section:
 - With the shared file dropped, other processes hold the private file
   alone, so failing to open it means the lock isn't taken (False), with a
   warning.
-- On POSIX, a shared file this user can't open (another user made the
-  directory, or put something else in the file's place) can't be opened by
-  an old process of this user either, so none can hold it, and the private
-  file alone is held, with a warning.
+- If the shared file can't be opened during the transition, the lock isn't
+  taken either (False), with a warning: an old process may hold it through a
+  descriptor opened before its permissions changed, which a later failure
+  to open doesn't revoke. On POSIX another user who owns the shared
+  directory can cause this, as they could before the move; it ends when the
+  shared file is dropped.
 """
 
 from __future__ import annotations
@@ -191,18 +193,15 @@ def _open_named(key: LockKey) -> list[int]:
     try:
         fds.append(_open(key.legacy, 0o644))
     except OSError as exc:
-        # Only a path this user can't open is one an old process of this user
-        # can't hold either; on Windows the temp directory is the user's own,
-        # so a failure there may be transient (a scanner) and proves nothing.
-        unusable = (PermissionError, FileExistsError, NotADirectoryError, IsADirectoryError)
-        if fds and sys.platform != "win32" and isinstance(exc, unusable):
-            _warn_once(f"legacy:{type(exc).__name__}",
-                       "the shared lock file can't be opened (%s); holding the private "
-                       "lock alone", exc)
-        else:
-            for fd in fds:
-                os.close(fd)
-            return []
+        # An old process may hold this file through a descriptor it opened
+        # before the file or its directory changed: a later failure to open
+        # it revokes neither, so the private file alone wouldn't exclude it.
+        _warn_once(f"legacy:{type(exc).__name__}",
+                   "the shared lock file can't be opened (%s); named locks can't be taken "
+                   "while processes running older code may hold it", exc)
+        for fd in fds:
+            os.close(fd)
+        return []
     return fds
 
 

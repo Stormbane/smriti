@@ -313,18 +313,39 @@ def test_with_the_shared_file_dropped_a_refused_runtime_directory_fails_closed(
         assert not alone  # nobody holds it now, and still: never another namespace
 
 
-def test_an_unusable_shared_file_on_posix_leaves_the_private_lock(
-        tmp_path: Path, _isolated_locks: Path) -> None:
-    # Another user's file where the shared directory should be: on POSIX no old
-    # process of this user can lock there either. On Windows the temp directory
-    # is the user's own, so a failure proves nothing and the lock isn't taken.
-    (_isolated_locks / "smriti-locks").write_text("", encoding="utf-8")
+def test_an_unusable_shared_file_fails_closed(
+        tmp_path: Path, _isolated_locks: Path, caplog: pytest.LogCaptureFixture) -> None:
+    # Something else where the shared directory should be. An old process
+    # might still hold the file it had opened there, so the private file
+    # alone can't be trusted to exclude it.
     key = lock_path("edit", str(tmp_path / "tree"))
-    with exclusive_lock(key, wait_s=0.3) as held:
-        assert held is (sys.platform != "win32")
-        if held:
-            with exclusive_lock(key, wait_s=0.3) as second:
-                assert not second
+    (_isolated_locks / "smriti-locks").write_text("", encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="smriti.core.oslock"):
+        with exclusive_lock(key, wait_s=0.3) as held:
+            assert not held
+            assert _free(key.private()), "a failed attempt holds nothing"
+    assert any("shared lock file can't be opened" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
+@pytest.mark.skipif(sys.platform != "win32" and os.geteuid() == 0,
+                    reason="root opens files whatever their mode")
+@pytest.mark.parametrize("tighten", ["file", "directory"])
+def test_a_held_shared_lock_still_excludes_after_its_permissions_change(
+        tmp_path: Path, tighten: str) -> None:
+    """An old process holds the shared file; then its mode, or its directory's,
+    changes so this user can no longer open it. The old holder's descriptor and
+    lock survive that, so a new taker must not enter on the private file alone."""
+    key = lock_path("edit", str(tmp_path / "tree"))
+    old = _old_lock_file(key.name, key.scope)
+    target = old if tighten == "file" else old.parent
+    with _held(old):  # the old process, inside the critical section
+        target.chmod(0)
+        try:
+            with exclusive_lock(key, wait_s=0.3) as held:
+                assert not held
+        finally:
+            target.chmod(0o700 if tighten == "directory" else 0o600)
 
 
 # ------------------------------------------- old and new processes, for real

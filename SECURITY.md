@@ -46,8 +46,9 @@ security backport series or guaranteed response time.
   temp directory, each one is also taken on its earlier file
   (`<tempdir>/smriti-locks`), so that processes still running an earlier release
   and new ones exclude each other. There, on POSIX, another local user could hold
-  a lock and stall those writes, which then fail as busy rather than run
-  unguarded. A later release ends the move; `SMRITI_LEGACY_LOCKS=0` ends it for
+  a lock, or own the shared directory so the file can't be opened, and stall
+  those writes, which then fail as busy rather than run unguarded. A later
+  release ends the move; `SMRITI_LEGACY_LOCKS=0` ends it for
   one installation once none of its processes runs older code (see
   `smriti.core.oslock`).
 - Backups commit the tree and can push it to a git remote you choose, in plaintext
