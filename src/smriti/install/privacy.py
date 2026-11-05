@@ -446,6 +446,17 @@ def _names_a_location(remote: str) -> bool:
     return any(c in remote for c in ":/\\")
 
 
+def _is_direct(root: Path, remote: str) -> bool:
+    """Whether the upstream names a URL or path itself rather than a configured remote.
+
+    A remote's name may hold a slash (``team/backup``), so the configured
+    remotes decide; the name's characters alone don't.
+    """
+    if not _names_a_location(remote):
+        return False
+    return remote not in _git(root, "remote").stdout.splitlines()
+
+
 def _url_rewrites(root: Path) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """git's URL rewrites, ``(insteadOf, pushInsteadOf)``: each base with its prefixes.
 
@@ -673,7 +684,7 @@ def remote_explanation(root: Path, git: GitState) -> str:
         crypt = f"here {git.crypt_detail}"
     else:
         crypt = "here it isn't set up for log/"
-    if _names_a_location(git.remote):  # the upstream names the URL itself
+    if _is_direct(root, git.remote):  # the upstream names the URL itself
         where = git.destinations
         if git.remote not in git.remote_urls:
             where += (f" (the branch's upstream names {git.remote}, which git's url "
@@ -711,7 +722,7 @@ def git_crypt_steps(root: Path, remote: str = "origin") -> str:
             f"        {git} remote remove origin",
         ]
     else:
-        direct = _names_a_location(remote)
+        direct = _is_direct(root, remote)
         upstream = (f"the branch's upstream, which names {remote} directly" if direct
                     else f"{remote}, the branch's upstream remote")
         stop = [

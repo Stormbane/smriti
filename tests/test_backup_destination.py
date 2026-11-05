@@ -398,6 +398,21 @@ def test_the_remedy_for_an_upstream_naming_a_url_also_reaches_origin(tmp_path: P
     assert "alone only sends the backup to origin" in " ".join(steps.split())
 
 
+def test_a_remote_named_with_a_slash_is_a_remote_not_a_url(tmp_path: Path) -> None:
+    # git allows a slash in a remote's name; the advice is to remove that remote.
+    repo = _fake_remotes(tmp_path)
+    _git(repo, "remote", "rename", "mirror", "team/backup")
+    _track(repo, "team/backup")
+    git = privacy.inspect_git(repo)
+    assert git.remote == "team/backup" and git.remote_urls == (MIRROR,)
+    explanation = " ".join(privacy.remote_explanation(repo, git).split())
+    assert f"push the memory tree to team/backup, {MIRROR}." in explanation
+    assert "names team/backup" not in explanation
+    steps = _steps(privacy.summary(repo, _decide(repo)))
+    assert f'git -C "{repo}" remote remove team/backup' in steps
+    assert "unset-upstream" not in steps
+
+
 def test_the_remedy_when_origin_is_the_destination(tmp_path: Path) -> None:
     repo = _fake_remotes(tmp_path)
     steps = _steps(privacy.summary(repo, _decide(repo)))
