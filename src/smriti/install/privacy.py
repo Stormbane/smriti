@@ -49,10 +49,19 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 DAYLOG_NAME = "daylog.json"
 RECORD_NAME = "privacy.json"
 
-# A day's captured turns and their render, which hold the same text. They
-# need not exist: git answers ignore and attribute questions from the
-# patterns alone. They stand for the files capture will write.
-_SAMPLE_LOGS = ("log/2000/01/01.jsonl", "log/2000/01/01.md")
+# One path for each file capture and the nightly write under log/ that
+# holds a conversation or a summary of one (smriti.daylog.config's day_*
+# helpers and smriti.daylog.rollup). They need not exist: git answers
+# ignore and attribute questions from the patterns alone. The day-log is
+# ignored, or encrypted, only when every one of them is.
+_SAMPLE_LOGS = (
+    "log/2000/01/01.jsonl",  # the day's turns
+    "log/2000/01/01.md",  # their render
+    "log/2000/01/01-digest.md",  # the nightly digest
+    "log/2000/01/week1.md",  # the week rollup
+    "log/2000/01.md",  # the month rollup
+    "log/2000.md",  # the year rollup
+)
 
 # The day-log's dated files: each day's turns and render, its digest, and
 # the week, month and year rollups (log/YYYY/..., log/YYYY.md). Runtime
@@ -343,15 +352,17 @@ def inspect_git(root: Path) -> GitState:
         return GitState(is_repo=False)
     try:
         url = _git(root, "remote", "get-url", "--push", "origin")
-        ignored = _git(root, "check-ignore", "--", *_SAMPLE_LOGS)  # prints each ignored path
+        ignored = _git(root, "check-ignore", "--stdin", "-z",  # prints each ignored path
+                       stdin="\0".join(_SAMPLE_LOGS) + "\0")
         listed = _git(root, "ls-files", "-z", "--", "log/")
         if listed.returncode != 0:
             raise subprocess.SubprocessError(listed.stderr.strip() or "git ls-files failed")
         tracked = [p for p in listed.stdout.split("\0") if _CONVERSATION.match(p)]
-        log_ignored = len(ignored.stdout.splitlines()) == len(_SAMPLE_LOGS)
-        # What the backup commits from log/: the tracked files, and the new
-        # ones unless they're ignored.
-        committed = tracked + ([] if log_ignored else list(_SAMPLE_LOGS))
+        ignored_samples = set(ignored.stdout.split("\0")) & set(_SAMPLE_LOGS)
+        log_ignored = ignored_samples == set(_SAMPLE_LOGS)
+        # What the backup commits from log/: the tracked files, and each kind
+        # of new file that isn't ignored.
+        committed = tracked + [p for p in _SAMPLE_LOGS if p not in ignored_samples]
         attrs = _filter_attrs(root, committed) if committed else {}
         crypt, detail = _log_protection(root, committed, tracked, attrs)
     except (OSError, subprocess.SubprocessError) as exc:

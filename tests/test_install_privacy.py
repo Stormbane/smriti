@@ -660,6 +660,45 @@ class TestGitCrypt:
 
         assert privacy.inspect_git(root).log_crypt == privacy.CRYPT_INACTIVE
 
+    def test_the_days_alone_leave_digests_and_rollups_in_plaintext(
+        self, root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The nightly also writes DD-digest.md and week, month and year rollups."""
+        git_repo(root, REMOTE)
+        days_only = "log/**/*.jsonl {0}\nlog/*/*/[0-9][0-9].md {0}\n"
+        (root / ".gitattributes").write_text(
+            days_only.format("filter=git-crypt diff=git-crypt"), encoding="utf-8"
+        )
+        (root / ".gitignore").write_text(days_only.format("").replace(" \n", "\n"),
+                                         encoding="utf-8")
+        configure_git_crypt_filter(root)
+        fake_git_crypt(monkeypatch, {})
+
+        state = privacy.inspect_git(root)
+
+        assert state.log_ignored is False
+        assert state.log_crypt == privacy.CRYPT_NONE
+        assert "WARNING: your conversations would go in plaintext" in self._summary(root)
+
+    @pytest.mark.parametrize("left_out", privacy._SAMPLE_LOGS)
+    def test_every_output_must_be_covered(
+        self, root: Path, monkeypatch: pytest.MonkeyPatch, left_out: str
+    ) -> None:
+        git_repo(root, REMOTE)
+        others = [p for p in privacy._SAMPLE_LOGS if p != left_out]
+        (root / ".gitattributes").write_text(
+            "".join(f"{p} filter=git-crypt diff=git-crypt\n" for p in others), encoding="utf-8"
+        )
+        configure_git_crypt_filter(root)
+        fake_git_crypt(monkeypatch, {})
+        assert privacy.inspect_git(root).log_crypt == privacy.CRYPT_NONE
+
+        (root / ".gitignore").write_text("".join(f"{p}\n" for p in others), encoding="utf-8")
+        assert privacy.inspect_git(root).log_ignored is False
+
+        (root / ".gitignore").write_text("log/\n", encoding="utf-8")
+        assert privacy.inspect_git(root).log_ignored is True
+
     def test_git_crypt_status_failing_is_unverified(
         self, root: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
