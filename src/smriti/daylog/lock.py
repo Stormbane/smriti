@@ -8,9 +8,10 @@ round 2, finding 1).
 It is an OS-level lock (``smriti.core.oslock``): the kernel releases it
 when its holder exits or crashes, so there is no stale lock to break and
 no race over who takes it over, and a long holder is never broken by age.
-The lock file lives in the temp directory, keyed by the configured lock
-path, not inside the memory tree, where a locked byte range would make
-``git add`` fail on Windows.
+The lock file lives in the private runtime directory (and, while the move
+from the shared temp directory lasts, there too: see ``smriti.core.oslock``),
+keyed by the configured lock path, not inside the memory tree, where a
+locked byte range would make ``git add`` fail on Windows.
 """
 
 from __future__ import annotations

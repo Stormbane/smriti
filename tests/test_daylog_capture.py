@@ -408,7 +408,8 @@ def test_writer_lock_is_never_broken_by_age(tmp_path: Path) -> None:
     assert entered.wait(timeout=5)
     key = os_lock_path("daylog-writer", str(lock_path.resolve()))
     old = time.time() - 3600
-    os.utime(key, (old, old))  # the old implementation broke anything over 300 s
+    for held_file in (key.private(), key.legacy):
+        os.utime(held_file, (old, old))  # the old implementation broke anything over 300 s
     with pytest.raises(LockTimeout):
         with writer_lock(lock_path, timeout_s=0.3):
             pass

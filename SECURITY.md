@@ -40,6 +40,16 @@ security backport series or guaranteed response time.
 - The embedding service listens on a loopback TCP port, and every process of the
   same user that holds its key can use it; other users can connect but are
   refused. See [The embedding service](#the-embedding-service).
+- The locks that serialise smriti's own writers (file edits, the day-log writer,
+  the handoff letter) are OS locks on files in the runtime directory's `locks/`,
+  which other users can't create or hold. During the move there from the shared
+  temp directory, each one is also taken on its earlier file
+  (`<tempdir>/smriti-locks`), so that processes still running an earlier release
+  and new ones exclude each other. There, on POSIX, another local user could hold
+  a lock and stall those writes, which then fail as busy rather than run
+  unguarded. A later release ends the move; `SMRITI_LEGACY_LOCKS=0` ends it for
+  one installation once none of its processes runs older code (see
+  `smriti.core.oslock`).
 - Backups commit the tree and can push it to a git remote you choose, in plaintext
   unless git-crypt encrypts it. Use a private remote. We recommend git-crypt for
   sensitive memory backups, but **the installer does not set up git-crypt**: it asks
@@ -73,7 +83,8 @@ root and embeds text for the user's other smriti processes: the MCP servers,
   process can bind the same port alongside it. Its port, pid and instance id are
   in a discovery file in the runtime directory.
 - **The runtime directory** holds the key, the discovery files, the services'
-  locks and logs, and is never inside the memory tree, so none of it is committed
+  locks and logs, and smriti's other locks (`locks/`), and is never inside the
+  memory tree, so none of it is committed
   or pushed: `%LOCALAPPDATA%\smriti\run` on Windows, private to the user by the
   profile's ACLs; `$XDG_RUNTIME_DIR/smriti` or `~/.cache/smriti/run` elsewhere,
   created mode 0700 and refused when another user owns it or others can write to
