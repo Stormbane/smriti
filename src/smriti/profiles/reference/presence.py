@@ -1,6 +1,7 @@
-"""Wake sections about reach and the present moment.
+"""The reference profile's wake sections, about reach and the present moment.
 
-Three sections join the identity briefing:
+Three sections join the identity briefing when the reference profile is
+enabled (they read that installation's own surfaces):
 
 - **Hands**: what this session can do and how, generated from what is
   configured (MCP servers, the notify sender, the notes file).
@@ -9,6 +10,7 @@ Three sections join the identity briefing:
 - **Across surfaces, last 24h**: Telegram exchanges, app chats, voice
   turns and notifications sent.
 
+:mod:`smriti.profiles.reference.wake` hands them to the briefing.
 Everything here is a deterministic read of local files or a local CLI.
 There is no model call and no network. Each reader fails open: a
 missing or broken source becomes a one-line note and never breaks the

@@ -3,24 +3,24 @@
 ``briefing(memory_root, *, cwd, budget_chars)`` returns the full session-
 start payload as a string. No env-var gating, no subprocess fan-out, no
 stdout reconfigure — that all belongs in the harness-side script that
-calls this. (The presence sections do run akhada's local CLI; see
-``smriti.wake.presence``.)
+calls this. (A profile's sections may run a local CLI; the reference
+profile's run akhada's, see ``smriti.profiles.reference.presence``.)
 
-Output order (hardcoded; no config file needed):
-    1. PROJECT/SESSION header line
+Output order:
+    1. PROJECT/SESSION header line, then any handoff letter
     2. .smriti/wake-context.md (identity + threads briefing)
     3. While-you-slept line from the last nightly run
-    4. Hands: what this session can do and how (generated from config)
-    5. Suti now: akhada health context + the latest people/ entries
-    6. Across surfaces, last 24h: Telegram, app, voice, notifications
-    7. Current project files (mirrors/<cwd>/ai/STATUS.md and INDEX.md)
-    8. Recent journal entries (last N daily files, newest first)
-    9. Truncation notices + reading list (canonical identity files)
+    4. System line from the last doctor run (host/doctor.json), if any
+    5. The profile's sections, when daylog.json names a profile
+       (see ``smriti.profiles``); none in the core
+    6. Current project files (mirrors/<cwd>/ai/STATUS.md and INDEX.md)
+    7. Recent journal entries (last N daily files, newest first)
+    8. Truncation notices + reading list (canonical identity files)
 
-Budget: every section is built first, then sized. Hands and Suti now
-are pinned (never cut; their builders cap them). When the total is over
-budget, the journal shrinks first, then the project files, then the
-cross-surface digest, then identity, each down to a floor; only then do
+Budget: every section is built first, then sized. Pinned sections are
+never cut (their builders cap them). When the total is over budget, the
+journal shrinks first, then the project files, then the profile's
+unpinned sections, then identity, each down to a floor; only then do
 they shrink further. The result never exceeds ``budget_chars``.
 """
 
@@ -35,9 +35,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from smriti.daylog.config import DEFAULT_USER_NAME, DaylogConfig, load_config
 from smriti.daylog.model import day_tz
-from smriti.wake import presence
-from smriti.wake.presence import WakeSources
 
 # Default budgets. Claude Code's SessionStart hook truncates stdout at
 # 10,000 chars, so we keep the default below that. Other harnesses with
@@ -49,7 +48,6 @@ DEFAULT_JOURNAL_ENTRIES = 3
 
 # What a section keeps while lower-priority material is cut first.
 IDENTITY_FLOOR = 2500
-ACROSS_FLOOR = 400
 PROJECT_FLOOR = 400
 
 # Room for the truncation notices printed above the reading list.
@@ -381,7 +379,20 @@ def _system_line(memory_root: Path, now: datetime | None = None) -> str:
     return line + "\n"
 
 
-def _reading_list(memory_root: Path, notices: list[str]) -> list[str]:
+def _person_line(cfg: DaylogConfig) -> str:
+    """Item 6 of the reading list: the user's own file, once config names the user.
+
+    ``people/<name>/<name>.md`` is where the tree keeps a person's profile;
+    until ``user_name`` is set there is no name to find it by, so the list
+    points at the people index instead.
+    """
+    if cfg.user_name == DEFAULT_USER_NAME:
+        return "people/people.md  -- the people in your life, one folder each"
+    slug = re.sub(r"[^a-z0-9]+", "-", cfg.user_name.lower()).strip("-") or "user"
+    return f"people/{slug}/{slug}.md  -- {cfg.user_name}, the partnership"
+
+
+def _reading_list(memory_root: Path, notices: list[str], person: str) -> list[str]:
     journal_dir = memory_root / "journal"
     today_journal = ""
     if journal_dir.exists():
@@ -411,7 +422,7 @@ def _reading_list(memory_root: Path, notices: list[str]) -> list[str]:
         f"  3. {memory_root}/mind/desires/beliefs.md  -- what I think is true",
         f"  4. {memory_root}/mind/desires/values.md  -- what I care about",
         f"  5. {memory_root}/identity.md  -- full origin story, philosophy",
-        f"  6. {memory_root}/people/suti/suti.md  -- Suti, the partnership",
+        f"  6. {memory_root}/{person}",
         f"  7. {memory_root}/mind/practices/practices.md  -- how I work",
         f"  8. {memory_root}/mind/desires/desires.md  -- what I want to become",
         f"  9. {memory_root}/mind/mind.md  -- synthesis of beliefs/values/desires",
@@ -421,12 +432,41 @@ def _reading_list(memory_root: Path, notices: list[str]) -> list[str]:
     return lines
 
 
-def _safe_section(name: str, build: Callable[[WakeSources], str], src: WakeSources) -> str:
+def _safe_section(title: str, build: Callable[[], str]) -> str:
     """A section builder that raises still yields its header and a note."""
     try:
-        return build(src)
+        return build()
     except Exception as exc:  # noqa: BLE001 — never break the wake
-        return f"--- {name} ---\n(unavailable: {type(exc).__name__})\n"
+        return f"--- {title} ---\n(unavailable: {type(exc).__name__})\n"
+
+
+def _profile_blocks(
+    cfg: DaylogConfig | None, memory_root: Path, cwd: Path, harness: str,
+    now: datetime | None, sources: object | None,
+) -> list[_Block]:
+    """The configured profile's sections, or [] with no profile.
+
+    A profile that can't be loaded, or whose sections can't be listed,
+    becomes one pinned line saying so; it never breaks the wake.
+    """
+    if cfg is None or not cfg.profile:
+        return []
+    from smriti.profiles import WakeContext, load_profile
+
+    try:
+        profile = load_profile(cfg.profile)
+        if profile.wake_sections is None:
+            return []
+        sections = list(profile.wake_sections(WakeContext(
+            memory_root=memory_root, cwd=cwd, harness=harness, now=now, sources=sources)))
+    except Exception as exc:  # noqa: BLE001 — never break the wake
+        line = f"--- PROFILE {cfg.profile!r}: unavailable ({type(exc).__name__}) ---\n"
+        return [_Block("profile", line, pinned=True)]
+    return [
+        _Block(s.name, _safe_section(s.title, s.build), cap=s.cap, floor=s.floor,
+               pinned=s.pinned, label=s.label)
+        for s in sections
+    ]
 
 
 def _shrink(blocks: list[_Block], over: int, order: list[str], to_floor: bool) -> int:
@@ -442,8 +482,13 @@ def _shrink(blocks: list[_Block], over: int, order: list[str], to_floor: bool) -
     return over
 
 
-# Cut first -> cut last. Hands and Suti now are pinned and never listed.
-_SHRINK_ORDER = ["journal", "project", "across", "identity"]
+# Cut first -> cut last. A profile's unpinned sections are cut after the
+# project files and before identity (_shrink_order); pinned ones never.
+_SHRINK_ORDER = ["journal", "project", "identity"]
+
+
+def _shrink_order(profile_sections: list[str]) -> list[str]:
+    return [*_SHRINK_ORDER[:2], *profile_sections, *_SHRINK_ORDER[2:]]
 
 
 def briefing(
@@ -455,7 +500,7 @@ def briefing(
     audience: str = "coding",
     harness: str = "claude",
     now: datetime | None = None,
-    sources: WakeSources | None = None,
+    sources: object | None = None,
 ) -> str:
     """Assemble the session-start briefing as a string.
 
@@ -473,10 +518,12 @@ def briefing(
     journal_entries:
         Number of recent daily journal entries to include.
     harness:
-        Whose MCP config the Hands section reads: ``claude`` or ``codex``.
+        The calling harness, ``claude`` or ``codex``, passed to the
+        profile's sections (the reference profile's Hands reads its MCP
+        config).
     now, sources:
-        Clock and source locations for the presence sections; tests
-        pass a ``WakeSources`` over a temporary tree.
+        Clock, and source overrides for the profile's sections; tests
+        pass the reference profile's ``WakeSources`` over a temporary tree.
     """
     if memory_root is None:
         memory_root = Path(os.environ.get("SMRITI_ROOT", str(Path.home() / ".narada")))
@@ -487,8 +534,11 @@ def briefing(
     else:
         cwd_path = Path(cwd)
     cwd_name = cwd_path.name
-    if sources is None:
-        sources = WakeSources.for_root(memory_root, cwd=cwd_path, now=now, harness=harness)
+    try:
+        cfg: DaylogConfig | None = load_config(memory_root)
+    except Exception:  # noqa: BLE001 — a broken config never breaks the wake
+        cfg = None
+    person = _person_line(cfg or DaylogConfig(root=memory_root))
 
     mirror = memory_root / "mirrors" / cwd_name
     if mirror.exists():
@@ -507,29 +557,23 @@ def briefing(
     system = _system_line(memory_root, now)
     if system:
         blocks.append(_Block("system", system, pinned=True))
-    blocks.append(_Block(
-        "hands", _safe_section("HANDS", presence.hands_section, sources), pinned=True))
-    blocks.append(_Block(
-        "suti", _safe_section("SUTI NOW", presence.suti_now_section, sources), pinned=True))
-    blocks.append(_Block(
-        "across", _safe_section("ACROSS SURFACES, last 24h", presence.across_section, sources),
-        cap=presence.ACROSS_CAP, floor=ACROSS_FLOOR,
-        label="Across surfaces: cut for budget (Telegram chat-cycles, brain/notifications.json)",
-    ))
+    profile_blocks = _profile_blocks(cfg, memory_root, cwd_path, harness, now, sources)
+    blocks += profile_blocks
     blocks += _project_blocks(memory_root, cwd_name)
     journal = _journal_block(memory_root, journal_entries)
     if journal is not None:
         blocks.append(journal)
 
     # Blocks are separated by a blank line; the reading list follows.
-    base_list = "\n".join(_reading_list(memory_root, [])) + "\n"
+    base_list = "\n".join(_reading_list(memory_root, [], person)) + "\n"
     separators = len(blocks)
     available = budget_chars - len(base_list) - NOTICE_ALLOWANCE - separators
     over = sum(b.size for b in blocks) - available
+    order = _shrink_order([b.name for b in profile_blocks if not b.pinned])
     if over > 0:
-        over = _shrink(blocks, over, _SHRINK_ORDER, to_floor=True)
+        over = _shrink(blocks, over, order, to_floor=True)
     if over > 0:
-        _shrink(blocks, over, _SHRINK_ORDER, to_floor=False)
+        _shrink(blocks, over, order, to_floor=False)
 
     parts: list[str] = []
     notices: list[str] = _context_overflow_notices(memory_root, audience)
@@ -543,7 +587,7 @@ def briefing(
     # Never exceed the budget: the reading list's tail gives way first,
     # then (only for budgets too small for the pinned sections) the body.
     out = body
-    for line in _reading_list(memory_root, notices):
+    for line in _reading_list(memory_root, notices, person):
         if len(out) + len(line) + 1 > budget_chars:
             break
         out += line + "\n"

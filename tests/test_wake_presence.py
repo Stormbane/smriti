@@ -1,8 +1,10 @@
-"""Hands, Suti now, Across surfaces, and the briefing budget around them.
+"""The reference profile's Hands, Suti now and Across surfaces, and the briefing around them.
 
 Every source is a temporary file or a fake akhada runner; the clock is
 fixed and file times are set relative to it. Nothing reads the real
-~/.narada, ~/.claude.json or Hermes homes, and nothing is sent.
+~/.narada, ~/.claude.json or Hermes homes, and nothing is sent. Trees
+enable the reference profile the way its installation does, in
+.smriti/daylog.json.
 """
 
 from __future__ import annotations
@@ -15,9 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from smriti.wake import presence
-from smriti.wake.briefing import DEFAULT_BUDGET, IDENTITY_FLOOR, briefing
-from smriti.wake.presence import (
+from smriti.profiles.reference import presence
+from smriti.profiles.reference.presence import (
     ACROSS_CAP,
     HANDS_CAP,
     SUTI_NOW_CAP,
@@ -26,6 +27,8 @@ from smriti.wake.presence import (
     hands_section,
     suti_now_section,
 )
+from smriti.wake.briefing import DEFAULT_BUDGET, IDENTITY_FLOOR, briefing
+from tests._profiles import enable_reference
 
 NOW = datetime(2026, 11, 3, 10, 0, tzinfo=timezone.utc)
 
@@ -89,6 +92,7 @@ def _bridge(chat: Path, when: datetime, said: str, reply: str, ok: bool = True) 
 def tree(tmp_path: Path) -> Path:
     """A memory root with every presence source populated."""
     root = tmp_path / "narada"
+    enable_reference(root)
     _write(root / ".smriti" / "wake-context.md", "# Narada\nI am Narada. Test identity.\n")
     _write(root / ".smriti" / "hooks" / "notify_suti.py", "# fake, never run\n")
     _write(root / "brain" / "notes.json", "[]")
@@ -413,7 +417,7 @@ class TestBriefing:
 
     def test_bare_tree_never_crashes(self, tmp_path: Path, mcp_config: Path) -> None:
         root = tmp_path / "bare"
-        root.mkdir()
+        enable_reference(root)  # nothing else in the tree
         text = briefing(root, cwd=tmp_path, sources=_sources(root, mcp_config))
         assert "--- HANDS" in text and "Message Suti: no sender wired" in text
         assert "--- SUTI NOW ---" in text and "Health: no akhada database" in text
@@ -442,8 +446,61 @@ def test_shrink_order_is_journal_first() -> None:
     # smriti.wake re-exports the function under the module's name.
     briefing_mod = importlib.import_module("smriti.wake.briefing")
     assert briefing_mod._SHRINK_ORDER[0] == "journal"
-    assert "hands" not in briefing_mod._SHRINK_ORDER
-    assert "suti" not in briefing_mod._SHRINK_ORDER
+    # With the reference profile: the order the briefing had before profiles.
+    assert briefing_mod._shrink_order(["across"]) == ["journal", "project", "across", "identity"]
+    sections = presence_sections(Path("."))
+    assert [s.name for s in sections if not s.pinned] == ["across"]
+    assert [s.name for s in sections if s.pinned] == ["hands", "suti"]
+
+
+def presence_sections(root: Path) -> list:
+    from smriti.profiles import WakeContext
+    from smriti.profiles.reference.wake import wake_sections
+
+    return wake_sections(WakeContext(memory_root=root, cwd=root, harness="claude", now=NOW,
+                                     sources=_sources(root)))
+
+
+# ── With no profile, none of it ─────────────────────────────────────────
+
+
+class TestWithoutTheProfile:
+    """A fresh install's briefing: the core sections only."""
+
+    PRESENCE = ("--- HANDS", "--- SUTI NOW", "--- ACROSS SURFACES", "tell_suti",
+                "akhada", "Telegram")
+
+    def test_no_presence_sections(self, full_tree: Path, mcp_config: Path,
+                                  hermes: Path) -> None:
+        (full_tree / ".smriti" / "daylog.json").unlink()
+        text = _brief(full_tree, mcp_config, hermes)
+        assert not [marker for marker in self.PRESENCE if marker in text]
+        order = ["--- PROJECT: proj", "--- IDENTITY ---", "--- WHILE YOU SLEPT",
+                 "--- MIRRORS / PROJ / AI / STATUS ---", "--- RECENT JOURNAL ---",
+                 "--- READING LIST"]
+        positions = [text.index(marker) for marker in order]
+        assert positions == sorted(positions)
+        assert "people/people.md  -- the people in your life" in text
+        assert "people/suti/suti.md" not in text
+
+    def test_names_from_config_reach_the_reading_list(self, full_tree: Path) -> None:
+        (full_tree / ".smriti" / "daylog.json").write_text(
+            json.dumps({"user_name": "Sam Lee"}), encoding="utf-8")
+        text = briefing(full_tree, cwd=full_tree / "proj")
+        assert "people/sam-lee/sam-lee.md  -- Sam Lee, the partnership" in text
+        assert "--- HANDS" not in text
+
+    def test_an_unknown_profile_is_one_line(self, full_tree: Path) -> None:
+        (full_tree / ".smriti" / "daylog.json").write_text(
+            json.dumps({"profile": "nosuch"}), encoding="utf-8")
+        text = briefing(full_tree, cwd=full_tree / "proj")
+        assert "--- PROFILE 'nosuch': unavailable (ProfileError) ---" in text
+        assert "--- IDENTITY ---" in text and "--- READING LIST" in text
+
+
+def test_the_reference_reading_list_names_suti(full_tree: Path, mcp_config: Path) -> None:
+    text = _brief(full_tree, mcp_config)
+    assert f"  6. {full_tree}/people/suti/suti.md  -- Suti, the partnership" in text
 
 
 # ── Cross-review fixes (Codex, 2026-11-03) ──────────────────────────────

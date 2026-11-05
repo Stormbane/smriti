@@ -9,6 +9,9 @@ what only makes sense there:
   ``smriti_propose_goal_shift`` (queued in ``outbox/``), and
   ``smriti_resolve_outbox``. Their names and schemas are the ones the
   installation's prompts already use.
+- Three wake-briefing sections (:mod:`.wake`, :mod:`.presence`): HANDS,
+  SUTI NOW (the akhada health app and the latest ``people/`` notes) and
+  ACROSS SURFACES (Telegram, the phone app, voice, notifications sent).
 
 It is called "reference" because it is the installation the code is
 developed and checked against, and its behaviour is the one the core must
@@ -22,11 +25,20 @@ Enable it in ``<root>/.smriti/daylog.json``::
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from smriti.mcp.tool import Tool
-from smriti.profiles import Profile
+from smriti.profiles import Profile, WakeContext, WakeSection
 from smriti.profiles.reference import outbox
 
 # scripts/doc_facts.py reads this tuple statically to list the profile's tools.
 TOOLS: tuple[Tool, ...] = (*outbox.TOOLS,)
 
-PROFILE = Profile(name="reference", tools=TOOLS)
+
+def _wake_sections(ctx: WakeContext) -> Sequence[WakeSection]:
+    from smriti.profiles.reference.wake import wake_sections  # only the wake needs it
+
+    return wake_sections(ctx)
+
+
+PROFILE = Profile(name="reference", tools=TOOLS, wake_sections=_wake_sections)
