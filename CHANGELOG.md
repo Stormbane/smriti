@@ -2,9 +2,15 @@
 
 All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-The package version remains 0.1.0; subsequent development is unreleased.
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-11-06
+
+Since 0.1.0 the parked pipelines are removed, the maintainer's own setup is an
+optional profile in its own package, and capture is off until configured.
+A pre-0.2 install keeps its `~/.narada` root; one with the reference profile
+also needs `pip install -e profiles/reference`.
 
 ### Added
 
@@ -80,6 +86,23 @@ The package version remains 0.1.0; subsequent development is unreleased.
   `smriti status` shows the root and the rule that chose it, and warns when both
   exist. Every former hard-coded `~/.narada`, including the recall hook's
   "don't recall the tree into itself" check, follows that root.
+- The digest and rollup calls run `claude -p` with no tools, MCP servers, skills
+  or slash commands (`--strict-mcp-config --tools= --disallowedTools=*
+  --disable-slash-commands`); `tests/test_llm_tool_boundary.py` checks them
+  against the installed CLI when `SMRITI_LIVE_CLI_TESTS=1`. The morning's web
+  search is opt-in, `"morning_web_search": true`; with it on, WebSearch is the
+  call's only tool. PRIVACY.md says what an injected instruction can still do.
+- Backups push the current branch to its upstream, or to `origin` under the
+  same name, not a fixed `master`. The installer's privacy question is about
+  that destination, resolved through git's `pushInsteadOf` and `insteadOf`
+  rewrites. A deployed `<root>/.smriti/backup.py` needs the installer rerun.
+- smriti's named locks (file edits, the day-log writer) live in the private
+  per-user runtime directory. While processes of an earlier release may still
+  run, each also takes its old file in the shared temp directory;
+  `SMRITI_LEGACY_LOCKS=0` stops that once none can.
+- The `read` extra's model download (`gpahal/bge-m3-onnx-int8`, about 560 MB)
+  and `HF_HUB_OFFLINE` are documented, with the other network requests, in
+  README and PRIVACY.md.
 
 ### Fixed
 
@@ -111,6 +134,10 @@ The package version remains 0.1.0; subsequent development is unreleased.
 - `pip wheel .` builds again: the eval corpus was added to the wheel twice, which
   current hatchling refuses.
 - A malformed MCP message gets an error instead of ending the server.
+- Overlapping morning runs send one message: a run claims the day before it
+  composes, and a stale claim is taken over after 30 minutes.
+- `smriti_write` and `smriti_record_finding` no longer describe the removed
+  JUDGE step and cascade.
 - Session channels are named correctly from a cwd of any platform.
 - Blank Windows Terminal windows taking focus: the backup worker, the logd and
   qmd daemons, and the LLM CLI calls give their console children a hidden console
@@ -126,5 +153,6 @@ The initial release is tagged `v0.1` in git.
 - Ingestion and routing, structural and cognitive cascades, and cycle-safety
   checks. These pipelines were part of the initial release; several are now parked.
 
-[Unreleased]: https://github.com/Stormbane/smriti/compare/v0.1...HEAD
+[Unreleased]: https://github.com/Stormbane/smriti/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Stormbane/smriti/compare/v0.1...v0.2.0
 [0.1.0]: https://github.com/Stormbane/smriti/releases/tag/v0.1
