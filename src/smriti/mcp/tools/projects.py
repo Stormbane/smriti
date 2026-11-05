@@ -433,7 +433,10 @@ def handle_update_feature_status(arguments: Arguments) -> str:
         if dest_path != current_path:
             current_path.unlink()
 
-    if new_status == dest_sub or current_sub == dest_sub:
+    # Moved is about the directory, not the status: shipped and abandoned are
+    # both a status and a directory, so comparing the two said "Updated" for
+    # every move out of active/.
+    if current_sub == dest_sub:
         return f"Updated feature {slug} -> status={new_status} (in {dest_sub}/)"
     return f"Moved feature {slug}: {current_sub}/ -> {dest_sub}/ (status={new_status})"
 
