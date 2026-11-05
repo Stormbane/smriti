@@ -15,6 +15,9 @@ if TYPE_CHECKING:
 _db: IndexDB | None = None
 _db_path: Path | None = None  # the index _db was opened on
 
+# smriti_read's most results: its schema bounds top_k (smriti.mcp.tool.check_arguments).
+MAX_TOP_K = 50
+
 
 def _get_db() -> IndexDB:
     """Read-only handle for search. The MCP server never does schema
@@ -196,8 +199,10 @@ TOOLS = (
                 },
                 "top_k": {
                     "type": "integer",
-                    "description": "Number of results (default: 5)",
+                    "description": f"Number of results, 1 to {MAX_TOP_K} (default: 5)",
                     "default": 5,
+                    "minimum": 1,
+                    "maximum": MAX_TOP_K,
                 },
             },
             "required": ["query"],

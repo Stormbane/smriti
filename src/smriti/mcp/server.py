@@ -15,7 +15,7 @@ import sys
 from typing import Any
 
 from smriti.core.safe_names import PATH_ARGUMENTS, UnsafeName, safe_name
-from smriti.mcp.tool import Tool, ToolError
+from smriti.mcp.tool import Tool, ToolError, check_arguments
 from smriti.mcp.tools import active_tools
 
 log = logging.getLogger(__name__)
@@ -47,6 +47,9 @@ def call_tool(tool: Tool, arguments: object) -> dict[str, Any]:
     try:
         if not isinstance(arguments, dict):
             raise ToolError("arguments must be an object")
+        # Every tool's arguments hold to its input schema's types and bounds,
+        # so a handler never meets a number where it expects a string.
+        check_arguments(tool.input_schema, arguments)
         # Any argument that becomes a path segment must be a plain name,
         # whichever tool receives it (see smriti.core.safe_names).
         for key in PATH_ARGUMENTS:
