@@ -1139,41 +1139,19 @@ def _cmd_daemon(args: argparse.Namespace) -> int:
 def _cmd_eval(args: argparse.Namespace) -> int:
     from smriti.eval.metrics import compute_metrics, enrich_from_metrics_log
     from smriti.eval.report import json_report, terminal_report
-    from smriti.eval.runner import (
-        eval_sandbox, run_cascade_cases, run_judge_cases, run_search_cases,
-    )
+    from smriti.eval.runner import eval_sandbox, run_search_cases
 
     with eval_sandbox() as sandbox:
-        judge_fn = None
-        if args.real:
-            from smriti.store.judge import judge_via_claude
-            judge_fn = judge_via_claude
-            print("Using claude -p for JUDGE evaluation.")
+        print("Running SEARCH cases...")
+        search_results = run_search_cases()
 
-        judge_results = []
-        search_results = []
-        cascade_results = []
-
-        if not args.search_only and not args.cascade_only:
-            print("Running JUDGE cases...")
-            judge_results = run_judge_cases(judge_fn=judge_fn)
-        if not args.judge_only and not args.cascade_only:
-            print("Running SEARCH cases...")
-            search_results = run_search_cases()
-        if not args.judge_only and not args.search_only:
-            print("Running CASCADE cases...")
-            cascade_results = run_cascade_cases()
-
-        metrics = compute_metrics(judge_results, search_results, cascade_results)
+        metrics = compute_metrics(search_results)
         metrics = enrich_from_metrics_log(metrics)
 
         if args.json:
-            print(json_report(metrics, judge_results, search_results, cascade_results))
+            print(json_report(metrics, search_results))
         else:
-            print(terminal_report(
-                metrics, judge_results, search_results, cascade_results,
-                verbose=args.verbose,
-            ))
+            print(terminal_report(metrics, search_results, verbose=args.verbose))
 
         if args.baseline:
             baseline_path = (
@@ -1181,10 +1159,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
                 if args.baseline is True else Path(args.baseline).resolve()
             )
             baseline_path.parent.mkdir(parents=True, exist_ok=True)
-            baseline_path.write_text(
-                json_report(metrics, judge_results, search_results, cascade_results),
-                encoding="utf-8",
-            )
+            baseline_path.write_text(json_report(metrics, search_results), encoding="utf-8")
             print(f"Baseline saved: {baseline_path}")
             if args.baseline is True:
                 print("Temporary baseline is removed on exit; use --baseline PATH to keep it.")
@@ -1449,11 +1424,9 @@ def main(argv: list[str] | None = None) -> int:
     p_daemon.set_defaults(subcommand="start", interval=5.0, no_watch=False)
 
     # ── eval ─────────────────────────────────────────────────────────
-    p_eval = sub.add_parser("eval", help="Run evaluation cases")
-    p_eval.add_argument("--judge", dest="judge_only", action="store_true", help="JUDGE cases only")
-    p_eval.add_argument("--search", dest="search_only", action="store_true", help="Search cases only")
-    p_eval.add_argument("--cascade", dest="cascade_only", action="store_true", help="Cascade cases only")
-    p_eval.add_argument("--real", action="store_true", help="Use claude -p for JUDGE (default: stubs)")
+    p_eval = sub.add_parser(
+        "eval", help="Run the search evaluation cases against a synthetic fixture"
+    )
     p_eval.add_argument("--json", action="store_true", help="JSON output")
     p_eval.add_argument(
         "--baseline", nargs="?", const=True, metavar="PATH",

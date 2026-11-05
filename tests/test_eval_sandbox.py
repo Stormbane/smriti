@@ -10,24 +10,16 @@ import os
 import re
 import shutil
 import sqlite3
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from smriti.eval import cases as case_module
-from smriti.eval.cases import CASCADE_CASES, JUDGE_CASES, SEARCH_CASES, SearchCase
+from smriti.eval.cases import SEARCH_CASES, SearchCase
 from smriti.store.search import SearchResult
 
-from smriti.eval.runner import (
-    FIXTURE_ROOT,
-    eval_sandbox,
-    run_all,
-    run_cascade_cases,
-    run_judge_cases,
-    run_search_cases,
-)
+from smriti.eval.runner import FIXTURE_ROOT, eval_sandbox, run_search_cases
 
 
 class LocalEmbedding:
@@ -76,60 +68,17 @@ def test_live_root_and_cached_metrics_untouched(monkeypatch: pytest.MonkeyPatch)
 
     with monkeypatch.context() as patch:
         patch.setattr(Path, "open", guarded_open)
-        results = run_all()
-    assert len(results["search"]) == len(SEARCH_CASES)
-    assert all(result.passed for result in results["cascade"])
+        results = run_search_cases()
+    assert len(results) == len(SEARCH_CASES)
     assert snapshot(live) == before
     assert metrics.get_logger() is logger
     assert os.environ["SMRITI_ROOT"] == str(live)
 
 
-def test_cascade_refuses_non_sandbox(tmp_path: Path) -> None:
-    for root in (tmp_path, FIXTURE_ROOT, Path(os.environ["SMRITI_ROOT"])):
-        before = snapshot(root)
-        with pytest.raises(ValueError, match="runner-created sandbox"):
-            run_cascade_cases(root=root)
-        assert snapshot(root) == before
-
-
-def test_cascade_rejects_expired_sandbox() -> None:
+def test_sandbox_is_indexed_and_removed_on_exit() -> None:
     with eval_sandbox() as root:
         assert (root / ".smriti/index.db").is_file()
     assert not root.exists()
-    with pytest.raises(ValueError, match="runner-created sandbox"):
-        run_cascade_cases(root=root)
-
-
-@pytest.mark.parametrize(
-    "trigger",
-    [
-        "../outside.md",
-        "../../outside.md",
-        str(FIXTURE_ROOT / "identity.md"),
-    ],
-)
-def test_cascade_rejects_escaping_trigger(trigger: str) -> None:
-    with eval_sandbox() as root:
-        before = snapshot(root)
-        case = replace(CASCADE_CASES[0], trigger_file=trigger)
-        with pytest.raises(ValueError, match="escapes"):
-            run_cascade_cases(cases=[case], root=root)
-        assert snapshot(root) == before
-
-
-def test_cascade_failure_and_wrong_depth_fail(monkeypatch: pytest.MonkeyPatch) -> None:
-    from smriti.store import cascade
-
-    def fail(*args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("synthetic failure")
-
-    with eval_sandbox():
-        wrong_depth = replace(CASCADE_CASES[0], expected_max_depth=3)
-        assert not run_cascade_cases(cases=[wrong_depth])[0].passed
-        monkeypatch.setattr(cascade, "cognitive_cascade", fail)
-        result = run_cascade_cases(cases=[CASCADE_CASES[0]])[0]
-        assert result.actual_max_depth == -1
-        assert not result.passed
 
 
 def test_fixture_is_synthetic() -> None:
@@ -246,16 +195,13 @@ def test_index_failure_restores_state(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(indexer, "index_tree", fail)
     with pytest.raises(RuntimeError, match="indexing failure"):
-        run_all()
+        run_search_cases()
     assert roots and not roots[0].exists()
     assert metrics.get_logger() is logger
     assert all(os.environ.get(name) == value for name, value in previous_env.items())
 
 
-@pytest.mark.parametrize("entry", [run_judge_cases, run_search_cases, run_cascade_cases])
-def test_standalone_runners_create_fresh_indexes(
-    entry: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_standalone_runner_creates_fresh_indexes(monkeypatch: pytest.MonkeyPatch) -> None:
     from smriti.store import indexer
 
     roots = []
@@ -266,19 +212,18 @@ def test_standalone_runners_create_fresh_indexes(
         return original_index(root=root, db=db)
 
     monkeypatch.setattr(indexer, "index_tree", track)
-    entry()
-    entry()
+    run_search_cases()
+    run_search_cases()
     assert len(roots) == 2 and roots[0] != roots[1]
     assert all(not root.exists() for root in roots)
 
 
-@pytest.mark.parametrize("options", [[], ["--search"], ["--judge"], ["--cascade"]])
-def test_cli_baseline_stays_in_sandbox(options: list[str], capsys: Any) -> None:
+def test_cli_baseline_stays_in_sandbox(capsys: Any) -> None:
     from smriti.cli import main
 
     live = Path(os.environ["SMRITI_ROOT"])
     before = snapshot(live)
-    assert main(["eval", *options, "--baseline"]) == 0
+    assert main(["eval", "--baseline"]) == 0
     output = capsys.readouterr().out
     saved = next(
         line.removeprefix("Baseline saved: ")
@@ -297,8 +242,7 @@ def test_cli_explicit_baseline(tmp_path: Path) -> None:
     assert main(["eval", "--baseline", str(path)]) == 0
     report = json.loads(path.read_text(encoding="utf-8"))
     assert report["search"]["total"] == len(SEARCH_CASES)
-    assert report["judge"]["total"] == len(JUDGE_CASES)
-    assert report["cascade"]["passed"] == len(CASCADE_CASES)
+    assert set(report) == {"timestamp", "search"}
 
 
 def test_cli_does_not_initialize_live_vault(monkeypatch: pytest.MonkeyPatch) -> None:
