@@ -7,8 +7,8 @@ first call site for the future presence-routing tool (spec: Future):
 callers express intent to reach the user; HOW is this shim's problem.
 
 A profile may add a richer sender: the reference profile's
-``smriti.profiles.reference.notify.send`` adds levels and a delivery
-receipt, for its ``tell_suti`` tool.
+``smriti_reference.notify.send`` (in its own package, ``profiles/reference/``)
+adds levels and a delivery receipt, for its ``tell_suti`` tool.
 """
 
 from __future__ import annotations

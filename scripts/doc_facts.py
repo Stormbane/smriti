@@ -7,8 +7,10 @@ Counts, by static parsing (stdlib only; nothing is imported or run):
   subcommands of any command that has its own subparsers;
 - MCP tools: the ``name`` of every ``Tool(...)`` in the groups that
   ``src/smriti/mcp/tools/__init__.py`` joins into ``TOOLS`` (the core),
-  and, listed apart, in the groups each profile's
-  ``src/smriti/profiles/<name>/__init__.py`` joins into its own ``TOOLS``;
+  and, listed apart, in the groups each profile package under
+  ``profiles/`` joins into its own ``TOOLS``: the module its
+  ``pyproject.toml`` names in the ``smriti.profiles`` entry-point group,
+  read from ``src/<module>/__init__.py``;
 - test functions: ``test*`` functions at module level and in ``Test*``
   classes under ``tests/`` (pytest collects more items than this,
   because some tests are parametrised).
@@ -29,6 +31,7 @@ from __future__ import annotations
 import argparse
 import ast
 import sys
+import tomllib
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,7 +39,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLI_PATH = REPO_ROOT / "src" / "smriti" / "cli.py"
 MCP_TOOLS_DIR = REPO_ROOT / "src" / "smriti" / "mcp" / "tools"
-PROFILES_DIR = REPO_ROOT / "src" / "smriti" / "profiles"
+PROFILES_DIR = REPO_ROOT / "profiles"
 TESTS_DIR = REPO_ROOT / "tests"
 DOC_FILES = ("README.md", "CLAUDE.md", "AGENTS.md")
 
@@ -189,12 +192,31 @@ def mcp_tools(tools_dir: Path = MCP_TOOLS_DIR) -> list[str]:
     return joined_tools(tools_dir / "__init__.py")
 
 
+def _profile_modules(profiles_dir: Path) -> list[tuple[str, Path]]:
+    """(profile name, module file) for every ``smriti.profiles`` entry point under *profiles_dir*.
+
+    Each ``profiles/<dir>/pyproject.toml`` names its profiles as
+    ``name = "module:PROFILE"``; the module is a package or a module under
+    that directory's ``src/``.
+    """
+    found: list[tuple[str, Path]] = []
+    for pyproject in sorted(profiles_dir.glob("*/pyproject.toml")):
+        with pyproject.open("rb") as handle:
+            project = tomllib.load(handle).get("project", {})
+        group = project.get("entry-points", {}).get("smriti.profiles", {})
+        for name, target in sorted(group.items()):
+            module = Path(pyproject.parent, "src", *target.split(":")[0].split("."))
+            init = module / "__init__.py"
+            found.append((name, init if init.is_file() else module.with_suffix(".py")))
+    return found
+
+
 def profile_tools(profiles_dir: Path = PROFILES_DIR) -> dict[str, list[str]]:
     """Each profile's added tool names, by profile; a profile without ``TOOLS`` adds none."""
     found: dict[str, list[str]] = {}
-    for init in sorted(profiles_dir.glob("*/__init__.py")):
-        if _module_tools(init) is not None:
-            found[init.parent.name] = joined_tools(init)
+    for name, module in _profile_modules(profiles_dir):
+        if _module_tools(module) is not None:
+            found[name] = joined_tools(module)
     return found
 
 
@@ -222,7 +244,7 @@ def count_tests(tests_dir: Path = TESTS_DIR) -> tuple[int, int]:
 def collect(repo_root: Path = REPO_ROOT) -> Facts:
     top, nested = cli_commands(repo_root / "src" / "smriti" / "cli.py")
     tools = mcp_tools(repo_root / "src" / "smriti" / "mcp" / "tools")
-    profiles = profile_tools(repo_root / "src" / "smriti" / "profiles")
+    profiles = profile_tools(repo_root / "profiles")
     functions, files = count_tests(repo_root / "tests")
     return Facts(
         commands=tuple(top),

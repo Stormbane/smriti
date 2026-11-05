@@ -27,6 +27,7 @@ CORE_TOOLS = [
     "smriti_add_todo", "smriti_record_finding", "smriti_record_decision",
     "smriti_record_feature", "smriti_update_feature_status",
 ]
+# The reference profile's tools (profiles/reference/): a fresh install must not answer them.
 REFERENCE_TOOLS = [
     "tell_suti", "smriti_ask_suti", "smriti_propose_goal_shift", "smriti_resolve_outbox",
 ]
@@ -58,6 +59,31 @@ def test_a_fresh_install_does_not_answer_profile_tools(name: str) -> None:
     assert _call(name, {"text": "hi"})["error"]["code"] == -32601
 
 
+def test_the_core_package_carries_no_reference_code() -> None:
+    """The reference profile is its own package (profiles/reference/): none of it is in smriti."""
+    import ast
+    import re
+
+    src = Path(__file__).resolve().parents[1] / "src" / "smriti"
+    assert (src / "profiles" / "__init__.py").is_file()
+    assert not (src / "profiles" / "reference").exists()
+    importers = []
+    for path in sorted(src.rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        for node in ast.walk(ast.parse(text, filename=str(path))):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                names = [node.module or ""]
+            else:
+                continue
+            if any(n.split(".")[0] == "smriti_reference" for n in names):
+                importers.append(f"{path.relative_to(src)}:{node.lineno}")
+        if re.search(r"""(import_module|__import__)\(\s*["']smriti_reference""", text):
+            importers.append(str(path.relative_to(src)))
+    assert not importers, f"the core imports the reference profile: {importers}"
+
+
 def test_the_server_process_follows_the_root_it_is_given(tmp_path: Path) -> None:
     """``python -m smriti.mcp`` lists the tools of the root in SMRITI_ROOT, not of a default."""
     import os
@@ -77,26 +103,26 @@ def test_the_server_process_follows_the_root_it_is_given(tmp_path: Path) -> None
     assert listed == {"fresh": CORE_TOOLS, "sample": [*CORE_TOOLS, SAMPLE_TOOL]}
 
 
-# ── the reference profile ───────────────────────────────────────────────
+def test_without_a_profile_the_wake_names_the_configured_user(
+    _isolated_memory_root: Path,
+) -> None:
+    from smriti.wake.briefing import briefing
+
+    root = _isolated_memory_root
+    assert "people/people.md  -- the people in your life" in briefing(root, cwd=root)
+    enable_profile(root, user_name="Sam Lee")
+    text = briefing(root, cwd=root)
+    assert "people/sam-lee/sam-lee.md  -- Sam Lee, the partnership" in text
+    assert "--- PROFILE" not in text
 
 
-def test_the_reference_profile_keeps_the_full_tool_list(reference_profile: Path) -> None:
-    profile = active_profile()
-    assert profile is not None and profile.name == "reference"
-    assert _listed() == CORE_TOOLS + REFERENCE_TOOLS
+def test_an_unknown_profile_is_one_line_in_the_wake(_isolated_memory_root: Path) -> None:
+    from smriti.wake.briefing import briefing
 
-
-def test_load_profile_returns_the_reference_profile() -> None:
-    profile = load_profile("reference")
-    assert isinstance(profile, Profile)
-    assert [t.name for t in profile.tools] == REFERENCE_TOOLS
-
-
-def test_reference_tools_are_answered(reference_profile: Path) -> None:
-    result = _call("smriti_ask_suti", {"question": "Ship it?", "context": "tests pass"})
-    assert result["result"]["content"][0]["text"] == "Queued for Suti: Ship it?"
-    comms = reference_profile / "outbox" / "suti-comms.md"
-    assert "**Ask:** Ship it?" in comms.read_text(encoding="utf-8")
+    enable_profile(_isolated_memory_root, profile="nosuch")
+    text = briefing(_isolated_memory_root, cwd=_isolated_memory_root)
+    assert "--- PROFILE 'nosuch': unavailable (ProfileError) ---" in text
+    assert "--- READING LIST" in text
 
 
 # ── the core tools name the configured parties ──────────────────────────
@@ -127,7 +153,9 @@ def test_core_tool_text_names_the_configured_parties(_isolated_memory_root: Path
     assert "{project}" in text  # other braces are left alone
 
 
-def test_the_reference_names_reproduce_the_old_tool_text(reference_profile: Path) -> None:
+def test_the_reference_names_reproduce_the_old_tool_text(_isolated_memory_root: Path) -> None:
+    # The names alone set this text; the reference profile's own tests check the rest.
+    enable_profile(_isolated_memory_root, user_name="Suti", agent_name="Narada")
     listing = _listing()
     assert listing["smriti_read"]["description"].startswith("Search Narada's memory tree")
     assert "to the narada tree" in listing["smriti_write"]["description"]

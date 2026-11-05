@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "smriti-reference"
+version = "0.2.0"
+description = "The reference profile for smriti: the maintainer's own installation, not a template."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = ["smriti"]
+
+# How smriti finds it: `"profile": "reference"` in <root>/.smriti/daylog.json
+# loads the Profile this names (see smriti.profiles).
+[project.entry-points."smriti.profiles"]
+reference = "smriti_reference:PROFILE"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/smriti_reference"]

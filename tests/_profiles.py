@@ -16,10 +16,6 @@ from pathlib import Path
 
 import pytest
 
-# What the reference installation's daylog.json sets to keep its behaviour.
-REFERENCE_CONFIG: dict[str, object] = {"profile": "reference", "user_name": "Suti",
-                                      "agent_name": "Narada", "morning_web_search": True}
-
 SAMPLE_TOOL = "sample_wave"
 
 # The synthetic profile: one tool, one wake section, a morning prompt.
@@ -59,10 +55,6 @@ def enable_profile(root: Path, **config: object) -> Path:
         current = {}
     path.write_text(json.dumps({**current, **config}), encoding="utf-8")
     return path
-
-
-def enable_reference(root: Path) -> Path:
-    return enable_profile(root, **REFERENCE_CONFIG)
 
 
 def write_profile_package(directory: Path, *, name: str = "sample",

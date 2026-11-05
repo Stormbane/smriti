@@ -81,6 +81,9 @@ def test_the_static_tool_lists_are_the_served_ones(facts: Any) -> None:
     assert facts.tools == tuple(t.name for t in TOOLS)
     assert facts.profile_tools, "no profile tools found"
     for name, tools in facts.profile_tools.items():
+        if name == "reference":
+            # Its own package (profiles/reference/); the core runs without it.
+            pytest.importorskip("smriti_reference")
         assert tools == tuple(t.name for t in load_profile(name).tools)
 
 

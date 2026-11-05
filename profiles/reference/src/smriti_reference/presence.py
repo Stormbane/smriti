@@ -10,7 +10,7 @@ enabled (they read that installation's own surfaces):
 - **Across surfaces, last 24h**: Telegram exchanges, app chats, voice
   turns and notifications sent.
 
-:mod:`smriti.profiles.reference.wake` hands them to the briefing.
+:mod:`smriti_reference.wake` hands them to the briefing.
 Everything here is a deterministic read of local files or a local CLI.
 There is no model call and no network. Each reader fails open: a
 missing or broken source becomes a one-line note and never breaks the
@@ -257,7 +257,7 @@ def _broken_server(name: str, spec: dict[str, Any]) -> str | None:
 def hands_section(src: WakeSources) -> str:
     """What this session can do and how, from what is configured."""
     from smriti.daylog.config import load_config
-    from smriti.profiles.reference.notify import notify_command
+    from smriti_reference.notify import notify_command
 
     servers = src.mcp_servers()
 

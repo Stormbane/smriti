@@ -1,7 +1,8 @@
 """tell_suti: the reference profile's MCP door to notify_suti.py.
 
 Nothing here sends a real message. The tool exists only with the
-reference profile enabled, so every test runs with it.
+reference profile enabled, so every test runs with it (the
+``reference_profile`` fixture, in this directory's conftest).
 """
 
 from __future__ import annotations
@@ -15,8 +16,8 @@ import pytest
 from smriti.daylog.config import DaylogConfig, load_config
 from smriti.mcp.server import handle_message
 from smriti.mcp.tools import active_tools
-from smriti.profiles.reference import notify, outbox
-from smriti.profiles.reference.notify import Delivery, NotifyError, parse_channels, send
+from smriti_reference import notify, outbox
+from smriti_reference.notify import Delivery, NotifyError, parse_channels, send
 
 
 @pytest.fixture(autouse=True)

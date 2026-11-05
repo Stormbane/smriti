@@ -9,8 +9,8 @@ files, down to ``ACROSS_FLOOR``, before identity is touched.
 from __future__ import annotations
 
 from smriti.profiles import WakeContext, WakeSection
-from smriti.profiles.reference import presence
-from smriti.profiles.reference.presence import WakeSources
+from smriti_reference import presence
+from smriti_reference.presence import WakeSources
 
 ACROSS_FLOOR = 400
 ACROSS_LABEL = "Across surfaces: cut for budget (Telegram chat-cycles, brain/notifications.json)"

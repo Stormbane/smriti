@@ -4,7 +4,8 @@
 start payload as a string. No env-var gating, no subprocess fan-out, no
 stdout reconfigure — that all belongs in the harness-side script that
 calls this. (A profile's sections may run a local CLI; the reference
-profile's run akhada's, see ``smriti.profiles.reference.presence``.)
+profile's run akhada's, see ``smriti_reference.presence`` in its own
+package, ``profiles/reference/``.)
 
 Output order:
     1. PROJECT/SESSION header line, then any handoff letter

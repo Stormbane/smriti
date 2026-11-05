@@ -30,10 +30,24 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - name: Install
-        run: python -m pip install -e ".[read,dev]"
+        # The reference profile is its own package (profiles/reference/); its
+        # tests run here too, but it never enters smriti's wheel (see below).
+        run: python -m pip install -e ".[read,dev]" -e profiles/reference
       - name: Lint
-        run: ruff check src tests scripts
+        run: ruff check src tests scripts profiles
       - name: Type check
-        run: mypy --strict src/smriti
+        run: mypy --strict src/smriti profiles/reference/src
       - name: Test
-        run: pytest -q --ignore=tests/test_perf.py
+        run: pytest -q --ignore=tests/test_perf.py tests profiles/reference/tests
+      - name: The core wheel carries no reference code
+        shell: python
+        run: |
+          import pathlib, subprocess, sys, zipfile
+          subprocess.run([sys.executable, "-m", "pip", "wheel", ".", "--no-deps", "-w", "dist"],
+                         check=True)
+          wheels = list(pathlib.Path("dist").glob("smriti-*.whl"))
+          assert len(wheels) == 1, wheels
+          names = zipfile.ZipFile(wheels[0]).namelist()
+          bad = [n for n in names if "reference" in n.lower()]
+          print(f"{wheels[0].name}: {len(names)} members")
+          sys.exit(f"reference code in the core wheel: {bad}" if bad else 0)

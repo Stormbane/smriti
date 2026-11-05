@@ -9,7 +9,11 @@ installed package that exposes a :class:`Profile` through the
 ``smriti.profiles`` entry-point group. Its ``pyproject.toml`` names it::
 
     [project.entry-points."smriti.profiles"]
-    myprofile = "my_profile:PROFILE"
+    reference = "smriti_reference:PROFILE"
+
+smriti itself ships no profile. The one in its repository,
+``profiles/reference/`` (the distribution ``smriti-reference``), is the
+maintainer's own installation; it is not a template.
 
 A profile is enabled by config, ``"profile": "<name>"`` in
 ``<root>/.smriti/daylog.json``. With none set, the core runs alone: the

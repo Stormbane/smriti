@@ -20,6 +20,10 @@ developed and checked against, and its behaviour is the one the core must
 keep when this profile is enabled. It is not a template or a recommended
 setup: an adopter runs the core alone, or writes a profile of their own.
 
+It is its own distribution, ``smriti-reference``, kept out of smriti's
+wheel, and registers as ``reference`` in the ``smriti.profiles``
+entry-point group (see :mod:`smriti.profiles`).
+
 Enable it in ``<root>/.smriti/daylog.json``::
 
     {"profile": "reference", "user_name": "Suti", "agent_name": "Narada"}
@@ -32,7 +36,7 @@ from typing import TYPE_CHECKING
 
 from smriti.mcp.tool import Tool
 from smriti.profiles import Profile, WakeContext, WakeSection
-from smriti.profiles.reference import outbox
+from smriti_reference import outbox
 
 if TYPE_CHECKING:
     from smriti.daylog.config import DaylogConfig
@@ -43,13 +47,13 @@ TOOLS: tuple[Tool, ...] = (*outbox.TOOLS,)
 
 # The wake and the morning import their modules only when they run.
 def _wake_sections(ctx: WakeContext) -> Sequence[WakeSection]:
-    from smriti.profiles.reference.wake import wake_sections
+    from smriti_reference.wake import wake_sections
 
     return wake_sections(ctx)
 
 
 def _morning_prompt(cfg: DaylogConfig) -> str:
-    from smriti.profiles.reference.morning import morning_prompt
+    from smriti_reference.morning import morning_prompt
 
     return morning_prompt(cfg)
 

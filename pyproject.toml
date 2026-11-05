@@ -27,10 +27,6 @@ dependencies = []
 [project.scripts]
 smriti = "smriti.cli:main"
 
-# Profiles are found through this entry-point group (see smriti.profiles).
-[project.entry-points."smriti.profiles"]
-reference = "smriti.profiles.reference:PROFILE"
-
 [project.optional-dependencies]
 read = [
     "sqlite-vec>=0.1.1",

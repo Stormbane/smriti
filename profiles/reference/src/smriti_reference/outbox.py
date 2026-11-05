@@ -10,7 +10,7 @@ from smriti.core.frontmatter import one_line
 from smriti.mcp.tool import Arguments, Tool, ToolError
 
 if TYPE_CHECKING:
-    from smriti.profiles.reference.notify import Delivery
+    from smriti_reference.notify import Delivery
 
 Sender = Callable[[str, str], "Delivery"]
 
@@ -21,7 +21,7 @@ TELL_SUTI_SENDER: Sender | None = None
 
 def _default_tell_suti_sender(text: str, level: str) -> Delivery:
     from smriti.daylog.config import load_config
-    from smriti.profiles.reference.notify import send
+    from smriti_reference.notify import send
 
     return send(load_config(), text, level=level, source="tell_suti")
 
@@ -32,7 +32,7 @@ def handle_tell_suti(arguments: Arguments, sender: Sender | None = None) -> str:
     Raises on any failure so the caller sees ``isError`` rather than a
     message that silently went nowhere.
     """
-    from smriti.profiles.reference.notify import LEVELS, MAX_MESSAGE_CHARS
+    from smriti_reference.notify import LEVELS, MAX_MESSAGE_CHARS
 
     text = str(arguments.get("text") or "").strip()
     level = str(arguments.get("level") or "message").strip().lower()

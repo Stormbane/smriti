@@ -73,18 +73,6 @@ def test_slug_traversal_is_refused(tree: Path, tmp_path: Path, tool: str) -> Non
     assert _outside_files(tmp_path) == []
 
 
-def test_outbox_file_traversal_is_refused(tree: Path, tmp_path: Path) -> None:
-    from tests._profiles import enable_reference
-
-    enable_reference(tree)  # smriti_resolve_outbox is the reference profile's
-    outside = tmp_path / "victim.md"
-    outside.write_text("## Q1\n\n**Status:** open\n\n---\n", encoding="utf-8")
-    result = _call("smriti_resolve_outbox", {"file": "../../victim", "item": "Q1",
-                                              "resolution": "answered"})
-    assert result.get("isError") is True
-    assert outside.read_text(encoding="utf-8").count("open") == 1
-
-
 def test_plain_names_still_work(tree: Path) -> None:
     result = _call("smriti_add_todo", {"project": "demo", "topic": "docs",
                                        "line": "write the docs", "kind": "build"})

@@ -75,12 +75,3 @@ def _isolated_memory_root(tmp_path_factory: pytest.TempPathFactory,
     metrics._instance = None  # re-resolve the metrics path under the temp root
     yield root
     metrics._instance = None
-
-
-@pytest.fixture()
-def reference_profile(_isolated_memory_root: Path) -> Path:
-    """The isolated memory root, configured like the reference installation."""
-    from tests._profiles import enable_reference
-
-    enable_reference(_isolated_memory_root)
-    return _isolated_memory_root

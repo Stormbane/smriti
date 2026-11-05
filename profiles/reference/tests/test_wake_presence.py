@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from smriti.profiles.reference import presence
-from smriti.profiles.reference.presence import (
+from smriti_reference import presence
+from smriti_reference.presence import (
     ACROSS_CAP,
     HANDS_CAP,
     SUTI_NOW_CAP,
@@ -28,7 +28,7 @@ from smriti.profiles.reference.presence import (
     suti_now_section,
 )
 from smriti.wake.briefing import DEFAULT_BUDGET, IDENTITY_FLOOR, briefing
-from tests._profiles import enable_reference
+from _reference import enable_reference
 
 NOW = datetime(2026, 11, 3, 10, 0, tzinfo=timezone.utc)
 
@@ -455,7 +455,7 @@ def test_shrink_order_is_journal_first() -> None:
 
 def presence_sections(root: Path) -> list:
     from smriti.profiles import WakeContext
-    from smriti.profiles.reference.wake import wake_sections
+    from smriti_reference.wake import wake_sections
 
     return wake_sections(WakeContext(memory_root=root, cwd=root, harness="claude", now=NOW,
                                      sources=_sources(root)))
@@ -483,19 +483,12 @@ class TestWithoutTheProfile:
         assert "people/people.md  -- the people in your life" in text
         assert "people/suti/suti.md" not in text
 
-    def test_names_from_config_reach_the_reading_list(self, full_tree: Path) -> None:
+    def test_names_from_config_name_the_reading_list_only(self, full_tree: Path) -> None:
         (full_tree / ".smriti" / "daylog.json").write_text(
             json.dumps({"user_name": "Sam Lee"}), encoding="utf-8")
         text = briefing(full_tree, cwd=full_tree / "proj")
         assert "people/sam-lee/sam-lee.md  -- Sam Lee, the partnership" in text
-        assert "--- HANDS" not in text
-
-    def test_an_unknown_profile_is_one_line(self, full_tree: Path) -> None:
-        (full_tree / ".smriti" / "daylog.json").write_text(
-            json.dumps({"profile": "nosuch"}), encoding="utf-8")
-        text = briefing(full_tree, cwd=full_tree / "proj")
-        assert "--- PROFILE 'nosuch': unavailable (ProfileError) ---" in text
-        assert "--- IDENTITY ---" in text and "--- READING LIST" in text
+        assert not [marker for marker in self.PRESENCE if marker in text]
 
 
 def test_the_reference_reading_list_names_suti(full_tree: Path, mcp_config: Path) -> None:
