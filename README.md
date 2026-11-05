@@ -44,7 +44,7 @@ smriti_write      -> dated markdown + index     voice transcripts -> log/YYYY/MM
 
 **The morning message** (07:00, **experimental**): one message per local day, composed by an LLM from the digest plus a web search for headlines, and sent through the `notify_cmd` configured in `daylog.json`. The ledger entry is written before the send, so a crash means no message, never two. It is written from the configured agent to the configured user, with no persona; a profile can supply its own prompt (the reference profile's carries its agent's persona).
 
-**Backups.** `<root>/.smriti/backup.py` commits the memory tree once an hour when it has changed (`smriti backup --push`, run by the `smriti-backup` task) and pushes only when there is something new; the nightly witness step commits and pushes too. Sessions don't trigger backups. It never kills git, clears stale locks only when no git process is running, and logs to `.git/smriti-backup.jsonl`. You create the git repository and its remote yourself. The reference setup encrypts its remote with git-crypt, but the installer neither sets that up nor checks for it.
+**Backups.** `<root>/.smriti/backup.py` commits the memory tree once an hour when it has changed (`smriti backup --push`, run by the `smriti-backup` task) and pushes only when there is something new; the nightly witness step commits and pushes too. Sessions don't trigger backups. It never kills git, clears stale locks only when no git process is running, and logs to `.git/smriti-backup.jsonl`. You create the git repository and its remote yourself. The tree is pushed in plaintext unless git-crypt encrypts it; the installer asks whether the remote is private and says whether git-crypt covers the day-log, but doesn't set it up (see [Privacy](#privacy)).
 
 **Scheduling.** `smriti tasks install` creates four Windows scheduled tasks: `smriti logd --ensure` every 10 minutes, `smriti backup --push --tag hourly` at 17 minutes past each hour, `smriti nightly` at 03:00, and `smriti morning` at 07:00. On Linux and macOS it prints the equivalent crontab lines instead. Day boundaries follow the system's time zone, daylight saving included; set `SMRITI_DAY_UTC_OFFSET` (hours) or `"timezone"` in `.smriti/daylog.json` (hours, `local`, or an IANA name where Python can load one) to override it.
 
@@ -92,6 +92,21 @@ A handoff written with `smriti_write_handoff` is shown at the top of the next se
 
 The wake briefing is the *working self*: the part of memory present without a tool call. The *self files* sit at the trunk of the tree: `identity.md`, `mind/` (beliefs, values, desires, practices), `people/`, `open-threads/`, and the dated `journal/`. Today they change by in-session edits, `smriti_write`, and an end-of-session reflection practice. A protocol with explicit layers, evidence requirements and cooling periods is planned and not built. [`docs/SELF.md`](docs/SELF.md) describes each wake section with its source, budget and freshness, and the self files. It also covers the planned self-change protocol, the antaḥkaraṇa (Vedantic model of mind) mapping with what is built and what is design intent, and six invariants, three of which don't hold yet.
 
+## Privacy
+
+**You choose at install whether your conversations are captured.** Capture copies every message you type and every reply the agent writes, from Claude Code transcripts, Codex rollouts and voice transcripts, into `<root>/log/`. The backup commits that with the rest of the memory tree and pushes it to the tree's git remote, in plaintext unless you set up git-crypt. Only a scrubber that masks strings shaped like credentials stands in between. So `scripts/install.py` asks two questions before it changes anything:
+
+1. **Capture conversations into the day-log?** No sets `"sources": []` in `<root>/.smriti/daylog.json`, keeping the file's other keys.
+2. **Is the backup remote private?** Asked only when the tree has a remote named `origin`. smriti doesn't set up git-crypt; when the remote isn't confirmed private, the installer prints the steps.
+
+Flags answer them without a terminal: `--capture` or `--no-capture`, and `--remote-is-private` or `--remote-not-private`. With neither a terminal nor a flag, a new memory root captures nothing: capture can be turned on later, and the nightly then reads the transcripts still on disk, but a push can't be taken back. An existing root keeps the sources its `daylog.json` has. The answers are recorded in `<root>/.smriti/privacy.json`, so a rerun doesn't ask again, and the installer's last lines say what is captured, what is committed and where it is pushed. [`docs/INSTALL.md`](docs/INSTALL.md#privacy-capture-and-the-backup-remote) has the details.
+
+**What leaves the machine:**
+- **Backups** push everything git tracks in the tree: the memory notes, the captured conversations and their renders, the digests and rollups, and `daylog.json`. The template's `.gitignore` keeps out the index, metrics, runtime state and the private store's key. Even with git-crypt, file names, sizes and commit messages stay readable. [`docs/PRIVACY.md`](docs/PRIVACY.md#what-is-pushed-in-the-clear) lists it all.
+- **The nightly digest** sends each day's conversation log (up to 248,000 characters: four parts of 60,000 and 8,000 of autonomous-session markers) to the configured LLM CLI.
+- **The witness** sends a hash to public timestamp calendars, and **the morning message** uses web search.
+- **The optional private store** encrypts its files; its key stays in `private/.key`, which git ignores, and the index skips `private/`.
+
 ## Install
 
 **Prerequisites:**
@@ -104,7 +119,7 @@ The wake briefing is the *working self*: the part of memory present without a to
 git clone https://github.com/Stormbane/smriti.git
 cd smriti
 pip install -e ".[read]"      # search and embeddings; add codex, witness or dev, e.g. ".[read,codex]"
-python scripts/install.py     # memory root, wake files, Claude Code hooks, MCP server, agent doc
+python scripts/install.py     # two privacy questions, then memory root, wake files, hooks, MCP server, agent doc
 smriti index                  # the first run downloads the ONNX embedding model
 smriti write "Sam prefers the command first, then the explanation." --branch people/sam
 smriti read "how does Sam like answers"
@@ -114,6 +129,7 @@ smriti status
 Then start a new Claude Code session. The briefing appears in the opening context, and `smriti_read`, `smriti_write` and `smriti_status` are among the tools.
 
 **`scripts/install.py`:**
+- **Asks the two [privacy](#privacy) questions** first, or takes the answers from `--capture`/`--no-capture` and `--remote-is-private`/`--remote-not-private`, and ends by saying what is captured, committed and pushed.
 - **Creates the memory root** (`~/.narada` unless `--memory-root` says otherwise; it must be inside your home directory) from [`memory_template/`](memory_template/). It never overwrites existing files.
 - **Copies** `wake.py`, `backup.py` and `narada-p.sh` into `<root>/.smriti/`, and links project mirrors for each project it finds under `--projects-root` (default `C:/Projects`).
 - **For `--harness claude_code`** (the default), also:
@@ -188,7 +204,7 @@ The witness step needs `pip install -e ".[witness]"` and a memory root that is a
   - search results carry no date or provenance;
   - capture records no gaps;
   - the identity summary is loaded without being accepted, and goes stale.
-- **Data flow:** the tree and the index are local files. The nightly digest sends each day's conversation log (up to 248,000 characters: four parts of 60,000 and 8,000 of autonomous-session markers) to the configured LLM CLI. Backups push to your git remote, the witness sends a hash to public timestamp calendars, and the morning message uses web search. The optional private store keeps its encryption key in plain text in `private/README.md`; the index skips `private/`. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
+- **Data flow:** the tree and the index are local files; [Privacy](#privacy) says what is captured, what backups push, and what the nightly sends to an LLM.
 - **Engineering:** CI runs `ruff`, `mypy --strict` and the tests on Windows, Linux and macOS with Python 3.11 and 3.12, with a deterministic stub embedder, so no model is downloaded. Strict types are enforced on `core`, `store`, `daylog`, `wake`, `mcp` and `profiles`; the rest of the package isn't strict yet. Day-to-day use is on Windows; on macOS the CI's Python can't load sqlite-vec, so search there is keyword-only.
 
 The plan, with measurements, is [`.ai/features/smriti-renewal.md`](.ai/features/smriti-renewal.md).

@@ -67,7 +67,9 @@ pip install -e ".[read]"      # add ,codex / ,witness / ,dev as needed
 #    restore it from backup first; otherwise the installer creates it from
 #    memory_template/.
 
-# 3. Run the installer: copies the memory template (never overwriting),
+# 3. Run the installer: asks whether to capture conversations and whether
+#    the backup remote is private (see "Privacy" below), then copies the
+#    memory template (never overwriting),
 #    copies wake.py, backup.py and narada-p.sh into <root>/.smriti/,
 #    creates mirrors/ junctions, registers the smriti MCP server,
 #    patches ~/.claude/settings.json, writes the managed block in
@@ -90,6 +92,63 @@ smriti read "how does Sam like answers"
 The installer is idempotent — re-run any time after adding a new project
 or after the smriti repo's `narada/` templates change.
 
+### Privacy: capture and the backup remote
+
+Left to its defaults, `smriti logd` copies every message you type and
+every reply the agent writes, from Claude Code transcripts, Codex rollouts
+and voice transcripts, into `<root>/log/`, masking only strings shaped
+like credentials. The backup commits the tree, `log/` included, and pushes
+it to the remote `origin` in plaintext unless git-crypt encrypts it. The
+installer therefore asks two questions before it changes anything:
+
+1. **"Capture conversations into the day-log?"** No sets `"sources": []`
+   in `<root>/.smriti/daylog.json`. Only that key changes: the file's
+   other keys are kept, and `extra_sources` still adds its own sources.
+   Yes removes an empty `"sources": []`, so the defaults apply again; a
+   list of your own sources is left alone.
+2. **"Is `<url>` a private repository that only you can read?"** Asked
+   only when the memory root is a git repository with a remote named
+   `origin`; otherwise the installer says there is no remote and skips
+   it. smriti never sets up git-crypt. When the answer is no, or nobody
+   answered, the installer prints the steps; [PRIVACY.md](PRIVACY.md#what-is-pushed-in-the-clear)
+   has them too.
+
+| Flag | Answers |
+|---|---|
+| `--capture` | 1, yes |
+| `--no-capture` | 1, no |
+| `--remote-is-private` | 2, yes |
+| `--remote-not-private` | 2, no |
+
+```bash
+python scripts/install.py --no-capture --remote-is-private
+python scripts/install.py --harness none --capture --remote-not-private
+```
+
+How each question is settled, in order:
+
+| | Capture | Remote |
+|---|---|---|
+| A flag | The flag | The flag (ignored, with a note, when there is no remote) |
+| Answered before, by a flag or at a prompt | Kept; not asked again | Kept, while `origin` has the same URL |
+| A terminal (stdin and stdout) | Asked. A new root needs `y` or `n`; on an existing one, Enter keeps what `daylog.json` does now | Asked; needs `y` or `n` |
+| No terminal, no flag, new root | **Off**: `"sources": []`, with a note | Not confirmed private: the summary says so and prints the git-crypt steps |
+| No terminal, no flag, existing root | `daylog.json` is left as it is, with a note | The same |
+
+An existing root is one with `.smriti/daylog.json`, `.smriti/wake.py` or
+`log/`. Without a terminal, capture stays off for a new root because it
+can be turned on later (re-run with `--capture`; the nightly then reads
+the transcripts still on disk) while a push can't be taken back. A
+`daylog.json` that isn't a JSON object makes the installer stop before
+changing anything: capture would otherwise ignore it and run on the
+defaults.
+
+The answers are recorded in `<root>/.smriti/privacy.json` (when, how,
+and the remote's URL without credentials), and the installer's last lines
+say what is captured, what is committed, and where and how it is pushed,
+reading git's ignore and git-crypt rules for `log/`. The backup and the
+nightly push only once `smriti tasks install` has scheduled them.
+
 ### Selecting a harness
 
 Claude Code is the backwards-compatible default. The installer can wire the
@@ -106,6 +165,7 @@ python scripts/install.py --harness none  # core memory setup only
 
 | Step | Location | Purpose |
 |---|---|---|
+| Ask the privacy questions | `<entity>/.smriti/daylog.json` (`sources` only), `<entity>/.smriti/privacy.json` | Capture on or off; whether the backup remote is private ([above](#privacy-capture-and-the-backup-remote)) |
 | Copy the memory template | `<entity>/` from `memory_template/` | Empty identity tree (never overwrites existing files) |
 | Copy `wake.py`, `backup.py` | `<entity>/.smriti/` | Wake shim; backup script. smriti-managed copies are upgraded, keeping a `.pre-upgrade.bak` |
 | Copy `narada-p.sh` | `<entity>/.smriti/narada-p.sh` | Wake-injecting wrapper for headless `claude -p` |
@@ -185,7 +245,7 @@ defaults apply.
 
 | Key | Default | What it does |
 |---|---|---|
-| `sources` | Claude Code, Codex, voice transcripts | Capture globs, `[{"name", "kind", "glob"}]`; replaces the defaults |
+| `sources` | Claude Code, Codex, voice transcripts | Capture globs, `[{"name", "kind", "glob"}]`; replaces the defaults. `[]` captures nothing (the installer's `--no-capture`) |
 | `extra_sources` | none | Capture globs added to the defaults |
 | `notify_cmd` | none | The command `smriti morning` pipes its message to; no command, no morning |
 | `location` | none | Where the user lives, for the morning's local headlines |

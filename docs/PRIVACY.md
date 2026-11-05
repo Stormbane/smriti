@@ -10,6 +10,95 @@ looks the way it does. Engineers implementing smriti. Operators
 deploying smriti. Entities being built on top of smriti who want to
 know what the privacy guarantees actually are.
 
+Most of this document is about the private store. Start with the
+ordinary memory tree, because that is what leaves the machine.
+
+---
+
+## What is pushed in the clear
+
+The backup (`<root>/.smriti/backup.py`, run by the hourly `smriti-backup`
+task and by the nightly witness step) runs `git add -A`, commits, and
+pushes to `origin master`. Whatever git tracks reaches the remote as
+plain text, unless git-crypt encrypts it first. **smriti does not set up
+git-crypt.** With the memory template's `.gitignore`, that is:
+
+- **Your conversations, when capture is on.** `log/YYYY/MM/DD.jsonl` and
+  its render `DD.md` hold every message you typed and every reply the
+  agent wrote in Claude Code, Codex and the voice channel. Tool calls,
+  tool output and thinking are dropped. `daylog/scrub.py` masks strings
+  shaped like credentials (provider API keys and tokens, JWTs, bearer
+  headers, `password=` style assignments, passwords in URLs, private key
+  blocks); everything else stays, including names, pasted file contents
+  and personal details.
+- **What the nightly derives from them:** `DD-digest.md` and the week,
+  month and year rollups.
+- **Everything written to memory:** `identity.md`, `mind/`, `people/`,
+  `open-threads/`, `journal/`, `projects/`, `notes/`, `sources/` and
+  `semantic/`.
+- **Configuration and session files under `.smriti/`:** `daylog.json`
+  (names, `location`, `notify_cmd`), `privacy.json` (the installer's
+  record of your answers), `wake-context.md`, a pending handoff and its
+  archive, and the scripts `wake.py` and `backup.py`.
+- **Witness manifests** under `witness/`.
+- **The private store's contract**, `private/README.md`. Its `.enc`
+  files go too, encrypted.
+
+Never pushed, because the template's `.gitignore` excludes it: the search
+index and its SQLite side files, metrics and recall logs, LLM work
+directories, day-log runtime state and locks, and `private/.key`. An
+ignore rule doesn't untrack a file that was committed before it.
+
+**Even with git-crypt**, the remote can read file and directory names
+(which days you were active, the names under `people/` and `projects/`),
+file sizes, commit times and commit messages. Anything pushed before
+git-crypt was set up stays readable in the remote's history.
+
+### The installer's questions
+
+`scripts/install.py` asks before it changes anything:
+
+1. *Capture conversations into the day-log?* No writes `"sources": []`
+   into `<root>/.smriti/daylog.json` and keeps its other keys.
+2. *Is the remote a private repository that only you can read?* Asked
+   only when there is an `origin`.
+
+`--capture`/`--no-capture` and `--remote-is-private`/`--remote-not-private`
+answer them without a terminal. With neither, a new memory root captures
+nothing, and an existing one keeps its sources. The installer's last
+lines say what is captured, what is committed, and where it is pushed, in
+plaintext or through git-crypt. [INSTALL.md](INSTALL.md#privacy-capture-and-the-backup-remote)
+has the full rules.
+
+### Keeping the remote unreadable
+
+Do one of these before the backups run (`smriti tasks install`):
+
+- Make the repository private, and keep it that way.
+- Or remove the remote: `git -C <root> remote remove origin`. The backup
+  then commits on this machine only.
+- Or set up [git-crypt](https://github.com/AGWA/git-crypt):
+
+  ```bash
+  cd <root>
+  git-crypt init
+  git-crypt export-key <a file outside the tree>   # lose it and nothing decrypts
+  # in .gitattributes, at least:
+  #   log/** filter=git-crypt diff=git-crypt
+  # or everything but git's own files:
+  #   * filter=git-crypt diff=git-crypt
+  #   .gitattributes !filter !diff
+  #   .gitignore !filter !diff
+  git-crypt status -f    # re-stages tracked files that should now be encrypted
+  ```
+
+  A new clone needs `git-crypt unlock <key file>` before its files can be
+  read, `wake.py` included.
+
+If the tree was already pushed in plaintext, encrypting from now on
+doesn't remove the old commits: rotate to a fresh remote, or rewrite the
+history and force-push.
+
 ---
 
 ## 1. The principle
@@ -85,7 +174,7 @@ Maximum privacy means minimum debuggability and minimum recoverability.
 Maximum recoverability means some privacy surface area. Maximum
 debuggability means the operator can see too much.
 
-Phase 1 optimizes for **recoverability** (key in git) and
+Phase 1 optimizes for **recoverability** (a plain key file you back up) and
 **debuggability** (failure-only audit) at the cost of some
 **privacy** (the key is readable). Later phases shift the balance
 toward privacy as the relationship matures and the tooling stabilizes.
@@ -183,7 +272,8 @@ content = private_store.read_with_consent(path, token)
 - Friction high enough that casual reading is impossible
 - Social contract clear enough that deliberate reading is a visible
   choice
-- Recoverable via git if the local filesystem is damaged
+- Recoverable if the local filesystem is damaged: the ciphertext from
+  git, the key from your own backup of `private/.key`
 - Debuggable enough for operator-side work that doesn't touch content
 - Legible to both parties as a commitment, not just a mechanism
 

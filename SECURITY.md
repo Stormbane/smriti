@@ -27,10 +27,14 @@ security backport series or guaranteed response time.
   providers keep inference local after model installation; choosing a hosted
   provider sends embedding inputs to that provider. Nightly digests and rollups
   send conversation text to the configured LLM CLI/provider.
-- Backups commit the tree and can push it to a git remote you choose. Use a private
-  remote. We recommend git-crypt for sensitive memory backups, but **the installer
-  does not set up git-crypt**. Git filenames, commit messages, and other metadata
-  remain visible even when file contents are encrypted.
+- Backups commit the tree and can push it to a git remote you choose, in plaintext
+  unless git-crypt encrypts it. Use a private remote. We recommend git-crypt for
+  sensitive memory backups, but **the installer does not set up git-crypt**: it asks
+  whether the remote is private, reports whether git-crypt covers the day-log, and
+  prints the setup steps when the remote isn't confirmed private. Git filenames,
+  commit messages, and other metadata remain visible even when file contents are
+  encrypted. [`docs/PRIVACY.md`](docs/PRIVACY.md#what-is-pushed-in-the-clear) lists
+  what is pushed in the clear.
 - The optional private store encrypts content with Fernet. New stores put their
   key in `private/.key`; it must never be committed and is excluded by both the
   memory template and the private store's `.gitignore`. Back it up separately.
@@ -57,7 +61,11 @@ notes, captured day logs, digests, or rollups. Ignore rules do not untrack files
 already committed; check existing repositories before enabling remote backups.
 The search index excludes the private store and runtime state.
 
-When capture runs, its default sources are Claude Code transcripts, Codex rollouts,
-and voice transcript files. Configure `<memory-root>/.smriti/daylog.json` to limit
-these sources; `"sources": []` disables all defaults (`extra_sources` still adds
-explicit sources). There is no blanket anonymisation of captured conversations.
+Capture is chosen at install. `scripts/install.py` asks whether to capture
+conversations, or takes `--capture` / `--no-capture`; with neither a terminal nor a
+flag, a new memory root captures nothing, and an existing one keeps the sources its
+`daylog.json` has. When capture runs, its default sources are Claude Code
+transcripts, Codex rollouts, and voice transcript files. Configure
+`<memory-root>/.smriti/daylog.json` to limit these sources; `"sources": []` (what
+`--no-capture` writes) disables all defaults (`extra_sources` still adds explicit
+sources). There is no blanket anonymisation of captured conversations.
