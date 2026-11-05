@@ -48,7 +48,7 @@ def _cmd_index(args: argparse.Namespace) -> int:
 def _cmd_read(args: argparse.Namespace) -> int:
     from smriti.core.tree import smriti_db_path
     from smriti.store.schema import open_readonly
-    from smriti.store.search import search
+    from smriti.store.search import search_with_status
 
     db_path = smriti_db_path()
     if not db_path.exists():
@@ -59,14 +59,14 @@ def _cmd_read(args: argparse.Namespace) -> int:
     # writing (ensure_schema runs DDL and upserts meta) could block writers.
     conn = open_readonly(db_path)
     try:
-        if not conn.execute("SELECT value FROM meta WHERE key = 'dimension'").fetchone():
-            print("Index is corrupted (no dimension). Run 'smriti index --full'.",
-                  file=sys.stderr)
-            return 1
         query = " ".join(args.query)
-        results = search(conn, query, top_k=args.n, use_reranker=not args.no_rerank)
+        outcome = search_with_status(conn, query, top_k=args.n,
+                                     use_reranker=not args.no_rerank)
     finally:
         conn.close()
+    for note in outcome.notes():
+        print(note, file=sys.stderr)
+    results = outcome.results
 
     if not results:
         print("No results found.")
@@ -141,12 +141,23 @@ def _cmd_status(args: argparse.Namespace) -> int:
     last_row = conn.execute("SELECT value FROM meta WHERE key = 'last_indexed'").fetchone()
     last = last_row[0] if last_row else "never"
 
+    from smriti.store.schema import pending_vectors
+
+    pending = pending_vectors(conn)
     conn.close()
 
     print(f"Files:      {source_count}")
     print(f"Chunks:     {chunk_count}")
     print(f"Model:      {model} (dim={dim})")
     print(f"Indexed:    {last}")
+    print(f"Pending:    {pending} sources whose vectors are still to come"
+          + (" (searchable by keyword meanwhile)" if pending else ""))
+    try:
+        from smriti.embed.client import service_state
+
+        print(f"Embedding:  {service_state(root).describe()}")
+    except Exception as exc:  # noqa: BLE001 — status must always print
+        print(f"Embedding:  unavailable ({exc})")
 
     # Day-log capture health (per-source; scan recency defines liveness).
     try:

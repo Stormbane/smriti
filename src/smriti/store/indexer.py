@@ -14,7 +14,9 @@ import logging
 import os
 import sqlite3
 import struct
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -146,8 +148,37 @@ class _InProcess:
         return await self._inner.embed(texts)
 
 
+_IN_PROCESS: ContextVar[bool] = ContextVar("smriti_in_process_embeddings", default=False)
+
+
+@contextmanager
+def in_process_embeddings() -> Iterator[None]:
+    """Embed with a model loaded in this process for the block, not through the service.
+
+    ``index_tree`` runs this way: it embeds thousands of chunks in one
+    short-lived process, where loading the model once costs less than
+    shipping every chunk to the service.
+    """
+    token = _IN_PROCESS.set(True)
+    try:
+        yield
+    finally:
+        _IN_PROCESS.reset(token)
+
+
 def _get_embedding_provider() -> _EmbeddingProvider:
-    """The embedder for this process's indexing, searches and writes."""
+    """The embedder for this process's searches and writes.
+
+    In a long-lived process (the MCP server, ``smriti read``, hooks) that
+    is the memory root's shared embedding service, so no process but the
+    service loads a model (``smriti.embed``). ``SMRITI_EMBED_SERVICE=0``,
+    or :func:`in_process_embeddings`, loads one here instead.
+    """
+    if not _IN_PROCESS.get():
+        from smriti.embed.client import service_enabled, service_provider
+
+        if service_enabled():
+            return service_provider(tree_root())
     return _local_provider()
 
 
@@ -349,7 +380,10 @@ def index_tree(
     stats = {"scanned": 0, "skipped": 0, "indexed": 0, "chunks": 0, "errors": 0}
 
     # ── Get embedding provider and dimension ─────────────────────────
-    provider = _get_embedding_provider()
+    # A model in this process, not the service: a run embeds thousands of
+    # chunks at once (see in_process_embeddings).
+    with in_process_embeddings():
+        provider = _get_embedding_provider()
     ours = identity_of(provider)
     dim = provider.dimension
     log.info("Embedding provider: %s (dimension=%d)", provider.model_name, dim)

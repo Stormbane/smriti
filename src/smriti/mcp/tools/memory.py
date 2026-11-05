@@ -34,17 +34,14 @@ def _get_db() -> IndexDB:
         _db = None
     if not db_path.exists():
         raise ToolError("no index yet; run 'smriti index' first")
-    db = open_readonly(db_path)
-    row = db.execute("SELECT value FROM meta WHERE key = 'dimension'").fetchone()
-    if not row:
-        db.close()
-        raise ToolError("the index has no dimension recorded; run 'smriti index --full'")
-    _db, _db_path = db, db_path
+    # No dimension is recorded until the first vectors are: an index whose
+    # first writes came while no embedder was available is searched by keyword.
+    _db, _db_path = open_readonly(db_path), db_path
     return _db
 
 
 def handle_read(arguments: Arguments) -> str:
-    from smriti.store.search import search
+    from smriti.store.search import search_with_status
 
     query = arguments.get("query", "")
     top_k = arguments.get("top_k", 5)
@@ -52,11 +49,13 @@ def handle_read(arguments: Arguments) -> str:
         raise ToolError("empty query")
 
     db = _get_db()
-    results = search(db, query, top_k=top_k, use_reranker=False)
+    outcome = search_with_status(db, query, top_k=top_k, use_reranker=False)
+    notes = outcome.notes()  # keyword-only, or vectors pending: never silent
+    results = outcome.results
     if not results:
-        return f"No results for: {query}"
+        return "\n".join([*notes, f"No results for: {query}"])
 
-    lines = []
+    lines = [*notes, ""] if notes else []
     for i, r in enumerate(results, 1):
         heading = f" :: {r.heading}" if r.heading else ""
         lines.append(f"[{i}] {r.source}{heading} (score: {r.score:.2f}, depth: {r.trunk_distance})")
@@ -69,31 +68,33 @@ def handle_read(arguments: Arguments) -> str:
 
 
 def handle_write(arguments: Arguments) -> str:
-    from smriti.store.writer import write_entry
+    from smriti.store.writer import write_entry_result
 
     content = arguments.get("content", "")
     if not content.strip():
         raise ToolError("content is empty.")
 
-    path = write_entry(
+    written = write_entry_result(
         content,
         branch=arguments.get("branch", "journal"),
         title=one_line(arguments.get("title") or "") or None,
         source_hint=one_line(arguments.get("source") or "") or None,
         reindex=True,
     )
-    return f"Written: {path}"
+    return f"Written: {written.path}\n{written.describe()}"
 
 
 def handle_status(arguments: Arguments) -> str:
     from smriti.core.tree import smriti_db_path, tree_root
-    from smriti.store.schema import open_readonly
+    from smriti.embed.client import service_state
+    from smriti.store.schema import open_readonly, pending_vectors
 
     db_path = smriti_db_path()
     root = tree_root()
     lines = [f"Tree root: {root}", f"Database: {db_path}"]
+    service = f"Embedding service: {service_state(root).describe()}"
     if not db_path.exists():
-        lines.append("Status: Not indexed")
+        lines.extend(["Status: Not indexed", service])
         return "\n".join(lines)
     db = open_readonly(db_path)
     try:
@@ -102,6 +103,7 @@ def handle_status(arguments: Arguments) -> str:
         model = db.execute("SELECT value FROM meta WHERE key = 'model'").fetchone()
         dim = db.execute("SELECT value FROM meta WHERE key = 'dimension'").fetchone()
         last = db.execute("SELECT value FROM meta WHERE key = 'last_indexed'").fetchone()
+        pending = pending_vectors(db)
     finally:
         db.close()
     lines.extend([
@@ -109,6 +111,9 @@ def handle_status(arguments: Arguments) -> str:
         f"Chunks: {chunks}",
         f"Model: {model[0] if model else '?'} (dim={dim[0] if dim else '?'})",
         f"Indexed: {last[0] if last else 'never'}",
+        f"Vectors pending: {pending}"
+        + (" (searchable by keyword meanwhile)" if pending else ""),
+        service,
     ])
     return "\n".join(lines)
 

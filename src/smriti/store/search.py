@@ -59,6 +59,16 @@ class SearchOutcome:
 
     results: list[SearchResult]
     keyword_only: str = ""  # the reason; "" when the vector leg ran (or wasn't asked for)
+    pending: int = 0  # sources searchable by keyword only for now: their vectors are pending
+
+    def notes(self) -> list[str]:
+        """What a reader must know when the search was less than hybrid."""
+        if self.keyword_only:
+            return [f"keyword-only: {self.keyword_only}"]
+        if self.pending:
+            some = "1 source is" if self.pending == 1 else f"{self.pending} sources are"
+            return [f"note: {some} searchable by keyword only for now (vectors pending)"]
+        return []
 
 
 def _serialize_f32(vec: list[float]) -> bytes:
@@ -281,9 +291,12 @@ def search_with_status(
     keyword_only = "" if has_vec or not use_vectors else "sqlite-vec is not available"
     vec_scores: dict[int, float] = {}
 
+    pending = 0
     if has_vec:
         from smriti.store.indexer import _reason
+        from smriti.store.schema import pending_vectors
 
+        pending = pending_vectors(conn)
         try:
             keyword_only = _vector_leg(conn, query, candidate_k, vec_scores, candidates)
         except Exception as exc:  # noqa: BLE001 — logged and reported; falls back to keywords
@@ -344,7 +357,7 @@ def search_with_status(
             log.warning("FTS search failed: %s", exc)
 
     if not candidates:
-        return SearchOutcome([], keyword_only)
+        return SearchOutcome([], keyword_only, pending)
 
     # ── Combined scoring ─────────────────────────────────────────────
     scored: list[tuple[int, float, _Candidate]] = []
@@ -397,7 +410,7 @@ def search_with_status(
                 top_score=results[0].score if results else 0,
                 top_source=results[0].source if results else "",
             )
-            return SearchOutcome(results[:top_k], keyword_only)
+            return SearchOutcome(results[:top_k], keyword_only, pending)
         except Exception as exc:  # noqa: BLE001 — logged; the combined scores stand
             log.warning("Reranker failed; using the combined score: %s", exc)
 
@@ -427,4 +440,4 @@ def search_with_status(
         top_score=results[0].score if results else 0,
         top_source=results[0].source if results else "",
     )
-    return SearchOutcome(results, keyword_only)
+    return SearchOutcome(results, keyword_only, pending)

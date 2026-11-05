@@ -25,12 +25,14 @@ def eval_sandbox() -> Iterator[Path]:
     Lower-level store code still uses process-wide environment and metrics state.
     Scope both to this copy and restore them afterwards. Eval is a synchronous
     CLI operation; do not run it alongside other store operations in one process.
+    It embeds in this process, so it never starts an embedding service for the
+    disposable copy.
     """
     import smriti.metrics as metrics
-    from smriti.store.indexer import index_tree
+    from smriti.store.indexer import in_process_embeddings, index_tree
 
     global _active_root
-    with TemporaryDirectory(prefix="smriti-eval-") as directory:
+    with TemporaryDirectory(prefix="smriti-eval-") as directory, in_process_embeddings():
         root = Path(directory).resolve()
         shutil.copytree(FIXTURE_ROOT, root, dirs_exist_ok=True)
         previous_root = _active_root

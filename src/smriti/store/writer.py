@@ -23,12 +23,32 @@ separated by horizontal rules, under the file's edit lock.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from smriti.core.frontmatter import one_line
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Written:
+    """Where an entry went, and how far it is searchable."""
+
+    path: Path
+    indexed: bool = False  # its chunks are in the index (at least for keyword search)
+    vectors_pending: str = ""  # why its vectors are still to come, or ""
+    index_error: str = ""  # why it isn't indexed at all yet, or ""
+
+    def describe(self) -> str:
+        """The outcome in a line, for the writer's caller (``smriti_write``)."""
+        if self.vectors_pending:
+            return (f"saved; indexed for keyword search; vectors pending "
+                    f"({self.vectors_pending})")
+        if self.index_error:
+            return f"saved; not indexed yet ({self.index_error}); the next index run catches up"
+        return "saved and indexed" if self.indexed else "saved"
 
 
 def _week_of_month(day: int) -> int:
@@ -96,6 +116,20 @@ def write_entry(
     root: Path | None = None,
     reindex: bool = True,
 ) -> Path:
+    """Write a new markdown entry; returns its path (see :func:`write_entry_result`)."""
+    return write_entry_result(content, branch=branch, title=title, source_hint=source_hint,
+                              root=root, reindex=reindex).path
+
+
+def write_entry_result(
+    content: str,
+    *,
+    branch: str = "journal",
+    title: str | None = None,
+    source_hint: str | None = None,
+    root: Path | None = None,
+    reindex: bool = True,
+) -> Written:
     """Write a new markdown entry to the narada tree.
 
     Parameters
@@ -118,8 +152,8 @@ def write_entry(
 
     Returns
     -------
-    Path
-        Absolute path of the written file.
+    Written
+        The absolute path of the written file, and how far it is indexed.
     """
     from smriti.core.tree import tree_root
 
@@ -176,13 +210,14 @@ def write_entry(
         source_hint=source_hint or "",
     )
 
+    written = Written(entry_path)
     if reindex:
-        _reindex_one(entry_path, root)
+        written = _reindex_one(entry_path, root)
 
     # Keep the index.md listings of the parent directories current.
     _update_index_pages(entry_path, root)
 
-    return entry_path
+    return written
 
 
 def _append_entry(path: Path, entry_block: str) -> None:
@@ -201,22 +236,25 @@ def _append_entry(path: Path, entry_block: str) -> None:
         f.write(data)
 
 
-def _reindex_one(path: Path, root: Path) -> None:
+def _reindex_one(path: Path, root: Path) -> Written:
     """Index just the written file — the write path's fast lane.
 
     A full ``index_tree`` here meant every MCP server did a ~7000-file
     scan per write while contending for the one write lock (the
     "connection closed" era). ``index_file`` embeds only this entry's
-    chunks in one short transaction; the nightly full pass remains the
-    backstop for anything a degraded write leaves behind.
+    chunks in one short transaction. Without vectors it is still indexed
+    for keyword search, its vectors pending; the nightly full pass remains
+    the backstop for anything a failed index leaves behind.
     """
     try:
-        from smriti.store.indexer import index_file
+        from smriti.store.indexer import index_file_result
 
-        chunks = index_file(path, root=root)
-        log.info("Indexed written file %s (%d chunks)", path.name, chunks)
-    except Exception as exc:  # noqa: BLE001 — never blocks the write; the nightly catches up
+        result = index_file_result(path, root=root)
+        log.info("Indexed written file %s (%d chunks)", path.name, result.chunks)
+        return Written(path, indexed=True, vectors_pending=result.vectors_pending)
+    except Exception as exc:  # noqa: BLE001 — never blocks the write; reported to its caller
         log.warning("Reindex after write failed: %s", exc)
+        return Written(path, index_error=f"{type(exc).__name__}: {exc}")
 
 
 def _update_index_pages(path: Path, root: Path) -> None:
