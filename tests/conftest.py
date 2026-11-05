@@ -1,7 +1,7 @@
 """Test isolation: no test may touch the real memory tree or its metrics.
 
 Without this, any code path that falls back to ``tree_root()`` (the default
-``~/.narada``) wrote into the live tree, and the process-wide metrics
+root) wrote into the live tree, and the process-wide metrics
 logger kept appending pytest events to the live ``metrics.jsonl``: about
 2,600 of them, which made those metrics useless as health signals.
 
@@ -59,6 +59,7 @@ def _claude_cli_unready() -> str:
 def _isolated_memory_root(tmp_path_factory: pytest.TempPathFactory,
                           monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     import smriti.metrics as metrics
+    import smriti.profiles as profiles
 
     root = tmp_path_factory.mktemp("memory-root")
     monkeypatch.setenv("SMRITI_ROOT", str(root))
@@ -73,5 +74,9 @@ def _isolated_memory_root(tmp_path_factory: pytest.TempPathFactory,
     monkeypatch.setenv("SMRITI_EMBED_SERVICE", "0")
     monkeypatch.setenv("SMRITI_RUNTIME_DIR", str(tmp_path_factory.mktemp("run")))
     metrics._instance = None  # re-resolve the metrics path under the temp root
+    # Installed profiles are read once per process; each test sees only the
+    # ones installed for it (tests/_profiles.py installs synthetic ones).
+    profiles._installed.cache_clear()
     yield root
     metrics._instance = None
+    profiles._installed.cache_clear()

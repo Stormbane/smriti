@@ -39,6 +39,7 @@ Every hook is optional:
 
 from __future__ import annotations
 
+import functools
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -110,6 +111,33 @@ def _provider(entry: EntryPoint) -> str:
     return f"{dist.name} {dist.version}" if dist is not None else entry.value
 
 
+@functools.lru_cache(maxsize=1)
+def _installed() -> dict[str, tuple[EntryPoint, ...]]:
+    """Every entry point in the group, by name: read once per process.
+
+    Reading them opens every installed distribution's metadata (about
+    150 ms in an environment of 700 packages), and the MCP server resolves
+    its profile on each request.
+    """
+    found: dict[str, list[EntryPoint]] = {}
+    for entry in entry_points(group=ENTRY_POINT_GROUP):
+        found.setdefault(entry.name, []).append(entry)
+    return {name: tuple(entries) for name, entries in found.items()}
+
+
+def _entries(name: str) -> tuple[EntryPoint, ...]:
+    """The entry points called *name*; read again before answering none.
+
+    A package installed after the first read (a server started before
+    ``pip install``) is then found on the next call, not at a restart.
+    """
+    found = _installed().get(name, ())
+    if not found:
+        _installed.cache_clear()
+        found = _installed().get(name, ())
+    return found
+
+
 def load_profile(name: str) -> Profile:
     """The installed profile called *name*.
 
@@ -121,7 +149,7 @@ def load_profile(name: str) -> Profile:
     if not _NAME_RE.match(name):
         raise ProfileError(f"profile name {name!r} is not a plain lower-case name")
     try:
-        found = list(entry_points(group=ENTRY_POINT_GROUP, name=name))
+        found = _entries(name)
     except (OSError, ValueError) as exc:  # an installed package's metadata is unreadable
         raise ProfileError(f"can't read the installed {ENTRY_POINT_GROUP!r} entry points: "
                            f"{exc}") from exc

@@ -12,6 +12,7 @@ import json
 import logging
 import subprocess
 import sys
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any
 
@@ -210,6 +211,36 @@ def test_an_installed_profile_adds_its_wake_sections_and_morning_prompt(
     assert "--- GARDEN ---\nThe beans are up.\n" in text
     assert _system_prompt(load_config(_isolated_memory_root)) == (
         "You are Ari, writing Sam one line to start the day.")
+
+
+def test_installed_profiles_are_read_once_per_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Reading entry points opens every installed package's metadata, and the
+    # MCP server resolves its profile on each request.
+    import smriti.profiles as profiles
+
+    install_profile(tmp_path / "site", monkeypatch)
+    reads: list[str] = []
+
+    def counted(**kwargs: str) -> object:
+        reads.append(kwargs["group"])
+        return entry_points(**kwargs)
+
+    monkeypatch.setattr(profiles, "entry_points", counted)
+    for _ in range(3):
+        assert load_profile("sample").name == "sample"
+    assert reads == ["smriti.profiles"]
+
+
+def test_a_profile_installed_after_a_miss_is_found_without_a_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A server started before `pip install` of its profile.
+    with pytest.raises(ProfileError, match="no installed package provides"):
+        load_profile("sample")
+    install_profile(tmp_path / "site", monkeypatch)
+    assert load_profile("sample").name == "sample"
 
 
 @pytest.mark.parametrize("name", ["nosuch", "Reference", "../reference", "reference.outbox",
