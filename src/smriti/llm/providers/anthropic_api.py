@@ -9,10 +9,11 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from anthropic import Anthropic
+    from anthropic.types import MessageParam
 
 from smriti.llm.types import LLMError, LLMRequest, LLMResponse, RateLimitExceeded
 
@@ -67,8 +68,11 @@ class AnthropicApiProvider:
                     "text": request.system,
                     "cache_control": {"type": "ephemeral"},
                 }],
+                # Cast, not inferred: the SDK's MessageParam is one TypedDict in some
+                # releases and a union of them in others, and a dict literal can't be
+                # matched to a union member by mypy.
                 messages=[
-                    {"role": m.role, "content": m.content}
+                    cast("MessageParam", {"role": m.role, "content": m.content})
                     for m in request.turns()
                 ],
             )
