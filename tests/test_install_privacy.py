@@ -609,6 +609,63 @@ class TestSummary:
         assert "WARNING: your conversations would go in plaintext" in text
 
     @needs_git
+    def test_the_untrack_advice_names_each_file_and_works(self, root: Path) -> None:
+        """No directory, no pattern: exactly the tracked day-log files, --cached,
+        a dry run first. And the printed command really does untrack them."""
+        import shlex
+        import subprocess
+
+        git_repo(root, REMOTE)
+        days = ["log/2026/11/03.jsonl", "log/2026/11/04.jsonl", "log/2026.md"]
+        for rel in days:
+            track(root, rel)
+        track(root, "notes/keep.md")
+        (root / ".gitignore").write_text("log/\n", encoding="utf-8")
+
+        plan = decide_and_apply(root, capture=True, remote_private=False)
+        text = privacy.summary(root, plan)
+        dry, real = privacy.untrack_commands(root, privacy.inspect_git(root))
+        assert dry in text and real in text and "--dry-run" in dry
+        for cmd in (dry, real):
+            assert "--cached" in cmd and " -r" not in cmd and "*" not in cmd
+            assert cmd.endswith(" -- " + " ".join(sorted(days)))
+            assert "log/ " not in cmd + " "  # never the directory itself
+
+        # Run the printed command as a user would (Windows-style quoting kept literal).
+        argv = [token.strip('"') for token in shlex.split(real, posix=False)]
+        subprocess.run(argv, check=True, capture_output=True)
+        tracked = subprocess.run(["git", "-C", str(root), "ls-files"], check=True,
+                                 capture_output=True, text=True).stdout.split()
+        assert "notes/keep.md" in tracked and not set(days) & set(tracked)
+        assert all((root / rel).exists() for rel in days)  # still on disk
+
+    @needs_git
+    def test_many_tracked_days_go_in_a_list_file_outside_the_tree(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        days = [f"log/2026/10/{d:02d}.jsonl" for d in range(1, 16)]
+        for rel in days:
+            track(root, rel)
+        (root / ".gitignore").write_text("log/\n", encoding="utf-8")
+
+        dry, real = privacy.untrack_commands(root, privacy.inspect_git(root))
+        listing = Path(dry.split('--pathspec-from-file="', 1)[1].rstrip('"'))
+        assert root.resolve() not in listing.resolve().parents  # never committed itself
+        assert listing.read_text(encoding="utf-8").split() == sorted(days)
+        assert "*" not in real and " -r" not in real and "--cached" in real
+
+    @needs_git
+    def test_waiting_files_are_listed_and_never_deleted(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        day = root / "log" / "2026" / "11" / "04.jsonl"
+        day.parent.mkdir(parents=True)
+        day.write_text("{}\n", encoding="utf-8")
+
+        plan = decide_and_apply(root, capture=False, remote_private=False)
+        text = privacy.summary(root, plan)
+        assert "log/2026/11/04.jsonl" in text and "without deleting anything" in text
+        assert "delete them" not in text and day.exists()
+
+    @needs_git
     def test_tracked_days_are_pushed_even_with_capture_off(self, root: Path) -> None:
         git_repo(root, REMOTE)
         track(root, "log/2026/11/04.jsonl")

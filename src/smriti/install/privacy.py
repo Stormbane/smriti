@@ -25,12 +25,14 @@ The installer calls :func:`decide` before it changes anything, then
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -109,6 +111,9 @@ class GitState:
     # Day-log files on disk, not ignored and not yet committed: written
     # before the first backup, they go with the next one, capture on or off.
     log_untracked: int = 0
+    # The files themselves, so any advice names exactly them, never a pattern.
+    tracked_files: tuple[str, ...] = ()
+    untracked_files: tuple[str, ...] = ()
     log_crypt: str = "none"  # one of CRYPT_STATES: how well git-crypt protects them
     crypt_detail: str = ""  # why, when it isn't plainly encrypted or plainly not
     error: str = ""  # git couldn't be run
@@ -138,6 +143,37 @@ class GitState:
         """What a saved answer about the remote is for: every push URL, sorted.
         Adding, removing or changing one makes the answer stale."""
         return sorted(self.remote_urls)
+
+
+# Up to this many files are named on the command line; more go in a list file.
+_INLINE_FILES = 10
+
+
+def untrack_commands(root: Path, git: GitState) -> list[str]:
+    """``git rm --cached`` for exactly the tracked day-log files: a dry run, then the real one.
+
+    Never a directory or a pattern: each file is named, on the command line
+    or in a list file the user can read first (``--pathspec-from-file``).
+    ``--cached`` leaves the files on disk.
+    """
+    base = f'git -C "{root}" rm --cached --quiet'
+    if len(git.tracked_files) <= _INLINE_FILES:
+        files = " ".join(git.tracked_files)
+        return [f"{base} --dry-run -- {files}", f"{base} -- {files}"]
+    # Outside the tree, so no backup commits the list itself.
+    tag = hashlib.sha1(str(root.resolve()).encode("utf-8")).hexdigest()[:8]
+    listing = Path(tempfile.gettempdir()) / f"smriti-day-log-to-untrack-{tag}.txt"
+    listing.write_text("\n".join(git.tracked_files) + "\n", encoding="utf-8")
+    spec = f'--pathspec-from-file="{listing}"'
+    return [f"{base} --dry-run {spec}", f"{base} {spec}"]
+
+
+def _shown(files: tuple[str, ...]) -> list[str]:
+    """Up to ``_INLINE_FILES`` names, then how many more."""
+    shown = list(files[:_INLINE_FILES])
+    if len(files) > _INLINE_FILES:
+        shown.append(f"... and {len(files) - _INLINE_FILES} more (`git status -- log/` lists them)")
+    return shown
 
 
 def _join_words(items: list[str]) -> str:
@@ -414,6 +450,8 @@ def inspect_git(root: Path) -> GitState:
         log_ignored=log_ignored,
         log_tracked=len(tracked),
         log_untracked=len(untracked),
+        tracked_files=tuple(sorted(tracked)),
+        untracked_files=tuple(sorted(untracked)),
         log_crypt=crypt,
         crypt_detail=detail,
     )
@@ -680,15 +718,18 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
         if git.log_ignored and git.log_tracked:
             lines.append(
                 f"             log/ is git-ignored, but {git.log_tracked} day-log file(s) "
-                "committed earlier are still tracked, and each backup commits their changes "
-                "(`git rm -r --cached log/` untracks them; history keeps them)"
+                "committed earlier are still tracked, and each backup commits their changes. "
+                "To untrack exactly those files (they stay on disk, and history keeps them), "
+                "check first with --dry-run, then run it without:"
             )
+            lines.extend(f"               {cmd}" for cmd in untrack_commands(root, git))
         if not sources and git.log_untracked:
             lines.append(
                 f"             capture is off, but {git.log_untracked} day-log file(s) it wrote "
-                "earlier are on disk and not yet committed; the next backup commits them "
-                "(delete them, or git-ignore log/, to keep them out)"
+                "earlier are on disk and not yet committed; the next backup commits them. "
+                "To keep them out without deleting anything, git-ignore log/; they are:"
             )
+            lines.extend(f"               {p}" for p in _shown(git.untracked_files))
         if not git.remote_urls:
             lines.append("  pushed:    nothing; there is no remote named origin")
         else:
