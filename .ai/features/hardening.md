@@ -352,5 +352,17 @@ a recheck.
   version from the development machine's.
 - **H9.12 done**: outside review #4 at `f1319a1`, Opus B (was B-), Sonnet B+ (was B).
   The findings are H11.
-- **H10**: planned; Claude-Codex cross-review running.
+- **H10.0-H10.3 and H10.5 implemented** (2026-11-05, branch `hardening/h10-embed`;
+  H10.4 was dropped for H11.9); the Codex diff review is still to run. An MCP
+  server with the service on measured 42-44 MB after searches and writes, with
+  no torch, onnxruntime or provider module loaded, against 1,028 MB before.
+  Choices the plan left open: the identity's revision is the hub snapshot hash
+  (blank, so unchecked, where a provider doesn't load from the hub); a blank
+  field matches anything; the service prefers the index's recorded provider to
+  `SMRITI_EMBED_PROVIDER`; Windows relies on the profile's ACLs, not an owner
+  check; one start per root every 10 s; a failed start is reported for 30 s
+  before another is tried. Found on the way and fixed: two writers creating a
+  new index failed one with "database is locked" (the WAL switch), and a
+  Windows sharing violation reading the key as another process renamed it into
+  place.
 - **H11**: planned, after H10.

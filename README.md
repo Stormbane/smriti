@@ -17,6 +17,8 @@ during a session                              in the background
 SessionStart hook -> wake briefing            smriti logd  (kept alive every 10 min)
 smriti_read       -> hybrid search              Claude Code transcripts, Codex rollouts,
 smriti_write      -> dated markdown + index     voice transcripts -> log/YYYY/MM/DD.jsonl
+  (vectors from the embedding service)        smriti embed serve  (started on demand,
+                                                one model per memory root; exits when idle)
 
 03:00  smriti nightly
        reconcile -> render -> digest -> rollups -> index -> witness -> status
@@ -24,9 +26,11 @@ smriti_write      -> dated markdown + index     voice transcripts -> log/YYYY/MM
 ```
 
 **In a session:**
-- **Write.** `smriti_write(content, branch="journal", title?, source?)` appends a dated entry with frontmatter (`date`, `time`, `branch`, `source`) to `<branch>/YYYY/MM-DD.md`, or `journal/YYYY/MM/weekN/MM-DD.md` for the journal. The file is indexed at once, and each existing `index.md` in its parent directories is regenerated to list it (`smriti.store.index_pages`).
-- **Read.** `smriti_read(query, top_k=5)` runs hybrid search over the tree. A result's score is 0.5 vector similarity (sqlite-vec) + 0.3 keyword (FTS5) + 0.2 trunk distance, the last favouring files near the root. `smriti read` on the CLI also reranks with a cross-encoder; the MCP tool doesn't.
+- **Write.** `smriti_write(content, branch="journal", title?, source?)` appends a dated entry with frontmatter (`date`, `time`, `branch`, `source`) to `<branch>/YYYY/MM-DD.md`, or `journal/YYYY/MM/weekN/MM-DD.md` for the journal. The file is indexed at once, and each existing `index.md` in its parent directories is regenerated to list it (`smriti.store.index_pages`). When no vectors can be made (the embedding service is down or late), the entry is still indexed for keyword search at once, and the reply says "saved; indexed for keyword search; vectors pending (reason)"; the vectors arrive later without anyone asking.
+- **Read.** `smriti_read(query, top_k=5)` runs hybrid search over the tree. A result's score is 0.5 vector similarity (sqlite-vec) + 0.3 keyword (FTS5) + 0.2 trunk distance, the last favouring files near the root. `smriti read` on the CLI also reranks with a cross-encoder; the MCP tool doesn't. A search that couldn't use vectors runs by keyword only and starts with "keyword-only: reason".
 - **Wake.** A SessionStart hook runs `<root>/.smriti/wake.py`, which prints a briefing of at most 9,500 characters. [`docs/SELF.md`](docs/SELF.md) lists its sections and where each comes from.
+
+**The embedding service.** One process per memory root holds the embedding model, and every session's MCP server (and `smriti read`) asks it for vectors, so a server stays small (44 MB measured after searches and writes) instead of loading its own copy of the model (about 1 GB each; 66 servers once held 32 GB). The first search or write that finds it not running starts `python -m smriti embed serve` in a hidden console and waits, bounded: 3 s for a query, 30 s for a write. It exits after 15 minutes without a request (`SMRITI_EMBED_IDLE_S`), which gives the model's memory back, and drains and exits when the index moves to another embedding model, so the next client starts a fresh one. Between requests it fills in the vectors of anything written while it was unavailable. It listens on a loopback port only, and both sides prove they hold a per-user key before anything else is sent ([`SECURITY.md`](SECURITY.md#the-embedding-service)). `smriti embed status` and `smriti status` show its state and how many sources' vectors are pending; `smriti embed stop` drains it now. The nightly's `smriti index` and `smriti eval` load the model in their own short-lived process instead. `SMRITI_EMBED_SERVICE=0` turns the service off: every process then loads the model itself, as before.
 
 **The day-log.** `smriti logd` watches transcript files and merges every turn into one chronological file per local day. Each turn gets a content-derived id, a speaker role (`user` or `agent`), a channel and a time, and credential-shaped strings are masked. Sources are globs in `<root>/.smriti/daylog.json`. The defaults are Claude Code, Codex and a voice-transcript folder. The same file names the two parties (`user_name`, `agent_name`) for the render and the prompts; see [Configuration](#configuration).
 
@@ -162,6 +166,8 @@ The witness step needs `pip install -e ".[witness]"` and a memory root that is a
 ### Configuration
 
 `<root>/.smriti/daylog.json` is optional; every key has a default. `user_name` and `agent_name` (default `"User"` and `"Agent"`) are the names the day render, the nightly and morning prompts and the core tools use for the two speaker roles. `profile` enables an optional profile, `smriti.profiles.<name>`: one installation's own tools, wake sections and morning persona. With none set, smriti runs its generic core. The repo's one profile, `reference`, is the maintainer's installation, which sets `{"profile": "reference", "user_name": "Suti", "agent_name": "Narada"}`. [`docs/INSTALL.md`](docs/INSTALL.md#configuration-rootsmritidaylogjson) lists every key.
+
+The embedding service reads three environment variables: `SMRITI_EMBED_SERVICE=0` turns it off; `SMRITI_EMBED_IDLE_S` sets its idle exit (default 900 seconds); `SMRITI_RUNTIME_DIR` moves its runtime directory (default `%LOCALAPPDATA%\smriti\run` on Windows, `$XDG_RUNTIME_DIR/smriti` or `~/.cache/smriti/run` elsewhere), which holds its key, lock, discovery file and log and is never inside the memory root.
 
 ## Interfaces
 

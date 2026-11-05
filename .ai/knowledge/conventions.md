@@ -46,7 +46,13 @@
 
 - **Environment variables** for all config overrides: SMRITI_ROOT (or the legacy
   NARADA_ROOT), SMRITI_LLM_PROVIDER, SMRITI_MODEL, SMRITI_EXECUTOR_MODEL,
-  ANTHROPIC_API_KEY.
+  ANTHROPIC_API_KEY, SMRITI_EMBED_PROVIDER, and for the embedding service
+  SMRITI_EMBED_SERVICE (0 turns it off), SMRITI_EMBED_IDLE_S and
+  SMRITI_RUNTIME_DIR.
+- **Runtime state outside the tree**: what a process shares with others of the
+  same user (the embedding service's key, lock, discovery file, log) lives in
+  the private runtime directory (`smriti.embed.runtime`), never in the memory
+  root, which git tracks and pushes.
 - **No config files** in v0.1. Env vars only.
 - **`root: Path | None = None`** parameter pattern -- most functions accept an
   optional root that defaults to `tree_root()`. This makes testing easy (pass

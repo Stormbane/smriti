@@ -20,7 +20,19 @@ the document is written with them in mind alongside the others.
 Still running:
 
 - **Index + search** (Step 6): hybrid vector (sqlite-vec) + FTS5 with
-  trunk-distance scoring. CLI: `smriti index`, `smriti read`.
+  trunk-distance scoring. CLI: `smriti index`, `smriti read`. An index
+  records the embedding identity (provider, model, model revision,
+  dimension) it was built with, and vectors of any other identity are
+  never written into it or compared with it (`smriti.embed.identity`).
+  A write whose vectors can't be made is indexed for keyword search at
+  once, and its vectors filled in later.
+- **The embedding service** (added November 2026, not in the April
+  design): one process per memory root holds the model, and the MCP
+  servers and `smriti read` ask it over authenticated loopback TCP
+  instead of each loading a copy (`smriti.embed`, `smriti embed`). The
+  index's recorded identity, not any client, decides when it restarts.
+  `smriti index` loads its own model; `SMRITI_EMBED_SERVICE=0` turns the
+  service off.
 - **Write path** (Step 4): dated-entry writes under branches with
   frontmatter. CLI: `smriti write`; MCP: `smriti_write`.
 - **Index pages** (the design's "structural cascade"): each write

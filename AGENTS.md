@@ -25,6 +25,7 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 - `smriti nightly` (03:00): reconcile → render → digest (one `claude -p` call per day, `codex exec` as fallback) → week/month/year rollups → index → witness (a git commit plus an OpenTimestamps stamp) → status file.
 - `smriti morning` (07:00): one message a day composed from the digest, from the configured agent to the configured user; a profile can supply its own prompt (the reference profile's carries its persona).
 - The wake briefing: a SessionStart hook prints `smriti.wake.briefing()`, at most 9,500 characters.
+- The embedding service (hardening H10): `smriti embed serve`, one per memory root, holds the model; the MCP servers and `smriti read` ask it over authenticated loopback TCP and start it on demand, and it exits after 15 idle minutes. `smriti index` (and so the nightly) loads its own model. A write without vectors is indexed for keyword search, its vectors pending until the service fills them. `SMRITI_EMBED_SERVICE=0` turns it off. `SECURITY.md` has its trust boundary.
 - Backups: `<root>/.smriti/backup.py` commits the memory tree hourly (the `smriti-backup` task; it pushes only when there is something new) and in the nightly. Sessions don't trigger it.
 
 **Removed** (2026-11-05, hardening H3; the code is in the git history): the deep pipeline that `smriti sleep --deep` ran (cognitive cascade, JUDGE, ingest and routing, consolidation, thread synthesis, actionables, journal rollups, the wake-context rebuild), its task queue and file watcher, and the `sleep`, `queue`, `daemon`, `watch`, `ingest` and `merge-concepts` commands. `smriti eval` keeps only its search cases.
@@ -58,6 +59,7 @@ src/smriti/
   cli.py                 the `smriti` command
   mcp/                   MCP server over stdio, no dependencies: protocol, tool table, tools by group
   store/                 writer, index pages (index.md upkeep), indexer, index policy, schema, search
+  embed/                 embedding identity; the embedding service, its client, protocol and runtime dir
   daylog/                capture adapters, logd, render, digest, rollups, nightly, morning, schedule
   wake/                  briefing.py: the wake briefing, with a hook for a profile's sections
   profiles/              optional profiles (tools, wake sections, morning prompt); reference/ is the maintainer's installation

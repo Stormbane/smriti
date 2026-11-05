@@ -18,6 +18,15 @@ The package version remains 0.1.0; subsequent development is unreleased.
   OpenTimestamps witness records.
 - A wake briefing library, archived session handoffs, and an explanation of the
   self model in `docs/SELF.md`.
+- A per-user embedding service (`smriti embed serve|status|stop`): one model per
+  memory root, shared by every session's MCP server and `smriti read` over
+  mutually authenticated loopback TCP, started on demand and exiting when idle.
+  An MCP server no longer loads a model (44 MB measured, against about 1 GB).
+  `SMRITI_EMBED_SERVICE=0` turns it off.
+- The embedding identity (provider, model, model revision, dimension), recorded
+  with an index's first vectors and checked wherever vectors are written or
+  compared. Writes without vectors are indexed for keyword search and their
+  vectors filled later; reads, writes and status say when they are degraded.
 
 ### Removed
 

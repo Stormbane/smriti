@@ -27,6 +27,9 @@ security backport series or guaranteed response time.
   providers keep inference local after model installation; choosing a hosted
   provider sends embedding inputs to that provider. Nightly digests and rollups
   send conversation text to the configured LLM CLI/provider.
+- The embedding service listens on a loopback TCP port, and every process of the
+  same user that holds its key can use it; other users can connect but are
+  refused. See [The embedding service](#the-embedding-service).
 - Backups commit the tree and can push it to a git remote you choose, in plaintext
   unless git-crypt encrypts it. Use a private remote. We recommend git-crypt for
   sensitive memory backups, but **the installer does not set up git-crypt**: it asks
@@ -48,6 +51,46 @@ security backport series or guaranteed response time.
   are persisted. This is pattern-based, not comprehensive secret or personal-data
   detection. Unrecognised secrets and ordinary personal information remain; direct
   memory writes do not pass through this capture scrubber.
+
+## The embedding service
+
+`smriti embed serve` (`smriti.embed`) holds the embedding model for one memory
+root and embeds text for the user's other smriti processes: the MCP servers,
+`smriti read`, hooks. What it exposes, and to whom:
+
+- **The endpoint.** A TCP listener on `127.0.0.1`, on an ephemeral port, never on
+  another interface. On Windows it binds with `SO_EXCLUSIVEADDRUSE`, so no other
+  process can bind the same port alongside it. Its port, pid and instance id are
+  in a discovery file in the runtime directory.
+- **The runtime directory** holds the key, the discovery files, the services'
+  locks and logs, and is never inside the memory tree, so none of it is committed
+  or pushed: `%LOCALAPPDATA%\smriti\run` on Windows, private to the user by the
+  profile's ACLs; `$XDG_RUNTIME_DIR/smriti` or `~/.cache/smriti/run` elsewhere,
+  created mode 0700 and refused when another user owns it or others can write to
+  it (smriti doesn't check ownership on Windows; it relies on the profile's ACLs,
+  including when `SMRITI_RUNTIME_DIR` points elsewhere).
+- **The key.** 32 random bytes in `<runtime>/embed.key`, made once by an exclusive
+  create (mode 0600 on POSIX, refused if others can read it) and never replaced.
+  One key serves all of a user's memory roots.
+- **Authentication, both ways.** Each connection starts with an HMAC-SHA256
+  challenge-response over the key. The client checks the service's proof before it
+  sends anything else, so a process that took the port after the service died
+  learns only a random nonce, never the text. The service checks the client's
+  proof before it reads a request, so a peer without the key gets no answer and no
+  embedding. Messages are length-prefixed JSON (never pickle), at most 4 MB, and at
+  most 4 KB before authentication.
+- **Bounds.** At most 32 connections at once (more are closed on accept), a 1 s
+  handshake, 64 queued requests, and a deadline on every read and write, so
+  another local user can tie up the port for a while, which degrades search to
+  keywords and leaves new writes' vectors pending, but can't exhaust memory or
+  threads, or make a client hang.
+- **The trust boundary is the user.** Any process running as the same user can
+  read the key and use the service, and could equally read the memory tree
+  itself; the service adds no access the user's own processes lack. The traffic
+  is not encrypted: it never leaves the machine, but anyone who can capture
+  loopback traffic (an administrator) can read the texts being embedded.
+- **The off switch.** `SMRITI_EMBED_SERVICE=0` turns the service off; every process
+  then loads the model itself, and nothing listens.
 
 ## Privacy defaults
 
