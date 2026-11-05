@@ -68,6 +68,14 @@ def test_local_day_handles_naive_timestamps() -> None:
         "AKIAIOSFODNN7EXAMPLE",
         "api_key = supersecret42",
         "password: hunter2hunter2",
+        "github_pat_" + "11ABCDEFG0123456789_abcdefghij",
+        "sk_" + "live_" + "51HxABCDEFGHIJKLMNOPQRSTUV",
+        "rk_" + "test_" + "51HxABCDEFGHIJKLMNOPQRSTUV",
+        "AIza" + "SyA1234567890abcdefghijklmnopqrstuv",
+        "npm_" + "abcdefghijklmnopqrstuvwxyz0123456789",
+        "123456789:" + "AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawB",
+        "https://hooks.slack.com/" + "services/T000/B000/XXXXXXXXXXXXXXXX",
+        "eyJhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiIxMjM0NTY3ODkwIn0." + "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
     ],
 )
 def test_scrub_masks_credentials(secret: str) -> None:
@@ -76,6 +84,11 @@ def test_scrub_masks_credentials(secret: str) -> None:
     # The secret literal (sans any kept key-name prefix) must be gone.
     tail = secret.split("=")[-1].split(":")[-1].strip()
     assert tail not in scrubbed
+
+
+def test_scrub_masks_only_the_password_in_a_url() -> None:
+    scrubbed = scrub("connect to postgres://app:s3cr3tpass@db.example.com:5432/main now")
+    assert scrubbed == "connect to postgres://app:[redacted]@db.example.com:5432/main now"
 
 
 def test_scrub_passes_ordinary_text() -> None:
