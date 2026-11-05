@@ -9,7 +9,7 @@ from smriti.core.safe_names import UnsafeName, safe_name
 from smriti.mcp_server import handle_message
 
 TRAVERSAL = ["../escape", "..", "a/b", "a\\b", "/etc", "C:x", "~x", ".hidden", "x\ny",
-             "..\\..\\escape", "proj/../../escape"]
+             "..\\..\\escape", "proj/../../escape", ".", "CON", "nul.txt", "trailing.", ""]
 
 
 @pytest.fixture()
@@ -41,7 +41,8 @@ def test_safe_name_rejects_anything_path_like(bad: str) -> None:
         safe_name(bad)
 
 
-@pytest.mark.parametrize("good", ["demo", "beautiful-tree", "react_idle.timeout", "v2"])
+@pytest.mark.parametrize("good", ["demo", "beautiful-tree", "react_idle.timeout", "v2",
+                                  "My Project", "projét", "a..b"])
 def test_safe_name_accepts_plain_names(good: str) -> None:
     assert safe_name(f" {good} ") == good
 
@@ -58,7 +59,7 @@ def test_project_traversal_is_refused(tree: Path, tmp_path: Path, tool: str, arg
                                       bad: str) -> None:
     result = _call(tool, {**args, "project": bad})
     assert result.get("isError") is True
-    assert "plain name" in result["content"][0]["text"]
+    assert "single plain name" in result["content"][0]["text"]
     assert _outside_files(tmp_path) == []
 
 
