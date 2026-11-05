@@ -327,3 +327,14 @@ def test_llm_workdir_initialises_safely_under_concurrency(tmp_path, monkeypatch)
     assert len(set(paths)) == 1
     settings = paths[0] / ".claude"
     assert [p.name for p in settings.iterdir()] == ["settings.json"]  # no temp files left
+
+
+def test_the_morning_call_has_web_search_and_no_other_tool():
+    """--allowedTools only permits WebSearch; --tools removes every other
+    built-in tool, so a malicious search result can't reach local files
+    (Codex, 2026-11-05)."""
+    from smriti.daylog.morning import _COMPOSE_ARGS
+
+    i = _COMPOSE_ARGS.index("--tools")
+    assert _COMPOSE_ARGS[i + 1] == "WebSearch"
+    assert "--strict-mcp-config" in _COMPOSE_ARGS

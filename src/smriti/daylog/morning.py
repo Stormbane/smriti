@@ -67,8 +67,10 @@ _SYSTEM = (
     "Return ONLY the message."
 )
 
-# Web search only: no MCP servers, no file/exec tools.
-_COMPOSE_ARGS = ["--strict-mcp-config", "--allowedTools", "WebSearch"]
+# Web search only: no MCP servers, no file/exec tools. --tools removes every
+# other built-in tool; --allowedTools alone only permits WebSearch and leaves
+# file tools in reach of a malicious search result (Codex, 2026-11-05).
+_COMPOSE_ARGS = ["--strict-mcp-config", "--tools", "WebSearch", "--allowedTools", "WebSearch"]
 
 
 def _scrubbed(value: object) -> object:
