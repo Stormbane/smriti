@@ -175,12 +175,12 @@ def handle_record_finding(arguments: Arguments) -> str:
     path = create_new(path, fm + body)
     slug = path.stem.removeprefix(f"{date_str}-")
 
-    # Cascade: for each tag, drop a wikilink stub under
+    # For each tag, drop a wikilink stub under
     # semantic/concepts/cross-project/findings/{tag}/{date}-{project}-{slug}.md
     # so cross-project search surfaces findings on the same tag from
     # multiple projects without duplicating content. Also update the
     # cross-project findings index.
-    cascade_msgs = []
+    linked_tags = []
     if tags:
         from smriti.core.tree import tree_root as _tree_root
         cp_root = _tree_root() / "semantic" / "concepts" / "cross-project" / "findings"
@@ -207,7 +207,7 @@ def handle_record_finding(arguments: Arguments) -> str:
                     )
             except FileExistsError:
                 continue
-            cascade_msgs.append(tag_slug)
+            linked_tags.append(tag_slug)
 
         # Update cross-project index (append-only, dedup by line content)
         from smriti.core.files import edit_lock, write_atomic
@@ -231,8 +231,8 @@ def handle_record_finding(arguments: Arguments) -> str:
                 write_atomic(idx_path, idx_text.rstrip() + "\n" + idx_line + "\n")
 
     msg = f"Recorded finding: {project}/findings/{path.name}"
-    if cascade_msgs:
-        msg += f" (cross-project: {', '.join(cascade_msgs)})"
+    if linked_tags:
+        msg += f" (cross-project: {', '.join(linked_tags)})"
     return msg
 
 
@@ -483,11 +483,11 @@ TOOLS = (
     ),
     Tool(
         name="smriti_record_finding",
-        description="Record a durable lesson learned for a project. Cascade-aware: "
-            "writes to <root>/mirrors/{project}/findings/{date}-{slug}.md, "
-            "then upward propagation surfaces cross-project patterns at "
-            "semantic/concepts/cross-project/findings/. Use whenever a "
-            "session produces an insight worth carrying forward.",
+        description="Record a durable lesson learned for a project: writes "
+            "<root>/mirrors/{project}/findings/{date}-{slug}.md. For each tag it also "
+            "writes a link stub under semantic/concepts/cross-project/findings/{tag}/, "
+            "so findings from different projects that share a tag are found together. "
+            "Use whenever a session produces an insight worth carrying forward.",
         input_schema={
             "type": "object",
             "properties": {

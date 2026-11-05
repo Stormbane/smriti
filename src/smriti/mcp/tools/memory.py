@@ -213,8 +213,7 @@ TOOLS = (
         name="smriti_write",
         description="Write a new memory entry to the {agent_key} tree. Content is saved as a "
             "dated markdown file under the specified branch (default: journal) and "
-            "immediately indexed so it is searchable via smriti_read. "
-            "This is the v0.1 write path — no JUDGE step yet.",
+            "immediately indexed so it is searchable via smriti_read.",
         input_schema={
             "type": "object",
             "properties": {
