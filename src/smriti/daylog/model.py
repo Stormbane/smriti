@@ -83,11 +83,12 @@ class _SystemTime(tzinfo):
 SYSTEM_TIME = _SystemTime()
 
 
-def day_tz() -> tzinfo:
+def day_tz(root: Path | None = None) -> tzinfo:
     """The zone the day boundary follows.
 
     In order: ``SMRITI_DAY_UTC_OFFSET`` (hours, may be fractional); then
-    ``"timezone"`` in ``<root>/.smriti/daylog.json`` (hours, ``"local"``, or
+    ``"timezone"`` in ``<root>/.smriti/daylog.json`` (``root`` defaults to the
+    process's memory root; hours, ``"local"``, or
     an IANA name where Python can load one); then the system's local time.
     Every clock that names a day (day-log, digest, nightly, journal paths)
     asks here, so they agree.
@@ -97,7 +98,7 @@ def day_tz() -> tzinfo:
         zone = _parse_zone(raw)
         if zone is not None:
             return zone
-    configured = _configured_zone()
+    configured = _configured_zone(root)
     if configured:
         zone = _parse_zone(configured)
         if zone is not None:
@@ -121,10 +122,10 @@ def _parse_zone(raw: str) -> tzinfo | None:
         return None
 
 
-def _configured_zone() -> str:
+def _configured_zone(root: Path | None) -> str:
     from smriti.core.tree import tree_root
 
-    path = tree_root() / ".smriti" / "daylog.json"
+    path = (root if root is not None else tree_root()) / ".smriti" / "daylog.json"
     try:
         stamp = path.stat().st_mtime_ns
     except OSError:
@@ -142,11 +143,11 @@ def _read_zone(path: str, stamp: int) -> str:
     return str(value).strip()
 
 
-def local_day(ts: datetime) -> date:
+def local_day(ts: datetime, root: Path | None = None) -> date:
     """The local calendar day a timestamp belongs to."""
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
-    return ts.astimezone(day_tz()).date()
+    return ts.astimezone(day_tz(root)).date()
 
 
 def day_key(d: date) -> str:
@@ -193,8 +194,8 @@ class Turn:
         if not self.id:
             self.id = make_turn_id(self.channel, self.session, self.ts, self.who, self.text)
 
-    def day(self) -> date:
-        return local_day(self.ts)
+    def day(self, root: Path | None = None) -> date:
+        return local_day(self.ts, root)
 
     def to_json(self) -> dict[str, str]:
         return {

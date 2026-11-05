@@ -395,7 +395,7 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]]) 
         coverage = plan.coverage
 
     out = cfg.day_digest(day)
-    tz = day_tz()
+    tz = day_tz(cfg.root)
     fields = [
         "---",
         f"date: {day}",

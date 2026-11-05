@@ -32,6 +32,21 @@ def test_the_private_key_is_written_once(tmp_path: Path) -> None:
     assert (tmp_path / "private" / ".key").read_text(encoding="ascii") == key
 
 
+def test_no_empty_key_is_left_when_one_cannot_be_made(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex review: without cryptography, init left an empty .key behind, and
+    every later init then skipped making one, even after the extra was installed."""
+    from smriti.private.store import PrivateStore
+
+    def no_cryptography() -> str:
+        raise ImportError("No module named 'cryptography'")
+
+    monkeypatch.setattr(PrivateStore, "_generate_key", staticmethod(no_cryptography))
+    with pytest.raises(ImportError):
+        PrivateStore(tmp_path).init()
+    assert not (tmp_path / "private" / ".key").exists()
+
+
 def _todo(lines: str) -> Path:
     todo = tree_root() / "mirrors" / "demo" / "ai" / "todo.md"
     todo.parent.mkdir(parents=True)

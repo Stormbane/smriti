@@ -65,7 +65,7 @@ def append_turns_unlocked(cfg: DaylogConfig, turns: list[Turn]) -> tuple[int, se
         return 0, set()
     by_day: dict[date, list[Turn]] = {}
     for turn in turns:
-        by_day.setdefault(turn.day(), []).append(turn)
+        by_day.setdefault(turn.day(cfg.root), []).append(turn)
 
     appended = 0
     changed: set[date] = set()

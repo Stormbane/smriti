@@ -115,11 +115,18 @@ class PrivateStore:
         has_ciphertext = any(self.private_root.rglob("*.md.enc"))
         if (not key_path.exists() and self._legacy_readme_key() is None
                 and not has_ciphertext):
+            # The key first: if it can't be made (no cryptography), no empty
+            # .key may be left behind to stop every later init from making one.
+            key = self._generate_key()
             # Owner-only from the first byte (POSIX; Windows ignores the mode),
             # and exclusive, so two inits can't both write a key.
             fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w", encoding="ascii") as f:
-                f.write(self._generate_key() + "\n")
+            try:
+                with os.fdopen(fd, "w", encoding="ascii") as f:
+                    f.write(key + "\n")
+            except BaseException:
+                key_path.unlink(missing_ok=True)
+                raise
 
     @staticmethod
     def _generate_key() -> str:

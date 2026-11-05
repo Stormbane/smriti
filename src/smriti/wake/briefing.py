@@ -360,7 +360,7 @@ def _system_line(memory_root: Path, now: datetime | None = None) -> str:
     if at.tzinfo is None:
         at = at.replace(tzinfo=timezone.utc)
     now = now or datetime.now(timezone.utc)
-    when = at.astimezone(day_tz()).strftime("%d %b %H:%M")
+    when = at.astimezone(day_tz(memory_root)).strftime("%d %b %H:%M")
     reds = [str(c.get("title") or c.get("id")) for c in checks if c.get("status") == "red"]
     ambers = sum(1 for c in checks if c.get("status") == "amber")
     if reds:

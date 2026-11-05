@@ -20,7 +20,7 @@ _PREVIEW_CHARS = 90
 
 
 def _recent_turns(cfg: DaylogConfig, now: datetime) -> list[Turn]:
-    local = now.astimezone(day_tz())
+    local = now.astimezone(day_tz(cfg.root))
     days = {day_key(local.date())}
     days.add(day_key((local - timedelta(minutes=_WINDOW_MIN)).date()))
     turns: list[Turn] = []
@@ -39,7 +39,7 @@ def presence_line(
     """One line of other-channel activity in the last 15 minutes, or ''."""
     try:
         cfg = cfg or load_config()
-        now = now or datetime.now(tz=day_tz())
+        now = now or datetime.now(tz=day_tz(cfg.root))
         by_channel: dict[str, Turn] = {}
         for turn in _recent_turns(cfg, now):
             if exclude_channel and turn.channel == exclude_channel:

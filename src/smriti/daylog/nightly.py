@@ -29,9 +29,9 @@ log = logging.getLogger(__name__)
 _REPAIR_WINDOW_DAYS = 7
 
 
-def _target_day(now: datetime) -> date:
+def _target_day(now: datetime, root: Path | None = None) -> date:
     """The just-closed local day (the run happens after its 03:00 cutoff)."""
-    return (now.astimezone(day_tz()) - timedelta(days=1)).date()
+    return (now.astimezone(day_tz(root)) - timedelta(days=1)).date()
 
 
 def _all_log_days(cfg: DaylogConfig) -> set[str]:
@@ -77,8 +77,8 @@ def run_nightly(
 ) -> dict[str, object]:
     """Run the sleep task; returns (and persists) the status document."""
     cfg = cfg or load_config()
-    now = now or datetime.now(tz=day_tz())
-    target = _target_day(now)
+    now = now or datetime.now(tz=day_tz(cfg.root))
+    target = _target_day(now, cfg.root)
     status: dict[str, object] = {
         "started": now.isoformat(),
         "target_day": day_key(target),
@@ -171,7 +171,7 @@ def run_nightly(
             steps["witness"] = {"ok": False, "error": str(exc)[:300]}
 
     # 8. Status file (consumed by the wake briefing).
-    status["finished"] = datetime.now(tz=day_tz()).isoformat()
+    status["finished"] = datetime.now(tz=day_tz(cfg.root)).isoformat()
     status["ok"] = all(
         (s.get("ok", True) if isinstance(s, dict) else True) for s in steps.values()
     )

@@ -209,7 +209,7 @@ def _cmd_witness(args: argparse.Namespace) -> int:
 
     root = tree_root()
     if args.action == "stamp":
-        result = run_witness(root, day_key(datetime.now(tz=day_tz()).date()))
+        result = run_witness(root, day_key(datetime.now(tz=day_tz(root)).date()))
         detail = {k: v for k, v in result.items() if k not in ("ok", "error")}
         print(f"witness: {'ok' if result.get('ok') else 'FAILED: ' + str(result.get('error'))}"
               f" {detail}")

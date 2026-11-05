@@ -75,6 +75,34 @@ def test_a_config_change_is_seen_without_a_restart(no_override: None) -> None:
     assert day_tz().utcoffset(None) == timedelta(hours=3)
 
 
+def test_an_explicit_root_uses_its_own_zone(tmp_path: object,
+                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex review: the zone was read from the process's default tree even when
+    a caller named another root (write_entry(root=...), a DaylogConfig)."""
+    from pathlib import Path
+
+    from smriti.store import writer
+
+    monkeypatch.delenv("SMRITI_DAY_UTC_OFFSET", raising=False)
+    other = Path(str(tmp_path)) / "other-root"
+    (other / ".smriti").mkdir(parents=True)
+    (other / ".smriti" / "daylog.json").write_text('{"timezone": "-4"}', encoding="utf-8")
+    _configure("10")  # the process's default tree says something else
+    assert day_tz(other).utcoffset(None) == timedelta(hours=-4)
+    assert day_tz().utcoffset(None) == timedelta(hours=10)
+
+    fixed = datetime(2026, 11, 5, 2, 0, tzinfo=timezone.utc)
+
+    class FrozenClock(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ANN001, ANN206
+            return fixed if tz is None else fixed.astimezone(tz)
+
+    monkeypatch.setattr(writer, "datetime", FrozenClock)
+    path = writer.write_entry("a note", branch="notes", root=other, reindex=False)
+    assert path.name == "11-04.md"  # 02:00 UTC is the 4th at UTC-4, the 5th at UTC+10
+
+
 def test_journal_entries_and_turns_name_the_same_day(monkeypatch: pytest.MonkeyPatch) -> None:
     """A UTC-4 zone puts 02:00 UTC on the previous day; the journal must agree."""
     from smriti.store import writer

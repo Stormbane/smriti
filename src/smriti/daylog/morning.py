@@ -99,8 +99,8 @@ def _write_status(cfg: DaylogConfig, result: dict[str, object]) -> None:
 
 def run_morning(cfg: DaylogConfig | None = None, *, now: datetime | None = None) -> dict[str, object]:
     cfg = cfg or load_config()
-    now = now or datetime.now(tz=day_tz())
-    local_date = now.astimezone(day_tz()).date()
+    now = now or datetime.now(tz=day_tz(cfg.root))
+    local_date = now.astimezone(day_tz(cfg.root)).date()
     today = day_key(local_date)
     yesterday = day_key(local_date - timedelta(days=1))
     ledger = cfg.morning_ledger_dir / today

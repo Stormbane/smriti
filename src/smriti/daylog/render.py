@@ -64,7 +64,7 @@ def render_day(cfg: DaylogConfig, day: str) -> Path | None:
     if not turns:
         return None
     conversational, autonomous = _split_autonomous(turns)
-    tz = day_tz()
+    tz = day_tz(cfg.root)
 
     lines = [
         "---",
