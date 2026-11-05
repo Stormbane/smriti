@@ -38,7 +38,7 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 **Roles and profiles** (hardening H5):
 - The day-log's speakers are roles, `user` and `agent`; `user_name` and `agent_name` in `<root>/.smriti/daylog.json` (default "User", "Agent") name them in the render, the prompts and the core tools. Old logs' `"suti"`/`"narada"` are read as the roles, with turn ids unchanged.
 - The reference installation's specifics are the optional profile `smriti.profiles.reference`, enabled by `"profile": "reference"` in the same file: the MCP tools `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift` and `smriti_resolve_outbox`, the wake's `HANDS`, `SUTI NOW` and `ACROSS SURFACES` sections, and the morning persona. Without a profile, none of these exist.
-- Still coupled: the UTC+10 default day boundary (`SMRITI_DAY_UTC_OFFSET`) and the default root `~/.narada`.
+- The day boundary follows the system's time zone (DST included); `SMRITI_DAY_UTC_OFFSET` or daylog.json's `timezone` overrides it. Still coupled: the default root `~/.narada`.
 
 ## Facts
 
@@ -46,7 +46,7 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 - **CLI:** 14 `smriti` subcommands: `backup`, `doctor`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `recall`, `status`, `tasks`, `witness`, `write`. Nested: `recall` has `query`, `status`, `stats`, `index`, `daemon`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 513 test functions in 43 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 532 test functions in 46 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 Regenerate with `python scripts/doc_facts.py --write`; `tests/test_doc_facts.py` fails when this block drifts from the code.

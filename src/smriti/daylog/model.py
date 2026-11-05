@@ -6,18 +6,24 @@ names shown for them come from config (``DaylogConfig.user_name`` and
 became generic name the reference installation's two speakers instead
 (``"suti"``, ``"narada"``); those are read as the roles, forever.
 
-The day boundary uses a fixed UTC offset (default +10:00, no DST)
-rather than a tz database: the base install carries
-no runtime dependencies and Windows has no system tzdata. Override with
-``SMRITI_DAY_UTC_OFFSET`` (hours, may be fractional).
+The day boundary follows the system's local time, daylight saving
+included, unless ``SMRITI_DAY_UTC_OFFSET`` or daylog.json's ``timezone``
+says otherwise (see :func:`day_tz`). It needs no tz database: the base
+install carries no runtime dependencies and Windows has no system tzdata.
 """
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import json
+import logging
 import os
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
+from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 USER = "user"
 AGENT = "agent"
@@ -40,13 +46,100 @@ def role_of(who: str) -> str:
     return _LEGACY_WHO.get(who, who)
 
 
-def day_tz() -> timezone:
-    raw = os.environ.get("SMRITI_DAY_UTC_OFFSET", "10")
+class _SystemTime(tzinfo):
+    """The operating system's local time zone, daylight saving included.
+
+    The OS converts each instant (``astimezone()`` with no zone), so this
+    needs no tz database: Windows has none, and the base install carries no
+    dependencies.
+    """
+
+    def fromutc(self, dt: datetime) -> datetime:
+        return dt.replace(tzinfo=timezone.utc).astimezone()
+
+    def utcoffset(self, dt: datetime | None) -> timedelta:
+        return self._at(dt).utcoffset() or timedelta(0)
+
+    def dst(self, dt: datetime | None) -> timedelta | None:
+        return self._at(dt).dst()
+
+    def tzname(self, dt: datetime | None) -> str | None:
+        return self._at(dt).tzname()
+
+    @staticmethod
+    def _at(dt: datetime | None) -> datetime:
+        """The local time the OS gives for wall time ``dt`` (now, if None)."""
+        if dt is None:
+            return datetime.now().astimezone()
+        try:
+            return dt.replace(tzinfo=None).astimezone()
+        except (OverflowError, OSError, ValueError):  # outside the OS's range
+            return datetime.now().astimezone()
+
+    def __repr__(self) -> str:
+        return "SystemTime()"
+
+
+SYSTEM_TIME = _SystemTime()
+
+
+def day_tz() -> tzinfo:
+    """The zone the day boundary follows.
+
+    In order: ``SMRITI_DAY_UTC_OFFSET`` (hours, may be fractional); then
+    ``"timezone"`` in ``<root>/.smriti/daylog.json`` (hours, ``"local"``, or
+    an IANA name where Python can load one); then the system's local time.
+    Every clock that names a day (day-log, digest, nightly, journal paths)
+    asks here, so they agree.
+    """
+    raw = os.environ.get("SMRITI_DAY_UTC_OFFSET", "").strip()
+    if raw:
+        zone = _parse_zone(raw)
+        if zone is not None:
+            return zone
+    configured = _configured_zone()
+    if configured:
+        zone = _parse_zone(configured)
+        if zone is not None:
+            return zone
+    return SYSTEM_TIME
+
+
+def _parse_zone(raw: str) -> tzinfo | None:
+    if raw.lower() == "local":
+        return SYSTEM_TIME
     try:
-        hours = float(raw)
+        return timezone(timedelta(hours=float(raw)))
     except ValueError:
-        hours = 10.0
-    return timezone(timedelta(hours=hours))
+        pass
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(raw)
+    except Exception:  # no such zone, or no tz database here (Windows without tzdata)
+        log.warning("unknown time zone %r; using the system's local time", raw)
+        return None
+
+
+def _configured_zone() -> str:
+    from smriti.core.tree import tree_root
+
+    path = tree_root() / ".smriti" / "daylog.json"
+    try:
+        stamp = path.stat().st_mtime_ns
+    except OSError:
+        return ""
+    return _read_zone(str(path), stamp)
+
+
+@functools.lru_cache(maxsize=8)
+def _read_zone(path: str, stamp: int) -> str:
+    """daylog.json's ``timezone``; cached per file version (day_tz runs per turn)."""
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8")).get("timezone", "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return str(value).strip()
 
 
 def local_day(ts: datetime) -> date:

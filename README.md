@@ -46,7 +46,7 @@ smriti_write      -> dated markdown + index     voice transcripts -> log/YYYY/MM
 
 **Backups.** `<root>/.smriti/backup.py` commits the memory tree once an hour when it has changed (`smriti backup --push`, run by the `smriti-backup` task) and pushes only when there is something new; the nightly witness step commits and pushes too. Sessions don't trigger backups. It never kills git, clears stale locks only when no git process is running, and logs to `.git/smriti-backup.jsonl`. You create the git repository and its remote yourself. The reference setup encrypts its remote with git-crypt, but the installer neither sets that up nor checks for it.
 
-**Scheduling.** `smriti tasks install` creates four Windows scheduled tasks: `smriti logd --ensure` every 10 minutes, `smriti backup --push --tag hourly` at 17 minutes past each hour, `smriti nightly` at 03:00, and `smriti morning` at 07:00. On Linux and macOS it prints the equivalent crontab lines instead. Day boundaries use a fixed UTC offset, `SMRITI_DAY_UTC_OFFSET`, which defaults to 10.
+**Scheduling.** `smriti tasks install` creates four Windows scheduled tasks: `smriti logd --ensure` every 10 minutes, `smriti backup --push --tag hourly` at 17 minutes past each hour, `smriti nightly` at 03:00, and `smriti morning` at 07:00. On Linux and macOS it prints the equivalent crontab lines instead. Day boundaries follow the system's time zone, daylight saving included; set `SMRITI_DAY_UTC_OFFSET` (hours) or `"timezone"` in `.smriti/daylog.json` (hours, `local`, or an IANA name where Python can load one) to override it.
 
 ## For agents using smriti
 
@@ -153,7 +153,7 @@ The witness step needs `pip install -e ".[witness]"` and a memory root that is a
 - **CLI:** 14 `smriti` subcommands: `backup`, `doctor`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `recall`, `status`, `tasks`, `witness`, `write`. Nested: `recall` has `query`, `status`, `stats`, `index`, `daemon`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 513 test functions in 43 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 532 test functions in 46 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 **CLI.** `smriti --help` lists the commands; each takes `--help`.
@@ -180,7 +180,7 @@ The witness step needs `pip install -e ".[witness]"` and a memory root that is a
 
 ## Status and limits
 
-- **One setup, being generalised.** smriti grew inside one person's setup with one agent. That setup's MCP tools, wake sections and morning persona are now the optional `reference` profile, and the core names the two parties from configuration. Still coupled: Windows paths in project discovery, the UTC+10 default day boundary, and the default root `~/.narada`.
+- **One setup, being generalised.** smriti grew inside one person's setup with one agent. That setup's MCP tools, wake sections and morning persona are now the optional `reference` profile, and the core names the two parties from configuration. Still coupled: Windows paths in project discovery and the default root `~/.narada`.
 - **Removed:** the April 2026 design's deep pipeline (EXTRACT → JUDGE → CROSSLINK, the cognitive cascade, ingest, consolidation, the task queue and its daemon, and the `sleep`, `queue`, `daemon`, `watch`, `ingest` and `merge-concepts` commands) was removed in November 2026; it remains in the git history. When it ran, it never changed a belief or identity file; it lengthened the pages it touched by 88% and destroyed one source file. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes that design.
 - **Legacy:** qmd as a recall backend; the Hermes harness (`--harness hermes`); the PreCompact staging hook; the file-touch ambient-recall hook. The last is off in the reference setup, because research found that 4-11% of its injections helped (plan 2.4).
 - **Retrieval quality** on the reference tree is moderate: 0.67 hit@5 on the MCP path, 0.81 with reranking. The plan targets 0.95.

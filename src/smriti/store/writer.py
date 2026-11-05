@@ -129,8 +129,12 @@ def write_entry(
 
     # Use local time for file paths and dates (journal entries are human-facing).
     # Store UTC in frontmatter for precision.
+    from smriti.daylog.model import day_tz
+
     now_utc = datetime.now(timezone.utc)
-    now_local = datetime.now().astimezone()
+    # The day-log's clock, so a journal entry and that moment's turns fall on
+    # the same day whatever zone is configured.
+    now_local = now_utc.astimezone(day_tz())
 
     # Journal uses cascading time structure; other branches use flat
     if branch == "journal" or branch.startswith("journal/"):

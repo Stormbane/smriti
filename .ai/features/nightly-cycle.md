@@ -15,6 +15,10 @@ Deterministic maintenance plus one small act of compression, every night,
 reliably. No cognition in the loop — that stays parked as future
 introspection work.
 
+> **Since 2026-11-05 (hardening H9.5):** the day boundary follows the system's local time
+> zone, daylight saving included, unless `SMRITI_DAY_UTC_OFFSET` or daylog.json's
+> `timezone` overrides it. The fixed UTC+10 below was the original contract.
+
 ## Goal
 
 Replace the over-ambitious sleep pipeline with a narrow cycle built on a

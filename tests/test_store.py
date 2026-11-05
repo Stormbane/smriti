@@ -327,12 +327,13 @@ def test_purge_drops_deleted_and_newly_excluded_sources(mini_tree: Path) -> None
         p.write_text("# Old\n\nnoise\n", encoding="utf-8")
     import smriti.store.indexer as indexer_mod
 
-    real = indexer_mod.is_indexable
-    indexer_mod.is_indexable = lambda rel: True  # the old policy
+    real, real_prune = indexer_mod.is_indexable, indexer_mod.may_hold_indexable
+    indexer_mod.is_indexable = lambda rel: True  # the old policy, which pruned nothing
+    indexer_mod.may_hold_indexable = lambda rel: True
     try:
         index_tree(root=mini_tree, db=db_path)
     finally:
-        indexer_mod.is_indexable = real
+        indexer_mod.is_indexable, indexer_mod.may_hold_indexable = real, real_prune
     assert {"log/2026/11/03.md", "heartbeat/cycles/old.md"} <= _sources(db_path)
 
     (mini_tree / "threads" / "memory-system-design.md").unlink()
