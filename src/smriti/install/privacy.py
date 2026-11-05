@@ -707,7 +707,8 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
     conversations = (bool(sources) and not git.log_ignored) or git.log_on_disk > 0
     pushes_plain = False
     if git.error or not git.is_repo:
-        why = f"git couldn't be run ({git.error})" if git.error else f"{root} isn't a git repository"
+        why = (f"git couldn't be run ({git.error})" if git.error
+               else f"{root} isn't a git repository")
         lines.append(f"  committed: nothing; {why}")
         lines.append("  pushed:    nothing")
     else:
@@ -751,7 +752,9 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
                 lines.append(f"  git-crypt: {git.crypt_detail}")
             lines.append(f"  remote:    {said}")
             pushes_plain = plan.remote.value is not True
-        lines.append("  (the backup and the nightly run once `smriti tasks install` schedules them)")
+        lines.append(
+            "  (the backup and the nightly run once `smriti tasks install` schedules them)"
+        )
     if pushes_plain and conversations and not git.log_encrypted:
         lines.append(
             "  WARNING: your conversations would go in plaintext to a remote nobody has "

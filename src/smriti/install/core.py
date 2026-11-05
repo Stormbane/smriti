@@ -245,7 +245,9 @@ def run_core(memory_root: Path, projects_root: Path, *, skip_recall_daemon: bool
     try:
         memory_root.relative_to(HOME)
     except ValueError:
-        raise RuntimeError(f"--memory-root must be under {HOME} (got {memory_root})")
+        raise RuntimeError(
+            f"--memory-root must be under {HOME} (got {memory_root})"
+        ) from None
 
     install_memory_template(memory_root)
     install_wake_files(memory_root)
