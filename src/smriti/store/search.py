@@ -204,7 +204,7 @@ def search(
             if rows:
                 raw = [r[1] for r in rows]
                 normed = _normalize([1.0 - d for d in raw])  # lower distance = higher score
-                for (rowid, _), ns in zip(rows, normed):
+                for (rowid, _), ns in zip(rows, normed, strict=True):
                     vec_scores[rowid] = ns
                     if rowid not in candidates:
                         row = conn.execute(
@@ -256,7 +256,7 @@ def search(
                     # FTS5 rank is negative (lower = better), flip for normalization
                     raw = [-r[1] for r in rows]
                     normed = _normalize(raw)
-                    for (rowid, _), ns in zip(rows, normed):
+                    for (rowid, _), ns in zip(rows, normed, strict=True):
                         fts_scores[rowid] = ns
                         if rowid not in candidates:
                             row = conn.execute(

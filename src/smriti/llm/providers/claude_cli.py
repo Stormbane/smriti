@@ -152,10 +152,10 @@ class ClaudeCliProvider:
                 time.sleep(0.5)
                 try:
                     result = _spawn()
-                except FileNotFoundError:
+                except FileNotFoundError as exc:
                     raise LLMError(
                         f"claude CLI not found at {cli!r}. Is Claude Code installed?"
-                    )
+                    ) from exc
         except subprocess.TimeoutExpired as exc:
             raise LLMError(f"claude -p timed out after {timeout}s") from exc
         finally:

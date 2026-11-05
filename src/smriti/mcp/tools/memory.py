@@ -160,8 +160,10 @@ def handle_write_handoff(arguments: Arguments) -> str:
             )
         try:
             write_atomic(path, fm + body)
-        except FileBusy:
-            raise ToolError("the handoff file was busy; nothing was written. Try again.")
+        except FileBusy as exc:
+            raise ToolError(
+                "the handoff file was busy; nothing was written. Try again."
+            ) from exc
 
     msg = f"Handoff written: {path}"
     if overwriting:

@@ -817,7 +817,7 @@ def across_section(src: WakeSources) -> str:
         return spent
 
     left = room
-    for group, (_t, _c, share) in zip(groups, _COLLECTORS):
+    for group, (_t, _c, share) in zip(groups, _COLLECTORS, strict=True):  # one group each
         left -= fill(group, int(room * share))
     for group in groups:  # leftovers, in priority order
         left -= fill(group, left)
