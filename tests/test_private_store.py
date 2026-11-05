@@ -33,6 +33,27 @@ def test_init_is_idempotent_and_never_replaces_the_key(tmp_path: Path) -> None:
     assert (tmp_path / "private" / ".key").read_text(encoding="ascii") == key
 
 
+def test_existing_ignore_rules_are_kept(tmp_path: Path) -> None:
+    private = tmp_path / "private"
+    private.mkdir()
+    (private / ".gitignore").write_text("*.plaintext", encoding="utf-8")
+    _store(tmp_path)
+    rules = (private / ".gitignore").read_text(encoding="utf-8").split()
+    assert "*.plaintext" in rules and ".key" in rules
+
+
+def test_a_restored_store_without_its_key_never_gets_a_new_one(tmp_path: Path) -> None:
+    """After a restore from git, ciphertext exists but .key doesn't (it's never committed)."""
+    store = _store(tmp_path)
+    store.write("before the restore", entity="Ari", session_id="s1")
+    (tmp_path / "private" / ".key").unlink()  # what a fresh clone looks like
+
+    PrivateStore(tmp_path).init()  # e.g. any CLI command at startup
+    assert not (tmp_path / "private" / ".key").exists(), "a second key would mix the store"
+    with pytest.raises(RuntimeError, match="restore .key"):
+        PrivateStore(tmp_path).write("after", entity="Ari", session_id="s1")
+
+
 def test_write_and_consented_read_round_trip(tmp_path: Path) -> None:
     store = _store(tmp_path)
     path = store.write("a private thought", entity="Ari", session_id="s1")

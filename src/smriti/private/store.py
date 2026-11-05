@@ -89,20 +89,31 @@ class PrivateStore:
     def init(self) -> None:
         """Create `private/` with its contract, its key and its .gitignore.
 
-        Idempotent and never destructive: an existing key (in `.key`, or in
-        an older install's README) is kept, because replacing it would orphan
-        every encrypted file. The `.gitignore` is (re)written on every call so
-        the key stays out of git even if a root `.gitignore` is missing.
+        Idempotent and never destructive:
+
+        - an existing key (in `.key`, or in an older install's README) is
+          kept, because replacing it would orphan every encrypted file;
+        - a store that already holds ciphertext but has no key (a repo
+          restored from git, where `.key` was never committed) gets no new
+          key: writes then fail until `.key` is restored from backup, rather
+          than mixing two keys in one store;
+        - `.key` is added to `private/.gitignore` on every call, keeping any
+          rules already there, so the key stays out of git even without a
+          root `.gitignore`.
         """
         self.private_root.mkdir(parents=True, exist_ok=True)
         ignore = self.private_root / ".gitignore"
-        if not ignore.exists() or _KEY_FILE not in ignore.read_text(encoding="utf-8").split():
-            ignore.write_text(_GITIGNORE, encoding="utf-8")
+        existing = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
+        if _KEY_FILE not in existing.split():
+            sep = "" if not existing or existing.endswith("\n") else "\n"
+            ignore.write_text(existing + sep + _GITIGNORE, encoding="utf-8")
         readme = self.private_root / "README.md"
         if not readme.exists():
             readme.write_text(_TEMPLATE_PATH.read_text(encoding="utf-8"), encoding="utf-8")
         key_path = self.private_root / _KEY_FILE
-        if not key_path.exists() and self._legacy_readme_key() is None:
+        has_ciphertext = any(self.private_root.rglob("*.md.enc"))
+        if (not key_path.exists() and self._legacy_readme_key() is None
+                and not has_ciphertext):
             key_path.write_text(self._generate_key() + "\n", encoding="ascii")
 
     @staticmethod
