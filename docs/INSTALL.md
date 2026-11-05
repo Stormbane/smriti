@@ -154,7 +154,7 @@ smriti write "text"   # write an entry to the memory tree
 smriti nightly        # sleep task: reconcile day-log, render, digest, rollups, reindex
 smriti morning        # wake task: the one good-morning message
 smriti logd           # day-log watcher daemon (--ensure = keepalive)
-smriti tasks install  # schedule the nightly cycle (logd keepalive, 03:00 nightly, 07:00 morning)
+smriti tasks install  # schedule logd keepalive, hourly backup, 03:00 nightly, 07:00 morning
 smriti status         # index stats + day-log capture health
 ```
 
@@ -425,7 +425,7 @@ python scripts/install.py --harness claude_code   # or codex
 ```
 
 The entity tree is itself a versioned git repository (committed and
-pushed by `backup.py` on every wake and session end), so entity-level
+pushed by `backup.py` from the hourly `smriti-backup` task), so entity-level
 hook scripts that live under `~/.narada/.smriti/hooks/` — e.g. a
 personal session-ending reminder — come back with the clone. Harness
 configs that reference them assume the clone exists; `smriti doctor`

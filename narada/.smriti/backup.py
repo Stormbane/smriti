@@ -3,14 +3,18 @@
 
 Quietly commits — and optionally pushes — the SMRITI_ROOT git repo.
 Called from:
-  - SessionEnd hook      -> --push
+  - the smriti-backup task (hourly)  -> --push, via `smriti backup`
   - smriti nightly       -> the witness step (commit, then --push)
-  - smriti wake          -> --push
-  - smriti_write path    -> (commit only)
+  - `smriti backup` by hand
+
+Sessions don't trigger it any more: a backup at every SessionStart and
+SessionEnd ran ~30 times a day, scaled with how many sessions were open
+rather than with how much changed, and concurrent runs collided. A run
+with nothing new costs one `git status` and makes no network call.
 
 If the repo uses git-crypt (recommended; the installer doesn't set it up),
 content is encrypted but commit messages are NOT. Keep tags generic
-(session-end / nightly / witness / wake / write) so metadata leaks nothing.
+(hourly / nightly / witness / manual) so metadata leaks nothing.
 
 Best-effort: failures exit 0 and the next trigger catches up. Every outcome
 is appended to ``.git/smriti-backup.jsonl`` (inside .git, so the log never
@@ -310,6 +314,15 @@ def do_push(cwd: Path) -> tuple[bool, str]:
     return code == 0, out
 
 
+def needs_push(cwd: Path) -> bool:
+    """False only when HEAD is known to be on origin/master already.
+
+    Any doubt (no remote-tracking ref yet, a git error) means push.
+    """
+    code, out = run_git(["rev-list", "--count", "origin/master..HEAD"], cwd, timeout=30)
+    return code != 0 or out.strip() != "0"
+
+
 def spawn_detached(argv: list[str]) -> bool:
     """Re-run this script as a detached worker; True if it started.
 
@@ -382,7 +395,10 @@ def main() -> int:
             msg = "created" if committed else "nothing to commit"
             print(f"[backup] commit: {msg}", file=sys.stderr)
 
-        if args.push:
+        if args.push and not needs_push(cwd):
+            if args.verbose:
+                print("[backup] push: nothing new", file=sys.stderr)
+        elif args.push:
             ok, out = do_push(cwd)
             if args.verbose:
                 if ok:

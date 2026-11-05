@@ -7,6 +7,9 @@ module manages the fallback tasks (and prints crontab lines on POSIX):
 - ``smriti-logd``     every 10 min -> ``smriti logd --ensure`` (keepalive:
   starts the daemon if it is not running; worst-case 10-min capture gap
   after a crash, seconds-latency capture while alive)
+- ``smriti-backup``   hourly at :17 -> ``smriti backup --push --tag hourly``
+  (commits the memory tree if it changed, pushes only when there is
+  something new; off the hour so it never lands on the 03:00 nightly)
 - ``smriti-nightly``  daily 03:00  -> ``smriti nightly``
 - ``smriti-morning``  daily 07:00  -> ``smriti morning``
 """
@@ -40,6 +43,7 @@ def _smriti_cmd(args: str, *, windowless: bool = False) -> str:
 TASKS: list[tuple[str, str, list[str], bool]] = [
     # name, smriti args, schtasks schedule, windowless
     ("smriti-logd", "logd --ensure", ["/sc", "minute", "/mo", "10"], True),
+    ("smriti-backup", "backup --push --tag hourly", ["/sc", "hourly", "/st", "00:17"], True),
     ("smriti-nightly", "nightly", ["/sc", "daily", "/st", "03:00"], True),
     ("smriti-morning", "morning", ["/sc", "daily", "/st", "07:00"], True),
 ]
@@ -49,6 +53,7 @@ def install_tasks() -> int:
     if os.name != "nt":
         print("POSIX: add these crontab lines (Hermes/cron owns scheduling):")
         print(f"  */10 * * * * {_smriti_cmd('logd --ensure')}")
+        print(f"  17 * * * *   {_smriti_cmd('backup --push --tag hourly')}")
         print(f"  0 3 * * *    {_smriti_cmd('nightly')}")
         print(f"  0 7 * * *    {_smriti_cmd('morning')}")
         return 0

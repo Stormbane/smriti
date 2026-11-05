@@ -46,6 +46,9 @@ The package version remains 0.1.0; subsequent development is unreleased.
 - Search telemetry logs query hashes and lengths by default. The memory template
   ignores runtime state and the private-store key; shipped examples use synthetic
   data in place of personal details.
+- Backups run hourly from a `smriti-backup` scheduled task (`smriti backup
+  --push`), not at every session start and end; a run with nothing new makes no
+  network call. The nightly and morning tasks run windowless.
 
 ### Fixed
 
@@ -69,6 +72,9 @@ The package version remains 0.1.0; subsequent development is unreleased.
 - A failed index run reports its real error (the wrapper had no `rollback`).
 - A malformed MCP message gets an error instead of ending the server.
 - Session channels are named correctly from a cwd of any platform.
+- Blank Windows Terminal windows taking focus: the backup worker, the logd and
+  qmd daemons, and the LLM CLI calls give their console children a hidden console
+  instead of none.
 
 ## [0.1.0] - 2026-04-15
 

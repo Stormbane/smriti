@@ -275,6 +275,13 @@ def _cmd_logd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_backup(args: argparse.Namespace) -> int:
+    from smriti.backup import trigger
+
+    trigger(args.tag, push=args.push)
+    return 0
+
+
 def _cmd_tasks(args: argparse.Namespace) -> int:
     from smriti.daylog.schedule import install_tasks, remove_tasks, task_status
 
@@ -407,8 +414,15 @@ def main(argv: list[str] | None = None) -> int:
     p_logd.add_argument("--once", action="store_true", help="Run a single pass and exit")
     p_logd.add_argument("--ensure", action="store_true",
                         help="Keepalive: start a detached daemon if none is running")
+    p_backup = sub.add_parser(
+        "backup", help="Commit the memory tree now if it changed (the hourly task runs this)"
+    )
+    p_backup.add_argument("--push", action="store_true",
+                          help="Also push to origin, when there is anything new")
+    p_backup.add_argument("--tag", default="manual",
+                          help="Commit message tag; keep it generic (default: manual)")
     p_tasks = sub.add_parser(
-        "tasks", help="Manage the nightly-cycle scheduled tasks (logd keepalive, nightly, morning)"
+        "tasks", help="Manage the scheduled tasks (logd keepalive, hourly backup, nightly, morning)"
     )
     p_tasks.add_argument("action", choices=["install", "remove", "status"], nargs="?",
                          default="status")
@@ -483,6 +497,7 @@ def main(argv: list[str] | None = None) -> int:
         "witness": _cmd_witness,
         "morning": _cmd_morning,
         "logd": _cmd_logd,
+        "backup": _cmd_backup,
         "tasks": _cmd_tasks,
     }
     return handlers[args.command](args)

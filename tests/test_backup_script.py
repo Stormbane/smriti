@@ -246,6 +246,27 @@ def test_foreground_commits_before_returning(tmp_path: Path) -> None:
     assert _commits(repo) == 2
 
 
+def test_push_happens_only_when_there_is_something_new(tmp_path: Path) -> None:
+    import subprocess
+
+    repo = _real_repo(tmp_path)
+    remote = tmp_path / "remote.git"
+    for args, cwd in ((["init", "-q", "--bare", str(remote)], tmp_path),
+                      (["branch", "-M", "master"], repo),
+                      (["remote", "add", "origin", str(remote)], repo)):
+        subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+    _run_script(repo, "--foreground", "--push")  # commits note.md, pushes
+    _run_script(repo, "--foreground", "--push")  # nothing new: no network call
+    pushes = [e for e in _log(repo) if e.get("event") == "push"]
+    assert [p["ok"] for p in pushes] == [True]
+
+    (repo / "note.md").write_text("changed\n", encoding="utf-8")
+    _run_script(repo, "--foreground", "--push")
+    pushes = [e for e in _log(repo) if e.get("event") == "push"]
+    assert [p["ok"] for p in pushes] == [True, True]
+
+
 def test_stale_locks_are_kept_while_git_runs(backup: ModuleType, tmp_path: Path,
                                              monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)

@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -32,29 +31,6 @@ _VALID_FRAMINGS = ("raw", "codex-json")
 
 def _wake_enabled() -> bool:
     return os.environ.get("SMRITI_WAKE", "").strip().lower() in _ON
-
-
-def _fire_backup(script_dir: Path) -> None:
-    """Kick off commit+push in the background; never block wake."""
-    script = script_dir / "backup.py"
-    if not script.exists():
-        return
-    try:
-        kwargs: dict = {
-            "stdin": subprocess.DEVNULL,
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
-            "close_fds": True,
-        }
-        if sys.platform == "win32":
-            kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP
-                                     | subprocess.CREATE_NO_WINDOW)
-        subprocess.Popen(
-            [sys.executable, str(script), "--tag", "wake", "--push"],
-            **kwargs,
-        )
-    except Exception:
-        pass
 
 
 def _frame(payload: str, framing: str) -> str:
@@ -79,8 +55,9 @@ def run(
     """Emit the wake briefing, framed for the calling harness.
 
     ``entity_root`` defaults to ``$SMRITI_ROOT`` or ``~/.narada``.
-    ``script_dir`` is where ``backup.py`` and the ``last-activity``
-    touch-file live (typically the directory of the calling shim).
+    ``script_dir`` is where the ``last-activity`` touch-file lives
+    (typically the directory of the calling shim). Wake doesn't back the
+    tree up: the hourly ``smriti-backup`` task does.
     ``framing`` defaults to ``$SMRITI_WAKE_FRAMING`` or ``raw``.
     """
     if not _wake_enabled():
@@ -94,7 +71,6 @@ def run(
         framing = os.environ.get("SMRITI_WAKE_FRAMING", "raw").strip()
 
     if script_dir is not None:
-        _fire_backup(script_dir)
         # Heartbeat consumer reads this to know if the user is around.
         try:
             (script_dir / "last-activity").touch()

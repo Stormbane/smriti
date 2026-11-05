@@ -192,6 +192,25 @@ class TestWakeRunnerFraming:
         with pytest.raises(ValueError, match="unknown framing"):
             wake_runner.run()
 
+    def test_wake_touches_last_activity_and_starts_no_backup(self, monkeypatch, tmp_path):
+        # Backups are the hourly task's job now; a backup per SessionStart
+        # ran ~30 times a day and collided across concurrent sessions.
+        import subprocess
+
+        import smriti.wake as _wake_pkg
+
+        def no_spawn(*a, **kw):
+            raise AssertionError("wake must not start a process")
+
+        monkeypatch.setattr(subprocess, "Popen", no_spawn)
+        monkeypatch.setattr(_wake_pkg, "briefing", lambda **kw: "<<briefing>>")
+        monkeypatch.setenv("SMRITI_WAKE", "1")
+        monkeypatch.setattr(sys, "stdout", io.StringIO())
+        (tmp_path / "backup.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+
+        assert wake_runner.run(entity_root=tmp_path, script_dir=tmp_path) == 0
+        assert (tmp_path / "last-activity").exists()
+
 
 # --- hook_scripts --------------------------------------------------------
 
