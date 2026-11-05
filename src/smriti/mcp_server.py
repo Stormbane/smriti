@@ -916,8 +916,9 @@ def _slugify(text: str, max_len: int = 60) -> str:
 
 def _project_mirror(project: str) -> Path | None:
     """Return path to mirrors/{project}/ if it exists, else None."""
+    from smriti.core.safe_names import safe_name
     from smriti.core.tree import tree_root
-    p = tree_root() / "mirrors" / project
+    p = tree_root() / "mirrors" / safe_name(project, "project")
     return p if p.exists() else None
 
 
@@ -1292,6 +1293,15 @@ def handle_message(msg: dict) -> dict | None:
         name = params.get("name", "")
         arguments = params.get("arguments", {})
         try:
+            # Any argument that becomes a path segment must be a plain name,
+            # whichever tool receives it (see smriti.core.safe_names).
+            from smriti.core.safe_names import PATH_ARGUMENTS, safe_name
+
+            if not isinstance(arguments, dict):
+                raise ValueError("arguments must be an object")
+            for key in PATH_ARGUMENTS:
+                if arguments.get(key) not in (None, ""):
+                    arguments[key] = safe_name(arguments[key], key)
             if name == "smriti_read":
                 text = handle_read(arguments)
             elif name == "smriti_write":
@@ -1320,9 +1330,12 @@ def handle_message(msg: dict) -> dict | None:
                 text = handle_resolve_outbox(arguments)
             else:
                 return _make_error(id, -32601, f"Unknown tool: {name}")
-            return _make_response(id, {
-                "content": [{"type": "text", "text": text}],
-            })
+            result: dict = {"content": [{"type": "text", "text": text}]}
+            if text.startswith("Error:"):
+                # Handlers report refusals as "Error: ..." text; mark them so the
+                # calling agent sees a failed call, not a successful one.
+                result["isError"] = True
+            return _make_response(id, result)
         except Exception as exc:
             return _make_response(id, {
                 "content": [{"type": "text", "text": f"Error: {exc}"}],
