@@ -154,6 +154,13 @@ def test_fixture_is_synthetic() -> None:
             )
 
 
+def _can_load_sqlite_extensions() -> bool:
+    return hasattr(sqlite3.connect(":memory:"), "enable_load_extension")
+
+
+@pytest.mark.skipif(not _can_load_sqlite_extensions(),
+                    reason="needs vector search: this Python's sqlite3 can't load sqlite-vec "
+                           "(the paraphrase cases share no words with their notes, by design)")
 def test_search_cases_end_to_end() -> None:
     before = snapshot(FIXTURE_ROOT)
     results = run_search_cases()
