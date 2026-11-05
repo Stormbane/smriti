@@ -17,7 +17,9 @@ import hashlib
 import json
 import os
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
+from datetime import date
 from pathlib import Path
 
 _FINGERPRINT_BYTES = 256
@@ -101,7 +103,7 @@ class DaylogState:
     def note_scan(self, source: str) -> None:
         self.source(source).last_scan = time.time()
 
-    def mark_dirty(self, days: "set | list") -> None:
+    def mark_dirty(self, days: Iterable[str | date]) -> None:
         from smriti.daylog.model import day_key as _day_key
 
         for day in days:

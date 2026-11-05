@@ -34,6 +34,6 @@ jobs:
       - name: Lint
         run: ruff check src tests scripts
       - name: Type check
-        run: mypy --strict src/smriti/core src/smriti/store
+        run: mypy --strict src/smriti/core src/smriti/store src/smriti/daylog src/smriti/wake src/smriti/mcp src/smriti/profiles
       - name: Test
         run: pytest -q --ignore=tests/test_perf.py

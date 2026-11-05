@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
+from typing import IO
 
 from smriti.daylog.collect import collect_once
 from smriti.daylog.config import DaylogConfig, load_config
@@ -25,7 +27,7 @@ _DEFAULT_INTERVAL_S = 5.0
 _ERROR_BACKOFF_S = 30.0
 
 
-def _pid_path(cfg: DaylogConfig):  # noqa: ANN202
+def _pid_path(cfg: DaylogConfig) -> Path:
     return cfg.log_dir / ".logd.pid"
 
 
@@ -86,15 +88,15 @@ def ensure_running(cfg: DaylogConfig | None = None) -> bool:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if log_path.exists() and log_path.stat().st_size > 5 * 1024 * 1024:
             log_path.unlink()
-        sink = log_path.open("a", encoding="utf-8", errors="replace")
+        sink: IO[str] | None = log_path.open("a", encoding="utf-8", errors="replace")
     except OSError:
-        sink = subprocess.DEVNULL  # type: ignore[assignment]
+        sink = None
     proc = subprocess.Popen(  # noqa: S603
         [sys.executable, "-m", "smriti", "logd"],
-        stdout=sink, stderr=subprocess.STDOUT,
+        stdout=sink if sink is not None else subprocess.DEVNULL, stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL, creationflags=flags,
     )
-    if sink is not subprocess.DEVNULL:
+    if sink is not None:
         sink.close()  # the child holds its own handle
     log.info("logd: started daemon pid %d", proc.pid)
     return True
