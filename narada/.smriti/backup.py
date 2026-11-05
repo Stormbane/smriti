@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 """Backup helper for the narada memory tree.
 
-Quietly commits — and optionally pushes — the SMRITI_ROOT git repo.
+Quietly commits — and optionally pushes — the SMRITI_ROOT git repo. A push
+sends the current branch to its upstream (``origin`` and the same branch name
+when it has none yet); a detached HEAD isn't pushed.
 Called from:
   - the smriti-backup task (hourly)  -> --push, via `smriti backup`
   - smriti nightly       -> the witness step (commit, then --push)
@@ -308,18 +310,41 @@ def do_commit(cwd: Path, tag: str) -> bool:
     return code == 0
 
 
-def do_push(cwd: Path) -> tuple[bool, str]:
-    code, out = run_git(["push", "-q", "origin", "master"], cwd, timeout=300)
-    log_event(cwd, event="push", ok=code == 0, code=code, out=out[-500:])
+def push_target(cwd: Path) -> tuple[list[str], str] | str:
+    """Where the current branch goes: (git push arguments, the ref it updates there).
+
+    The branch's upstream when it has one. Without one, ``origin`` and a branch
+    of the same name, and the push makes that the upstream. Never a fixed branch
+    name: a repo on ``main`` pushed to ``master`` failed on every run. Returns
+    the reason instead when there is no branch to push (a detached HEAD).
+    """
+    code, out = run_git(["symbolic-ref", "-q", "HEAD"], cwd, timeout=30)
+    ref = out.strip()
+    if code == 1:
+        return "detached HEAD: no branch to push"
+    if code != 0 or not ref.startswith("refs/heads/"):
+        return f"could not read the current branch: {ref[-200:]}"
+    branch = ref[len("refs/heads/"):]
+    code_r, remote = run_git(["config", "--get", f"branch.{branch}.remote"], cwd, timeout=30)
+    code_m, merge = run_git(["config", "--get", f"branch.{branch}.merge"], cwd, timeout=30)
+    if code_r == 0 and code_m == 0 and remote.strip() and merge.strip():
+        return ["push", "-q", remote.strip(), f"{ref}:{merge.strip()}"], "@{u}"
+    return ["push", "-q", "-u", "origin", f"{ref}:{ref}"], f"refs/remotes/origin/{branch}"
+
+
+def do_push(cwd: Path, push_args: list[str]) -> tuple[bool, str]:
+    code, out = run_git(push_args, cwd, timeout=300)
+    log_event(cwd, event="push", ok=code == 0, code=code, out=out[-500:],
+              to=" ".join(a for a in push_args[1:] if not a.startswith("-")))
     return code == 0, out
 
 
-def needs_push(cwd: Path) -> bool:
-    """False only when HEAD is known to be on origin/master already.
+def needs_push(cwd: Path, tracking: str) -> bool:
+    """False only when HEAD is known to be on ``tracking`` (the push target) already.
 
     Any doubt (no remote-tracking ref yet, a git error) means push.
     """
-    code, out = run_git(["rev-list", "--count", "origin/master..HEAD"], cwd, timeout=30)
+    code, out = run_git(["rev-list", "--count", f"{tracking}..HEAD"], cwd, timeout=30)
     return code != 0 or out.strip() != "0"
 
 
@@ -395,11 +420,16 @@ def main() -> int:
             msg = "created" if committed else "nothing to commit"
             print(f"[backup] commit: {msg}", file=sys.stderr)
 
-        if args.push and not needs_push(cwd):
+        target = push_target(cwd) if args.push else None
+        if isinstance(target, str):
+            log_event(cwd, event="push_skipped", tag=args.tag, reason=target)
+            if args.verbose:
+                print(f"[backup] push: skipped ({target})", file=sys.stderr)
+        elif target is not None and not needs_push(cwd, target[1]):
             if args.verbose:
                 print("[backup] push: nothing new", file=sys.stderr)
-        elif args.push:
-            ok, out = do_push(cwd)
+        elif target is not None:
+            ok, out = do_push(cwd, target[0])
             if args.verbose:
                 if ok:
                     print("[backup] push: ok", file=sys.stderr)

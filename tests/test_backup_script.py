@@ -267,6 +267,74 @@ def test_push_happens_only_when_there_is_something_new(tmp_path: Path) -> None:
     assert [p["ok"] for p in pushes] == [True, True]
 
 
+def _git(cwd: Path, *args: str) -> str:
+    import subprocess
+
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True,
+                          text=True).stdout.strip()
+
+
+def _main_repo(tmp_path: Path, *, upstream: str | None = "main") -> tuple[Path, Path]:
+    """A repo on ``main`` with a bare ``origin``; tracking ``origin/<upstream>`` unless None."""
+    repo = _real_repo(tmp_path)
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "-q", "--bare", str(remote))
+    _git(repo, "branch", "-M", "main")
+    _git(repo, "remote", "add", "origin", str(remote))
+    if upstream is not None:
+        _git(repo, "push", "-q", "-u", "origin", f"main:{upstream}")
+    return repo, remote
+
+
+def _pushes(repo: Path) -> list[dict[str, object]]:
+    return [e for e in _log(repo) if e.get("event") == "push"]
+
+
+def test_a_main_branch_is_pushed_to_its_upstream(tmp_path: Path) -> None:
+    repo, remote = _main_repo(tmp_path)
+    _run_script(repo, "--foreground", "--push")
+    assert [p["ok"] for p in _pushes(repo)] == [True]
+    assert _git(remote, "rev-parse", "main") == _git(repo, "rev-parse", "HEAD")
+    assert _git(repo, "rev-list", "--count", "@{u}..HEAD") == "0"
+
+
+def test_a_main_branch_with_nothing_new_is_not_pushed(tmp_path: Path) -> None:
+    repo, _ = _main_repo(tmp_path)
+    _run_script(repo, "--foreground", "--push")
+    _run_script(repo, "--foreground", "--push")  # nothing new: no push at all
+    assert [p["ok"] for p in _pushes(repo)] == [True]
+
+
+def test_the_upstream_is_honoured_when_its_name_differs(tmp_path: Path) -> None:
+    repo, remote = _main_repo(tmp_path, upstream="trunk")
+    _run_script(repo, "--foreground", "--push")
+    assert [p["ok"] for p in _pushes(repo)] == [True]
+    assert _git(remote, "rev-parse", "trunk") == _git(repo, "rev-parse", "HEAD")
+    assert _git(remote, "branch", "--list", "main") == ""  # never a same-named guess
+
+
+def test_a_branch_without_an_upstream_gets_one_on_its_first_push(tmp_path: Path) -> None:
+    repo, remote = _main_repo(tmp_path, upstream=None)
+    _run_script(repo, "--foreground", "--push")
+    assert [p["ok"] for p in _pushes(repo)] == [True]
+    assert _git(remote, "rev-parse", "main") == _git(repo, "rev-parse", "HEAD")
+    assert _git(repo, "rev-parse", "--abbrev-ref", "main@{u}") == "origin/main"
+    _run_script(repo, "--foreground", "--push")
+    assert len(_pushes(repo)) == 1  # and then compares against it
+
+
+def test_a_detached_head_is_not_pushed_and_says_why(tmp_path: Path) -> None:
+    repo, remote = _main_repo(tmp_path)
+    before = _git(remote, "rev-parse", "main")
+    _git(repo, "checkout", "-q", "--detach")
+    _run_script(repo, "--foreground", "--push")
+    assert _commits(repo) == 2  # the commit still happens
+    assert _pushes(repo) == []
+    skipped = [e for e in _log(repo) if e.get("event") == "push_skipped"]
+    assert len(skipped) == 1 and "detached HEAD" in str(skipped[0]["reason"])
+    assert _git(remote, "rev-parse", "main") == before
+
+
 def test_stale_locks_are_kept_while_git_runs(backup: ModuleType, tmp_path: Path,
                                              monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)

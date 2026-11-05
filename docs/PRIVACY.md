@@ -19,8 +19,10 @@ ordinary memory tree, because that is what leaves the machine.
 
 The backup (`<root>/.smriti/backup.py`, run by the hourly `smriti-backup`
 task and by the nightly witness step) runs `git add -A`, commits, and
-pushes to `origin master`: to every push URL `origin` has, not only the
-first. Whatever git tracks reaches the remote as plain text, unless
+pushes the current branch to its upstream (`origin` and the same branch
+name when it has none yet; a detached HEAD isn't pushed): to every push
+URL that remote has, not only the first. Whatever git tracks reaches the
+remote as plain text, unless
 git-crypt encrypts it first. **smriti does not set up git-crypt.** With
 the memory template's `.gitignore`, that is:
 

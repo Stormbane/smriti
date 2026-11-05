@@ -41,7 +41,8 @@ def trigger(
         Commit messages are never encrypted (even with git-crypt, which
         the installer doesn't set up), so keep tags generic.
     push:
-        If True, also push to origin after committing.
+        If True, also push after committing: the current branch to its
+        upstream, or to ``origin`` under the same name when it has none.
     root:
         Memory tree root. If omitted, resolves via tree_root(). Callers
         operating on non-default roots (tests, custom entities) must pass
