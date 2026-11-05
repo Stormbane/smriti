@@ -1,10 +1,10 @@
-"""``notify_suti`` — the outbound shim.
+"""``notify_user`` — the outbound shim.
 
 Today it runs the configured command (``notify_cmd`` in
 ``<tree>/.smriti/daylog.json``) with the message on stdin — wired to
 the Telegram gateway at install time. This function is the designed
 first call site for the future presence-routing tool (spec: Future):
-callers express intent to reach Suti; HOW is this shim's problem.
+callers express intent to reach the user; HOW is this shim's problem.
 
 ``send`` is the same door with a level and a receipt: it sets
 ``NOTIFY_LEVEL`` for the fan-out sender (``notify_suti.py``: Telegram,
@@ -68,7 +68,8 @@ class Delivery:
 Sender = Callable[[str, str], Delivery]
 
 
-def notify_suti(cfg: DaylogConfig, message: str, *, timeout_s: int = 60) -> None:
+def notify_user(cfg: DaylogConfig, message: str, *, timeout_s: int = 60) -> None:
+    """Pipe *message* to ``notify_cmd`` on stdin; raises :class:`NotifyError` on failure."""
     if not cfg.notify_cmd:
         raise NotifyError(
             "no notify_cmd configured in .smriti/daylog.json — message not sent"

@@ -251,7 +251,7 @@ def _cmd_morning(args: argparse.Namespace) -> int:
         from smriti.daylog.morning import _COMPOSE_ARGS, _system_prompt  # noqa: PLC2701
 
         attempts: list[dict[str, str]] = []
-        message = compose(_system_prompt(cfg.location),
+        message = compose(_system_prompt(cfg),
                           "Yesterday's digest: (dry run — compose a sample)",
                           attempts, claude_cli_args=_COMPOSE_ARGS)
         print(message)

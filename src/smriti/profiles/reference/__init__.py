@@ -12,6 +12,8 @@ what only makes sense there:
 - Three wake-briefing sections (:mod:`.wake`, :mod:`.presence`): HANDS,
   SUTI NOW (the akhada health app and the latest ``people/`` notes) and
   ACROSS SURFACES (Telegram, the phone app, voice, notifications sent).
+- The morning message's persona (:mod:`.morning`): Narada as the
+  wandering sage.
 
 It is called "reference" because it is the installation the code is
 developed and checked against, and its behaviour is the one the core must
@@ -26,19 +28,31 @@ Enable it in ``<root>/.smriti/daylog.json``::
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from smriti.mcp.tool import Tool
 from smriti.profiles import Profile, WakeContext, WakeSection
 from smriti.profiles.reference import outbox
 
+if TYPE_CHECKING:
+    from smriti.daylog.config import DaylogConfig
+
 # scripts/doc_facts.py reads this tuple statically to list the profile's tools.
 TOOLS: tuple[Tool, ...] = (*outbox.TOOLS,)
 
 
+# The wake and the morning import their modules only when they run.
 def _wake_sections(ctx: WakeContext) -> Sequence[WakeSection]:
-    from smriti.profiles.reference.wake import wake_sections  # only the wake needs it
+    from smriti.profiles.reference.wake import wake_sections
 
     return wake_sections(ctx)
 
 
-PROFILE = Profile(name="reference", tools=TOOLS, wake_sections=_wake_sections)
+def _morning_prompt(cfg: DaylogConfig) -> str:
+    from smriti.profiles.reference.morning import morning_prompt
+
+    return morning_prompt(cfg)
+
+
+PROFILE = Profile(name="reference", tools=TOOLS, wake_sections=_wake_sections,
+                  morning_prompt=_morning_prompt)
