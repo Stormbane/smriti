@@ -408,6 +408,53 @@ def test_a_full_reindex_that_fails_leaves_the_old_index(
     assert _sources(db_path) == before
 
 
+@pytest.mark.parametrize("full", [True, False])
+def test_a_run_keeps_what_another_writer_indexed_while_it_embedded(
+        mini_tree: Path, monkeypatch: pytest.MonkeyPatch, full: bool) -> None:
+    """smriti_write indexes its file at once (index_file). A run embedding at
+    that moment must neither wipe the new source nor overwrite a newer read."""
+    import sqlite3
+    import threading
+
+    import smriti.store.indexer as indexer_mod
+
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+    real = indexer_mod._get_embedding_provider()
+    new = mini_tree / "threads" / "written-mid-run.md"
+    mind = mini_tree / "mind.md"
+    mind.write_text("# Mind\n\nThe edit this run reads.\n", encoding="utf-8")
+
+    def another_writer() -> None:
+        new.write_text("# Mid-run\n\nA write that lands while the run embeds.\n",
+                       encoding="utf-8")
+        mind.write_text("# Mind\n\nA newer edit that lands mid-run.\n", encoding="utf-8")
+        indexer_mod.index_file(new, root=mini_tree, db=db_path)
+        indexer_mod.index_file(mind, root=mini_tree, db=db_path)
+
+    class OthersWriteMidEmbed:
+        model_name, dimension = real.model_name, real.dimension
+        fired = False
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            if not OthersWriteMidEmbed.fired:
+                OthersWriteMidEmbed.fired = True
+                writer = threading.Thread(target=another_writer)
+                writer.start()
+                writer.join()
+            return await real.embed(texts)
+
+    monkeypatch.setattr(indexer_mod, "_get_embedding_provider", OthersWriteMidEmbed)
+    index_tree(full=full, root=mini_tree, db=db_path)
+
+    assert "threads/written-mid-run.md" in _sources(db_path)
+    conn = sqlite3.connect(str(db_path))
+    mind_text = " ".join(r[0] for r in conn.execute(
+        "SELECT content FROM chunks WHERE source = 'mind.md'"))
+    conn.close()
+    assert "newer edit" in mind_text and "this run reads" not in mind_text
+
+
 def test_only_a_full_reindex_changes_the_vector_dimension(
         mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import sqlite3

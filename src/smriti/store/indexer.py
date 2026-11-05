@@ -339,13 +339,20 @@ def index_tree(
         now = datetime.now(timezone.utc).isoformat()
         conn.commit()
         conn.execute("BEGIN IMMEDIATE")
-        if full:
-            if conn.has_vec and meta_dim != dim:
-                conn.execute("DROP TABLE chunks_vec")
-                conn.execute(
-                    "CREATE VIRTUAL TABLE chunks_vec USING vec0"
-                    f"(embedding float[{dim}])"
-                )
+        # Other writers (index_file, behind every smriti_write) may have
+        # published sources while this run embedded. Read under the write
+        # lock: a source whose record changed since this run began was
+        # indexed from a newer read than ours, so theirs stays.
+        now_recorded = _recorded_sources(conn)
+        keep = {s for s, rec in now_recorded.items() if rec != recorded.get(s)}
+        if full and conn.has_vec and meta_dim != dim:
+            # Every stored vector is the wrong size, so everything goes,
+            # including what others published meanwhile; their records go
+            # with them, so the next run embeds them again.
+            keep = set()
+            conn.execute("DROP TABLE chunks_vec")
+            conn.execute(f"CREATE VIRTUAL TABLE chunks_vec USING vec0(embedding float[{dim}])")
+        if full and not keep:
             conn.execute("DELETE FROM chunks")
             if conn.has_vec:
                 conn.execute("DELETE FROM chunks_vec")
@@ -354,17 +361,23 @@ def index_tree(
                 # any entries an old crash left without a chunk.
                 conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')")
             conn.execute("DELETE FROM sources")
+        else:
+            replaced = (set(_indexed_files(conn)) | set(now_recorded) if full
+                        else {src for src, _ in read_sources})
+            for src in replaced - keep:
+                _delete_source(conn, src)
+        if full:
             conn.execute(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES ('dimension', ?)",
                 (str(dim),),
             )
-        else:
-            for src, _ in read_sources:
-                _delete_source(conn, src)
-        for src, st in adopted + read_sources:
+        written = [(src, st) for src, st in adopted + read_sources if src not in keep]
+        for src, st in written:
             _record_source(conn, src, st)
+        pending = [(chunk, vector) for chunk, vector in zip(all_chunks, embeddings, strict=True)
+                   if chunk[2] not in keep]
 
-        for i, (cid, c, rel_source, fpath) in enumerate(all_chunks):
+        for (cid, c, rel_source, fpath), vector in pending:
             dist = trunk_distance(fpath, root)
             conn.execute(
                 """INSERT OR REPLACE INTO chunks
@@ -401,11 +414,11 @@ def index_tree(
                 conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
                 conn.execute(
                     "INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)",
-                    (rowid, _serialize_f32(embeddings[i])),
+                    (rowid, _serialize_f32(vector)),
                 )
 
-        stats["indexed"] = len(read_sources)
-        stats["chunks"] = len(all_chunks)
+        stats["indexed"] = sum(1 for src, _ in read_sources if src not in keep)
+        stats["chunks"] = len(pending)
 
         # ── Update metadata ──────────────────────────────────────────────
         key = provider_key(provider)
