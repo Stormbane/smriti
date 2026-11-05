@@ -91,8 +91,9 @@ log needs only a collector, not new instrumentation.
   formatting; on any error it emits nothing.
 - **Outbound license: at most one message per day, fail-closed.** The morning
   message is the sole autonomous outbound act. The sending code (not the LLM)
-  performs delivery, guarded by a durable per-date sent ledger written before
-  the send attempt — a crash mid-send means no message that day, never two.
+  performs delivery, guarded by a durable per-date sent ledger claimed before
+  composing and marked before the send attempt — a crash mid-send means no
+  message that day, never two.
   The composing LLM call has no tools, or web search for headlines and
   nothing else when `morning_web_search` is on in `daylog.json` (H11.2:
   search results can carry a prompt injection, so it is opt-in); it returns
@@ -212,20 +213,27 @@ hash; re-running a night that already completed is a no-op.
 
 ### 5. Wake task — `smriti morning` (~07:00)
 
-1. Check the sent ledger (`log/.morning-sent/YYYY-MM-DD`); if present, exit —
-   at most one message per day, ever.
+1. Claim the day: an exclusive create of the sent ledger entry
+   (`log/.morning-sent/YYYY-MM-DD`, state `claimed`) before composing, so of
+   two overlapping runs one goes on and the other exits (H11.3). An entry in
+   any other state, or one from before claims, means the day is done — at
+   most one message per day, ever. A claim older than 30 minutes is a
+   crashed run's and is taken over, under the entry's edit lock; a failed
+   compose deletes its claim, so a later run can retry.
 2. Compose: one `claude -p` call, on claude_cli only, that reads the digest
    text passed in the prompt and returns the good-morning message text. It
    has no tools (the digest's flags); with `morning_web_search` on, it has web
    search and nothing else (no MCP, no file tools), fetches broad world
    headlines and picks 3–5 worth knowing. The prompt offers headlines only
    when the call can search.
-3. Write the sent-ledger entry (fail-closed: crash after this point means a
-   silent morning, never a double send), then smriti's own code delivers via
-   `notify_user(cfg, message)` (named `notify_suti` before H5) — the
-   configured `notify_cmd`, the seam for the future presence-routing tool.
-   The prompt is generic unless the enabled profile supplies one; the
-   reference profile's carries Narada's persona.
+3. Mark the entry `sending`, if the claim is still this run's (a run that
+   outlived its claim stops here), fail-closed: a crash after this point
+   means a silent morning, never a double send. Then smriti's own code
+   delivers via `notify_user(cfg, message)` (named `notify_suti` before H5) —
+   the configured `notify_cmd`, the seam for the future presence-routing tool.
+   The entry ends `sent` or `undelivered`; neither is retried. The prompt is
+   generic unless the enabled profile supplies one; the reference profile's
+   carries Narada's persona.
 
 ### 6. Scope cut & cleanup
 
