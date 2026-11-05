@@ -50,8 +50,13 @@ RECORD_NAME = "privacy.json"
 
 # A day's captured turns and their render, which hold the same text. They
 # need not exist: git answers ignore and attribute questions from the
-# patterns alone.
+# patterns alone. They stand for the files capture will write.
 _SAMPLE_LOGS = ("log/2000/01/01.jsonl", "log/2000/01/01.md")
+
+# The day-log's dated files: each day's turns and render, its digest, and
+# the week, month and year rollups (log/YYYY/..., log/YYYY.md). Runtime
+# state such as log/.nightly-status.json holds no conversation.
+_CONVERSATION = re.compile(r"^log/\d{4}(?:/|\.md$)")
 
 _KIND_LABELS = {
     "claude_jsonl": "Claude Code transcripts",
@@ -84,9 +89,17 @@ class GitState:
 
     is_repo: bool
     remote_url: str | None = None  # origin's push URL, credentials removed
-    log_ignored: bool = False  # git ignores the day-log's files
-    log_encrypted: bool = False  # .gitattributes sends them through git-crypt
+    log_ignored: bool = False  # git ignores the day-log files capture will write
+    # Day-log files git already tracks. An ignore rule doesn't untrack them,
+    # and backup.py's `git add -A` keeps committing their changes.
+    log_tracked: int = 0
+    log_encrypted: bool = False  # .gitattributes sends every committed one through git-crypt
     error: str = ""  # git couldn't be run
+
+    @property
+    def log_committed(self) -> bool:
+        """Conversations reach a commit: new ones aren't ignored, or old ones are tracked."""
+        return not self.log_ignored or self.log_tracked > 0
 
 
 @dataclass(frozen=True)
@@ -223,24 +236,41 @@ def redact_url(url: str) -> str:
     return _USERINFO.sub(r"\1", url)
 
 
-def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def _git(root: Path, *args: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(root), *args],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        stdin=subprocess.DEVNULL, timeout=30,
+        input=stdin, stdin=None if stdin is not None else subprocess.DEVNULL, timeout=60,
     )
+
+
+def _filter_attrs(root: Path, paths: list[str]) -> dict[str, str]:
+    """Each path's ``filter`` attribute, read through stdin (no length limit)."""
+    done = _git(root, "check-attr", "--stdin", "-z", "filter", stdin="\0".join(paths) + "\0")
+    if done.returncode != 0:
+        raise subprocess.SubprocessError(done.stderr.strip() or "git check-attr failed")
+    fields = done.stdout.split("\0")
+    return {fields[i]: fields[i + 2] for i in range(0, len(fields) - 2, 3)}
 
 
 def inspect_git(root: Path) -> GitState:
     """The repository, its ``origin`` (where ``backup.py`` pushes), and how
-    git treats the day-log: ignored, or encrypted by git-crypt."""
+    git treats the day-log: which of it is committed, and whether git-crypt
+    is asked to encrypt it."""
     if not (root / ".git").exists():  # backup.py's own test for a repository
         return GitState(is_repo=False)
     try:
         url = _git(root, "remote", "get-url", "--push", "origin")
-        # check-ignore prints each ignored path; check-attr one line per path.
-        ignored = _git(root, "check-ignore", "--", *_SAMPLE_LOGS)
-        attr = _git(root, "check-attr", "filter", "--", *_SAMPLE_LOGS)
+        ignored = _git(root, "check-ignore", "--", *_SAMPLE_LOGS)  # prints each ignored path
+        listed = _git(root, "ls-files", "-z", "--", "log/")
+        if listed.returncode != 0:
+            raise subprocess.SubprocessError(listed.stderr.strip() or "git ls-files failed")
+        tracked = [p for p in listed.stdout.split("\0") if _CONVERSATION.match(p)]
+        log_ignored = len(ignored.stdout.splitlines()) == len(_SAMPLE_LOGS)
+        # What the backup commits from log/: the tracked files, and the new
+        # ones unless they're ignored.
+        committed = tracked + ([] if log_ignored else list(_SAMPLE_LOGS))
+        attrs = _filter_attrs(root, committed) if committed else {}
     except (OSError, subprocess.SubprocessError) as exc:
         return GitState(is_repo=True, error=str(exc))
     remote: str | None = None
@@ -248,13 +278,12 @@ def inspect_git(root: Path) -> GitState:
         remote = redact_url(url.stdout.strip())
     elif "no such remote" not in url.stderr.lower():
         return GitState(is_repo=True, error=url.stderr.strip() or f"git exited {url.returncode}")
-    attrs = attr.stdout.splitlines() if attr.returncode == 0 else []
     return GitState(
         is_repo=True,
         remote_url=remote,
-        log_ignored=len(ignored.stdout.splitlines()) == len(_SAMPLE_LOGS),
-        log_encrypted=len(attrs) == len(_SAMPLE_LOGS)
-        and all(line.strip().endswith(": git-crypt") for line in attrs),
+        log_ignored=log_ignored,
+        log_tracked=len(tracked),
+        log_encrypted=bool(committed) and all(attrs.get(p) == "git-crypt" for p in committed),
     )
 
 
@@ -487,7 +516,9 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
     else:
         lines.append('  captured:  nothing ("sources": [] in .smriti/daylog.json)')
 
-    conversations = bool(sources) and not git.log_ignored
+    # Conversations already tracked are committed whether or not capture is
+    # on now, and whatever the ignore rules say.
+    conversations = (bool(sources) and not git.log_ignored) or git.log_tracked > 0
     pushes_plain = False
     if git.error or not git.is_repo:
         why = f"git couldn't be run ({git.error})" if git.error else f"{root} isn't a git repository"
@@ -495,9 +526,15 @@ def summary(root: Path, plan: PrivacyPlan) -> str:
         lines.append("  pushed:    nothing")
     else:
         tree = "the memory tree" + (", with the captured conversations" if conversations else "")
-        if sources and git.log_ignored:
+        if git.log_ignored and not git.log_committed and sources:
             tree += " (log/ is git-ignored, so not the conversations)"
         lines.append(f"  committed: {tree}, by the hourly backup and the nightly")
+        if git.log_ignored and git.log_tracked:
+            lines.append(
+                f"             log/ is git-ignored, but {git.log_tracked} day-log file(s) "
+                "committed earlier are still tracked, and each backup commits their changes "
+                "(`git rm -r --cached log/` untracks them; history keeps them)"
+            )
         if git.remote_url is None:
             lines.append("  pushed:    nothing; there is no remote named origin")
         else:

@@ -72,6 +72,14 @@ def git_repo(root: Path, url: str | None = None) -> None:
         subprocess.run(["git", "-C", str(root), "remote", "add", "origin", url], check=True)
 
 
+def track(root: Path, rel: str, text: str = '{"who": "user", "text": "hi"}\n') -> None:
+    """Write a file and stage it, as an earlier backup's `git add -A` would have."""
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "--", rel], check=True)
+
+
 def no_prompt(_question: str) -> str:
     raise AssertionError("asked a question it shouldn't have")
 
@@ -397,6 +405,42 @@ class TestRemote:
         assert state.log_encrypted is False
         assert state.log_ignored is False
 
+    @needs_git
+    def test_ignoring_log_after_the_fact_leaves_tracked_days_committed(self, root: Path) -> None:
+        """An ignore rule doesn't untrack a file, and `git add -A` keeps staging it."""
+        git_repo(root, REMOTE)
+        track(root, "log/2026/11/04.jsonl")
+        track(root, "log/2026/11/04.md", "# 4 November\n")
+        (root / ".gitignore").write_text("log/\n", encoding="utf-8")
+
+        state = privacy.inspect_git(root)
+
+        assert state.log_ignored is True
+        assert state.log_tracked == 2
+        assert state.log_committed is True
+
+    @needs_git
+    def test_tracked_runtime_state_is_not_a_conversation(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        track(root, "log/.nightly-status.json", "{}\n")
+        (root / ".gitignore").write_text("log/\n", encoding="utf-8")
+
+        state = privacy.inspect_git(root)
+
+        assert state.log_tracked == 0
+        assert state.log_committed is False
+
+    @needs_git
+    def test_every_tracked_day_must_be_marked_for_git_crypt(self, root: Path) -> None:
+        """New days marked, and ignored anyway; an old tracked day not marked."""
+        git_repo(root, REMOTE)
+        track(root, "log/2025/01/02.jsonl")
+        (root / ".gitignore").write_text("log/\n", encoding="utf-8")
+        (root / ".gitattributes").write_text(
+            "log/2000/** filter=git-crypt diff=git-crypt\n", encoding="utf-8"
+        )
+        assert privacy.inspect_git(root).log_encrypted is False
+
     def test_git_that_cannot_run_is_reported(
         self, root: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -467,6 +511,32 @@ class TestSummary:
         text = privacy.summary(root, plan)
         assert "log/ encrypted by git-crypt, everything else in plaintext" in text
         assert "WARNING" not in text
+
+    @needs_git
+    def test_tracked_days_are_still_pushed_after_log_is_ignored(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        track(root, "log/2026/11/04.jsonl")
+        (root / ".gitignore").write_text("log/\n", encoding="utf-8")
+
+        plan = decide_and_apply(root, capture=True, remote_private=False)
+        text = privacy.summary(root, plan)
+
+        assert "pushed:    the memory tree, with the captured conversations, to" in text
+        assert "1 day-log file(s) committed earlier are still tracked" in text
+        assert "so not the conversations" not in text
+        assert "WARNING: your conversations would go in plaintext" in text
+
+    @needs_git
+    def test_tracked_days_are_pushed_even_with_capture_off(self, root: Path) -> None:
+        git_repo(root, REMOTE)
+        track(root, "log/2026/11/04.jsonl")
+
+        plan = decide_and_apply(root, capture=False, remote_private=False)
+        text = privacy.summary(root, plan)
+
+        assert "captured:  nothing" in text
+        assert "pushed:    the memory tree, with the captured conversations, to" in text
+        assert "WARNING" in text
 
     @needs_git
     def test_a_git_ignored_day_log_is_not_called_pushed(self, root: Path) -> None:
