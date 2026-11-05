@@ -81,12 +81,12 @@ def test_underscore_identifiers_are_kept_when_their_parts_are_indexed(
 
 
 def test_without_fts5vocab_falls_back_to_the_first_terms() -> None:
-    class NoVocab:
-        def execute(self, *a: object) -> object:
+    class NoVocab(sqlite3.Connection):
+        def execute(self, *a: object) -> sqlite3.Cursor:
             raise sqlite3.OperationalError("no such module: fts5vocab")
 
     q = " ".join(f"term{i:02d}" for i in range(20))
-    assert fts_terms(NoVocab(), q, k=3) == ["term00", "term01", "term02"]
+    assert fts_terms(NoVocab(":memory:"), q, k=3) == ["term00", "term01", "term02"]
 
 
 def test_search_can_skip_the_vector_leg(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -88,3 +88,11 @@ select = ["E4", "E7", "E9", "F"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+[[tool.mypy.overrides]]
+module = "sqlite_vec"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "smriti._vendored.*"
+follow_imports = "skip"

@@ -16,12 +16,13 @@ import sqlite3
 import struct
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Protocol, cast
 
 from smriti._vendored.memsearch.chunker import chunk_markdown, compute_chunk_id
 from smriti._vendored.memsearch.scanner import scan_paths
 from smriti.core.tree import smriti_db_path, tree_root, trunk_distance
 from smriti.store.index_policy import is_indexable
-from smriti.store.schema import ensure_schema
+from smriti.store.schema import IndexDB, ensure_schema
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ def _recorded_provider_key(db: Path | None = None) -> str | None:
                 "SELECT value FROM meta WHERE key = 'embedding_provider'"
             ).fetchone()
             if row:
-                return row[0]
+                return cast(str | None, row[0])
             # Indexes built before the provider was recorded (< e8d98c2)
             # still name their model: infer the provider from it rather
             # than let the auto order pick a different one and strand
@@ -112,8 +113,20 @@ def _provider_preference() -> tuple[str, ...]:
     return _PROVIDER_AUTO_ORDER
 
 
+class _EmbeddingProvider(Protocol):
+    """The embedding interface used here, across the untyped vendor boundary."""
+
+    @property
+    def model_name(self) -> str: ...
+
+    @property
+    def dimension(self) -> int: ...
+
+    async def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+
 @functools.cache
-def _get_embedding_provider():  # noqa: ANN202
+def _get_embedding_provider() -> _EmbeddingProvider:
     """Return the embedding provider for this index (cached per process).
 
     Building the provider costs 5-18s (model load); embedding a chunk
@@ -127,7 +140,7 @@ def _get_embedding_provider():  # noqa: ANN202
     last_error: Exception | None = None
     for key in keys:
         try:
-            return get_provider(key)
+            return cast(_EmbeddingProvider, get_provider(key))
         except Exception as exc:
             last_error = exc
             log.warning("embedding provider %r unavailable: %s", key, exc)
@@ -139,7 +152,7 @@ def _get_embedding_provider():  # noqa: ANN202
     )
 
 
-def _indexed_files(conn: sqlite3.Connection) -> dict[str, str]:
+def _indexed_files(conn: IndexDB) -> dict[str, str]:
     """Return a mapping of source path → max(indexed_at) from the db."""
     rows = conn.execute(
         "SELECT source, MAX(indexed_at) FROM chunks GROUP BY source"
@@ -147,7 +160,7 @@ def _indexed_files(conn: sqlite3.Connection) -> dict[str, str]:
     return {r[0]: r[1] for r in rows}
 
 
-def _recorded_sources(conn: sqlite3.Connection) -> dict[str, tuple[int, int]]:
+def _recorded_sources(conn: IndexDB) -> dict[str, tuple[int, int]]:
     """Return a mapping of source path → (mtime_ns, size) when it was last read."""
     rows = conn.execute("SELECT source, mtime_ns, size FROM sources").fetchall()
     return {r[0]: (r[1], r[2]) for r in rows}
@@ -162,14 +175,14 @@ def _disk_record(path: Path) -> tuple[int, int] | None:
     return (st.st_mtime_ns, st.st_size)
 
 
-def _record_source(conn: sqlite3.Connection, source: str, st: os.stat_result) -> None:
+def _record_source(conn: IndexDB, source: str, st: os.stat_result) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO sources (source, mtime_ns, size) VALUES (?, ?, ?)",
         (source, st.st_mtime_ns, st.st_size),
     )
 
 
-def _delete_source(conn: sqlite3.Connection, source: str) -> None:
+def _delete_source(conn: IndexDB, source: str) -> None:
     """Remove all chunks (and their vec/fts rows) and the record for a given source."""
     conn.execute("DELETE FROM sources WHERE source = ?", (source,))
     # Get rowids before deleting so we can clean up vec0

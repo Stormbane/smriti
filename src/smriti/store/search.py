@@ -17,6 +17,9 @@ import logging
 import sqlite3
 import struct
 from dataclasses import dataclass
+from typing import TypedDict
+
+from smriti.store.schema import IndexDB
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +38,14 @@ class SearchResult:
     heading: str
     content: str
     score: float
+    trunk_distance: int
+    chunk_id: str
+
+
+class _Candidate(TypedDict):
+    source: str
+    heading: str
+    content: str
     trunk_distance: int
     chunk_id: str
 
@@ -71,7 +82,7 @@ up out over all any some more most than too now again get got make made want nee
 """.split())
 
 
-def fts_terms(conn: object, query: str, k: int = FTS_MAX_TERMS) -> list[str]:
+def fts_terms(conn: IndexDB | sqlite3.Connection, query: str, k: int = FTS_MAX_TERMS) -> list[str]:
     """The query's keyword terms for FTS5: deduplicated, stopwords dropped, rarest *k* kept.
 
     ORing every word of a long prompt made FTS5 rank most of the index: p90
@@ -106,7 +117,7 @@ def fts_terms(conn: object, query: str, k: int = FTS_MAX_TERMS) -> list[str]:
             parts = [p for p in t.split("_") if p] or [t]
             counts = []
             for part in parts:
-                row = conn.execute(  # type: ignore[attr-defined]
+                row = conn.execute(
                     f"SELECT doc FROM {vocab} WHERE term = ?", (part,)
                 ).fetchone()
                 counts.append(row[0] if row else 0)
@@ -117,7 +128,7 @@ def fts_terms(conn: object, query: str, k: int = FTS_MAX_TERMS) -> list[str]:
     return sorted(present, key=lambda t: (df[t], t))[:k] or content[:k]
 
 
-def _vocab_table(conn: object) -> str | None:
+def _vocab_table(conn: IndexDB | sqlite3.Connection) -> str | None:
     """The fts5vocab table to read term frequencies from, or None.
 
     The index schema creates ``chunks_fts_vocab`` in main, which query_only
@@ -125,12 +136,12 @@ def _vocab_table(conn: object) -> str | None:
     existed get a temp one on writable connections.
     """
     try:
-        conn.execute("SELECT 1 FROM main.chunks_fts_vocab LIMIT 1")  # type: ignore[attr-defined]
+        conn.execute("SELECT 1 FROM main.chunks_fts_vocab LIMIT 1")
         return "main.chunks_fts_vocab"
     except sqlite3.Error:
         pass
     try:
-        conn.execute(  # type: ignore[attr-defined]
+        conn.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS temp.chunks_fts_vocab "
             "USING fts5vocab(main, chunks_fts, 'row')"
         )
@@ -140,7 +151,7 @@ def _vocab_table(conn: object) -> str | None:
 
 
 def search(
-    conn: sqlite3.Connection,
+    conn: IndexDB,
     query: str,
     *,
     top_k: int = 5,
@@ -173,7 +184,7 @@ def search(
 
     from smriti.store.indexer import _get_embedding_provider
 
-    candidates: dict[int, dict] = {}  # rowid → {source, heading, content, ...}
+    candidates: dict[int, _Candidate] = {}  # rowid → {source, heading, content, ...}
 
     # ── Vector search ────────────────────────────────────────────────
     has_vec = conn.has_vec and use_vectors
@@ -262,7 +273,7 @@ def search(
         return []
 
     # ── Combined scoring ─────────────────────────────────────────────
-    scored: list[tuple[int, float, dict]] = []
+    scored: list[tuple[int, float, _Candidate]] = []
     # Without a vector leg, keyword relevance takes the vector weight too, so
     # scores stay on the same 0-1 scale and callers' thresholds still mean
     # the same thing (otherwise nothing below the root could exceed 0.4).

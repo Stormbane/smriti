@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,11 +30,13 @@ class IndexDB:
     has_vec: bool
     has_fts: bool
 
-    def execute(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
-        return self.conn.execute(*args, **kwargs)
+    def execute(
+        self, sql: str, parameters: Sequence[object] | Mapping[str, object] = (), /
+    ) -> sqlite3.Cursor:
+        return self.conn.execute(sql, parameters)
 
-    def executescript(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN201
-        return self.conn.executescript(*args, **kwargs)
+    def executescript(self, sql_script: str, /) -> sqlite3.Cursor:
+        return self.conn.executescript(sql_script)
 
     def commit(self) -> None:
         self.conn.commit()
@@ -48,7 +51,7 @@ class IndexDB:
 def _load_sqlite_vec(conn: sqlite3.Connection) -> bool:
     """Load the sqlite-vec extension.  Returns True on success."""
     try:
-        import sqlite_vec  # type: ignore[import-untyped]
+        import sqlite_vec
 
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
@@ -106,7 +109,7 @@ def open_readonly(db_path: Path) -> IndexDB:
 def ensure_schema(
     db_path: Path,
     dimension: int,
-) -> sqlite3.Connection:
+) -> IndexDB:
     """Open (or create) the index database and ensure all tables exist.
 
     Parameters
