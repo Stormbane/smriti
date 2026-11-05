@@ -147,9 +147,14 @@ elsewhere, created 0700 with its owner verified, refusing to use one that
 another user owns or others can write. The key is created atomically (an
 exclusive create, mode 0600) and never replaced while a service uses it.
 Same-user processes are trusted; this is stated in SECURITY. (`oslock`'s
-lock files move into this directory too: today they sit in the shared
-temp directory under predictable names, mode 0644, which another Unix user
-could pre-create or hold.)
+own lock files stay where they are in H10: see round 2, finding 1.)
+
+*Bounded admission.* At most 32 connections at once; beyond that a new
+connection is closed on accept, before any buffer or worker is allocated.
+The handshake must finish within 1 s. Authenticated requests wait in a
+bounded queue (64), and a request whose client deadline has passed is
+dropped unrun. So a peer that floods or stalls costs bounded threads,
+sockets and memory, and clients degrade promptly instead of hanging.
 
 *Lifecycle.*
 - One service per memory root, enforced by an OS lock in the runtime
@@ -183,9 +188,11 @@ could pre-create or hold.)
   keyword search at once, and records the source with its vectors pending
   (a `sources.vectors` flag). `smriti_write` reports "saved; indexed for
   keyword search; vectors pending (<reason>)".
-- Pending vectors are filled by the service when it next starts, by the
-  next successful `index_file`, and by any `index_tree` run, so recovery
-  doesn't wait for, or depend on, a nightly task. `smriti status` shows
+- Pending vectors are filled by the service when it starts, by a repair
+  loop that runs in the service whenever sources are pending (small
+  batches, between requests, queries first), by the next successful
+  `index_file`, and by any `index_tree` run. So recovery doesn't wait for,
+  or depend on, a nightly task or a later write. `smriti status` shows
   the pending count and the service's state.
 
 *Who uses it.* `search()` and `index_file()` in every long-lived process
@@ -198,9 +205,8 @@ identity checks. `SMRITI_EMBED_SERVICE=0` turns the service off.
 |---|---|---|
 | H10.0 | Size it: memory and latency of MiniLM through ONNX vs PyTorch, and their vector agreement. | Numbers recorded here; they decide only the service's own runtime, not whether there is a service. |
 | H10.1 | Embedding identity: defined, recorded with the first vectors, checked inside `index_file`'s transaction and against search's snapshot; `sources.vectors` and pending-vector repair. | Tests: a migration between embedding and commit (equal and different dimensions) is caught; first-write bootstrap persists the identity; a restart with another provider installed refuses to mix. |
-| H10.2 | `smriti.embed`: runtime directory, key, lock, TCP service with mutual HMAC, framing and bounds, per-connection deadlines, drain, idle exit, discovery. `smriti embed serve`, `status` and `stop`. | Tests: round trip; vectors identical to in-process; a wrong key is refused both ways; an impostor on the port is detected; stalled handshake and partial frames time out without blocking others; simultaneous cold starts give one service; idle exit racing a request; drain on an index identity change; mixed client versions coexist; a foreign-owned or world-writable runtime directory is refused. |
+| H10.2 | `smriti.embed`: runtime directory, key, lock, TCP service with mutual HMAC, framing and bounds, bounded admission and queue, per-connection deadlines, drain, idle exit, discovery, the repair loop. `smriti embed serve`, `status` and `stop`. | Tests: round trip; vectors identical to in-process; a wrong key is refused both ways; an impostor on the port is detected; stalled handshake and partial frames time out without blocking others; simultaneous cold starts give one service; idle exit racing a request; drain on an index identity change; mixed client versions coexist; a foreign-owned or world-writable runtime directory is refused; sustained unauthenticated connections stay bounded and clients still degrade within their deadline; a timed-out write followed only by reads ends with nothing pending. |
 | H10.3 | Wire `_get_embedding_provider()` to the service in long-lived processes; degraded results and statuses through MCP and `smriti status`. | An MCP server stays under 100 MB after searches and writes, never importing `torch` or `onnxruntime` (test). Outage: a write is saved and keyword-searchable at once, the read says keyword-only, and vectors fill in on recovery without a nightly (tests). With the real model (`needs_model`): vector fidelity and first-search latency under 1 s with the service warm. |
-| H10.4 | `oslock`'s lock files move to the private runtime directory. | Tests; no behaviour change on Windows. |
 | H10.5 | Docs: README (what runs), ARCHITECTURE, SECURITY (the endpoint, its key, the trust boundary), the off switch. | Doc facts regenerated. |
 
 ### Cross-review dispositions (round 1, Codex adversarial review)
@@ -233,6 +239,24 @@ identity checks. `SMRITI_EMBED_SERVICE=0` turns the service off.
    costs about 250 MB per process, multiplied by every session, so it
    doesn't replace the service.
 
+### Cross-review dispositions (round 2, the single recheck; then implementation)
+
+Codex: round-1 findings 1, 2 and 4 resolved at plan level; the ONNX partial
+rejection sound (66 sessions at 250 MB is still about 16.5 GB).
+
+1. *Changing lock paths breaks exclusion during mixed-version operation*
+   [high]: **accepted**. Long-lived MCP servers and logd keep the old
+   `oslock` paths after an upgrade, so old and new writers could both
+   enter `edit_lock` or the day-log writer lock. Moving `oslock` comes out
+   of H10; it becomes H11.9, with a transition that takes both namespaces
+   until no old process can be running, and an old/new contention test.
+2. *Per-connection deadlines don't bound unauthenticated resource use*
+   [medium]: **accepted**. Bounded admission, a 1 s handshake, a bounded
+   queue, expired requests dropped; a saturation test.
+3. *Pending vectors can stay stranded after a live-service recovery*
+   [medium]: **accepted**. A repair loop in the service while sources are
+   pending; a test of a timed-out write followed only by reads.
+
 ## H11. From outside review #4 (B and B+, at `f1319a1`)
 
 | # | Change | Acceptance |
@@ -245,6 +269,7 @@ identity checks. `SMRITI_EMBED_SERVICE=0` turns the service off.
 | H11.6 | The reference profile moves out of the wheel into its own package (`smriti-reference`, or a plugin directory); the default root is neutral (`~/.smriti`) with `~/.narada` honoured where it exists. | A fresh install has no reference code; the reference install is unchanged. |
 | H11.7 | Release: tag `v0.2.0` with the changelog; the `read` extra's model download is disclosed (and `HF_HUB_OFFLINE` documented). | A tagged release. |
 | H11.8 | Outside review #5. | Grades recorded. |
+| H11.9 | `oslock`'s lock files move from the shared temp directory to the private per-user runtime directory (H10), through a transition that holds both the old and the new lock until no process with the old code can be running. | An old/new-process contention test for `edit_lock` and the day-log writer lock. |
 
 ## Status
 
