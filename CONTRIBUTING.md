@@ -48,8 +48,9 @@ real memory index, for stub runs. Offline mode also prevents the optional rerank
 
 Tests marked `needs_cli` (`tests/test_llm_tool_boundary.py`) run the installed
 Claude Code CLI to check that the nightly's and the morning's LLM calls get no
-tools beyond the ones they need. They run when `claude` is installed and logged
-in, cost a few cents on haiku, and skip in CI; set `CI=1` to skip them locally.
+tools beyond the ones they need. They are opt-in, because they cost a few cents
+on haiku each run: set `SMRITI_LIVE_CLI_TESTS=1` (with `claude` installed and
+logged in). They never run in CI. Run them after changing any LLM call's flags.
 
 To exercise the normal model path, unset `SMRITI_EMBED_PROVIDER` and run the same
 pytest command. The selected provider needs its model installed or cached. Unset

@@ -264,12 +264,14 @@ def _cmd_morning(args: argparse.Namespace) -> int:
     cfg = load_config()
     if args.dry_run:
         from smriti.daylog.digest import compose
-        from smriti.daylog.morning import _COMPOSE_ARGS, _system_prompt  # noqa: PLC2701
+        from smriti.daylog.morning import _cli_args, _system_prompt  # noqa: PLC2701
 
         attempts: list[dict[str, str]] = []
+        # The scheduled run's flags, so a preview has exactly its tools: web
+        # search only when morning_web_search is on.
         message = compose(_system_prompt(cfg),
                           "Yesterday's digest: (dry run — compose a sample)",
-                          attempts, claude_cli_args=_COMPOSE_ARGS)
+                          attempts, claude_cli_args=_cli_args(cfg))
         print(message)
         return 0
     result = run_morning(cfg)

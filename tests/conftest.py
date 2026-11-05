@@ -36,6 +36,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 def _claude_cli_unready() -> str:
     """Why the real-CLI tests can't run here; "" when they can."""
+    if os.environ.get("SMRITI_LIVE_CLI_TESTS") != "1":
+        # Opt-in: they spend real money and a few seconds, and suites run often.
+        return "live CLI tests are opt-in: set SMRITI_LIVE_CLI_TESTS=1"
     if os.environ.get("CI"):
         return "CI has no Claude Code login"
     cli = shutil.which("claude")

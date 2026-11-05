@@ -756,6 +756,34 @@ def test_morning_dry_run_uses_the_formatted_prompt(monkeypatch: pytest.MonkeyPat
     assert "{where}" not in seen["system"] and "{region}" not in seen["system"]
 
 
+@pytest.mark.parametrize("web_search", [False, True])
+def test_a_morning_dry_run_has_exactly_the_scheduled_runs_tools(
+        monkeypatch: pytest.MonkeyPatch, web_search: bool) -> None:
+    """Codex review of H11.2: the dry run passed the web-search flags whatever
+    morning_web_search said, so a preview could search when the real run couldn't."""
+    import argparse
+    import json
+
+    from smriti import cli
+    from smriti.core.tree import tree_root
+    from smriti.daylog import digest, morning
+    from smriti.daylog.config import load_config
+
+    config = tree_root() / ".smriti" / "daylog.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps({"morning_web_search": web_search}), encoding="utf-8")
+    seen: dict[str, object] = {}
+
+    def fake_compose(system: str, user: str, attempts: list, **kw: object) -> str:
+        seen.update(kw)
+        return "ok"
+
+    monkeypatch.setattr(digest, "compose", fake_compose)
+    assert cli._cmd_morning(argparse.Namespace(dry_run=True)) == 0
+    assert seen["claude_cli_args"] == morning._cli_args(load_config())
+    assert ("--tools=WebSearch" in seen["claude_cli_args"]) is web_search  # type: ignore[operator]
+
+
 def test_a_web_search_call_never_falls_back_to_codex(monkeypatch: pytest.MonkeyPatch) -> None:
     """A call given claude_cli_args reads untrusted web results; codex_cli
     can't be held to the same tool boundary, so it is never the fallback
