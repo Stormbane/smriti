@@ -104,14 +104,20 @@ def structural_cascade(path: Path, root: Path | None = None) -> list[Path]:
     updated: list[Path] = []
     current = path.parent if path.is_file() else path
 
+    from smriti.core.files import edit_lock, write_atomic
+
     while current != root and current.is_relative_to(root):
         index_file = current / "index.md"
         if index_file.exists():
-            new_content = _generate_index(current, root)
-            old_content = index_file.read_text(encoding="utf-8")
-
-            if new_content.strip() != old_content.strip():
-                index_file.write_text(new_content, encoding="utf-8")
+            # Listed under the lock, so of two writers in one directory the
+            # later one lists both files and its index is the one that stays.
+            with edit_lock(index_file):
+                new_content = _generate_index(current, root)
+                old_content = index_file.read_text(encoding="utf-8")
+                changed = new_content.strip() != old_content.strip()
+                if changed:
+                    write_atomic(index_file, new_content)
+            if changed:
                 updated.append(index_file)
                 log.info("Structural cascade: updated %s", index_file.relative_to(root))
 

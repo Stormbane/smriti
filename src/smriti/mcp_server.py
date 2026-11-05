@@ -584,6 +584,7 @@ def handle_ask_suti(arguments: dict) -> str:
     """
     from datetime import datetime, timezone
 
+    from smriti.core.files import edit_lock
     from smriti.core.tree import tree_root
 
     question = arguments.get("question", "").strip()
@@ -598,16 +599,12 @@ def handle_ask_suti(arguments: dict) -> str:
     root = tree_root()
     path = root / "outbox" / "suti-comms.md"
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-    if not path.exists():
-        header = (
-            "# Communications for Suti\n\n"
-            "Queue of questions, decisions, and review-requests raised by "
-            "autonomous flows. Each entry has a `**Status:**` line — change "
-            "to `answered` or `deferred` to mark resolved.\n\n"
-        )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(header, encoding="utf-8")
+    header = (
+        "# Communications for Suti\n\n"
+        "Queue of questions, decisions, and review-requests raised by "
+        "autonomous flows. Each entry has a `**Status:**` line — change "
+        "to `answered` or `deferred` to mark resolved.\n\n"
+    )
 
     entry = [
         f"## {now} — {urgency}\n",
@@ -618,8 +615,11 @@ def handle_ask_suti(arguments: dict) -> str:
         entry.append(f"\n**Source:** {source}\n")
     entry.append("\n**Status:** open\n\n---\n\n")
 
-    with path.open("a", encoding="utf-8") as f:
-        f.write("".join(entry))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with edit_lock(path):
+        new_file = not path.exists()
+        with path.open("a", encoding="utf-8") as f:
+            f.write((header if new_file else "") + "".join(entry))
     return f"Queued for Suti: {question[:80]}"
 
 
@@ -627,6 +627,7 @@ def handle_add_todo(arguments: dict) -> str:
     """Append to mirrors/{project}/ai/todo.md. Fails loud on unknown project."""
     import re
 
+    from smriti.core.files import edit_lock, write_atomic
     from smriti.core.tree import tree_root
 
     project = arguments.get("project", "").strip()
@@ -653,31 +654,31 @@ def handle_add_todo(arguments: dict) -> str:
             f"Known projects with todos: {', '.join(available) or '(none)'}."
         )
 
-    try:
-        content = todo_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return f"Error reading {todo_path}: {exc}"
-
-    # Substring dedup on topic
-    if topic and topic in content:
-        return f"Skipped (topic already present): {topic[:60]}"
-
-    # Build the line
     suffix = f" (from {source})" if source and source not in line else ""
     final_line = line if suffix == "" else f"{line.rstrip()}{suffix}"
-
-    # Insert under "## Active" (create if missing)
     active_re = re.compile(r"^##\s+Active\s*$", re.MULTILINE)
-    match = active_re.search(content)
-    if match:
-        insert_pos = match.end()
-        new_content = content[:insert_pos] + f"\n{final_line}" + content[insert_pos:]
-    else:
-        new_content = (
-            content.rstrip() + f"\n\n## Active\n\n{final_line}\n"
-            if content else f"# TODO\n\n## Active\n\n{final_line}\n"
-        )
-    todo_path.write_text(new_content, encoding="utf-8")
+
+    with edit_lock(todo_path):
+        try:
+            content = todo_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            return f"Error reading {todo_path}: {exc}"
+
+        # Substring dedup on topic
+        if topic and topic in content:
+            return f"Skipped (topic already present): {topic[:60]}"
+
+        # Insert under "## Active" (create if missing)
+        match = active_re.search(content)
+        if match:
+            insert_pos = match.end()
+            new_content = content[:insert_pos] + f"\n{final_line}" + content[insert_pos:]
+        else:
+            new_content = (
+                content.rstrip() + f"\n\n## Active\n\n{final_line}\n"
+                if content else f"# TODO\n\n## Active\n\n{final_line}\n"
+            )
+        write_atomic(todo_path, new_content)
     return f"Added to {project}/ai/todo.md [{kind}]: {topic[:60]}"
 
 
@@ -689,6 +690,7 @@ def handle_propose_goal_shift(arguments: dict) -> str:
     """
     from datetime import datetime
 
+    from smriti.core.files import edit_lock
     from smriti.core.tree import tree_root
 
     title = arguments.get("title", "").strip()
@@ -703,26 +705,25 @@ def handle_propose_goal_shift(arguments: dict) -> str:
     date_str = datetime.now().astimezone().strftime("%Y-%m-%d")
     path = root / "outbox" / f"goals-proposals-{date_str}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    if not path.exists():
-        header = (
-            f"---\n"
-            f"type: goals-proposals\n"
-            f"date: {date_str}\n"
-            f"---\n\n"
-            f"# Goals Proposals\n\n"
-            f"Proposed shifts to `goals/` raised by autonomous flows. "
-            f"NOT applied automatically. Suti triages.\n\n"
-        )
-        path.write_text(header, encoding="utf-8")
+    header = (
+        f"---\n"
+        f"type: goals-proposals\n"
+        f"date: {date_str}\n"
+        f"---\n\n"
+        f"# Goals Proposals\n\n"
+        f"Proposed shifts to `goals/` raised by autonomous flows. "
+        f"NOT applied automatically. Suti triages.\n\n"
+    )
 
     entry = [f"\n## {title}\n"]
     if source:
         entry.append(f"\nSource: {source}  \n")
     entry.append(f"\n**Rationale:** {rationale}\n")
     entry.append(f"\n**Proposed change:** {proposed_change}\n\n---\n\n")
-    with path.open("a", encoding="utf-8") as f:
-        f.write("".join(entry))
+    with edit_lock(path):
+        new_file = not path.exists()
+        with path.open("a", encoding="utf-8") as f:
+            f.write((header if new_file else "") + "".join(entry))
     return f"Goal proposal queued: {title}"
 
 
@@ -733,8 +734,6 @@ def handle_write_handoff(arguments: dict) -> str:
     Wake archives it to ~/.narada/.smriti/handoff-consumed/{utc-iso}.md after
     reading, so subsequent sessions don't see the same handoff twice.
     """
-    import os
-    import time
     from datetime import datetime
 
     from smriti.core.tree import tree_root
@@ -766,21 +765,14 @@ def handle_write_handoff(arguments: dict) -> str:
     # archives a letter it didn't show or reads a half-written one.
     from smriti.wake.briefing import handoff_lock
 
+    from smriti.core.files import FileBusy, write_atomic
+
     with handoff_lock(root, wait_s=5.0) as held:
         if not held:
             return "Error: a session is reading the handoff right now; nothing was written. Try again."
-        tmp = path.with_name(f".handoff-write-{os.getpid()}.tmp")
-        tmp.write_text(fm + body, encoding="utf-8")
-        # On Windows a replace fails while a wake is reading the old letter;
-        # retry briefly, and say so rather than lose the letter silently.
-        for attempt in range(40):
-            try:
-                os.replace(tmp, path)
-                break
-            except PermissionError:
-                time.sleep(0.01 * (attempt + 1))
-        else:
-            tmp.unlink(missing_ok=True)
+        try:
+            write_atomic(path, fm + body)
+        except FileBusy:
             return "Error: the handoff file was busy; nothing was written. Try again."
 
     msg = f"Handoff written: {path}"
@@ -806,6 +798,7 @@ def handle_resolve_outbox(arguments: dict) -> str:
     """
     import re as _re
 
+    from smriti.core.files import edit_lock, write_atomic
     from smriti.core.tree import tree_root
 
     file = arguments.get("file", "").strip()
@@ -832,73 +825,74 @@ def handle_resolve_outbox(arguments: dict) -> str:
             f"Available: {', '.join(available) or '(none)'}."
         )
 
-    text = path.read_text(encoding="utf-8")
+    with edit_lock(path):
+        text = path.read_text(encoding="utf-8")
 
-    # Split into sections at top-level `## ` headings. Preserve a leading
-    # preamble (anything before the first `## `).
-    section_re = _re.compile(r"(?m)^## .*$")
-    starts = [m.start() for m in section_re.finditer(text)]
-    if not starts:
-        return f"Error: no '## ' sections found in {path.name}; nothing to resolve."
+        # Split into sections at top-level `## ` headings. Preserve a leading
+        # preamble (anything before the first `## `).
+        section_re = _re.compile(r"(?m)^## .*$")
+        starts = [m.start() for m in section_re.finditer(text)]
+        if not starts:
+            return f"Error: no '## ' sections found in {path.name}; nothing to resolve."
 
-    # Build (heading_line, body) per section
-    sections = []
-    bounds = starts + [len(text)]
-    preamble = text[: bounds[0]]
-    for i in range(len(starts)):
-        seg = text[bounds[i] : bounds[i + 1]]
-        sections.append(seg)
+        # Build (heading_line, body) per section
+        sections = []
+        bounds = starts + [len(text)]
+        preamble = text[: bounds[0]]
+        for i in range(len(starts)):
+            seg = text[bounds[i] : bounds[i + 1]]
+            sections.append(seg)
 
-    # Match `item` against headings (substring)
-    matches = [i for i, seg in enumerate(sections) if item in seg.split("\n", 1)[0]]
-    if not matches:
-        headings = [seg.split("\n", 1)[0] for seg in sections]
-        return (
-            f"Error: no section heading in {path.name} contains {item!r}. "
-            f"Available headings:\n  " + "\n  ".join(headings[:20])
-        )
-    if len(matches) > 1:
-        ambiguous = [sections[i].split("\n", 1)[0] for i in matches]
-        return (
-            f"Error: {item!r} matches multiple headings in {path.name}. "
-            f"Be more specific. Matches:\n  " + "\n  ".join(ambiguous)
-        )
-
-    idx = matches[0]
-    seg = sections[idx]
-
-    # 1. Update Status line (or insert if missing)
-    status_re = _re.compile(r"^\*\*Status:\*\*\s*\S.*$", _re.MULTILINE)
-    if status_re.search(seg):
-        seg = status_re.sub(f"**Status:** {resolution}", seg, count=1)
-    else:
-        # Insert before the trailing `---` if present, else at end of section
-        if _re.search(r"\n---\s*\n?\s*$", seg):
-            seg = _re.sub(
-                r"\n---\s*\n?\s*$",
-                f"\n\n**Status:** {resolution}\n\n---\n\n",
-                seg,
-                count=1,
+        # Match `item` against headings (substring)
+        matches = [i for i, seg in enumerate(sections) if item in seg.split("\n", 1)[0]]
+        if not matches:
+            headings = [seg.split("\n", 1)[0] for seg in sections]
+            return (
+                f"Error: no section heading in {path.name} contains {item!r}. "
+                f"Available headings:\n  " + "\n  ".join(headings[:20])
             )
-        else:
-            seg = seg.rstrip() + f"\n\n**Status:** {resolution}\n"
+        if len(matches) > 1:
+            ambiguous = [sections[i].split("\n", 1)[0] for i in matches]
+            return (
+                f"Error: {item!r} matches multiple headings in {path.name}. "
+                f"Be more specific. Matches:\n  " + "\n  ".join(ambiguous)
+            )
 
-    # 2. Append **Resolution:** and **Linked to:** before the closing ---
-    appendix_lines = []
-    if answer:
-        appendix_lines.append(f"**Resolution:** {answer}")
-    if linked_to:
-        appendix_lines.append(f"**Linked to:** [[{linked_to}]]")
-    if appendix_lines:
-        appendix = "\n\n" + "\n\n".join(appendix_lines) + "\n"
-        if _re.search(r"\n---\s*\n?\s*$", seg):
-            seg = _re.sub(r"\n---\s*\n?\s*$", appendix + "\n---\n\n", seg, count=1)
-        else:
-            seg = seg.rstrip() + appendix
+        idx = matches[0]
+        seg = sections[idx]
 
-    sections[idx] = seg
-    new_text = preamble + "".join(sections)
-    path.write_text(new_text, encoding="utf-8")
+        # 1. Update Status line (or insert if missing)
+        status_re = _re.compile(r"^\*\*Status:\*\*\s*\S.*$", _re.MULTILINE)
+        if status_re.search(seg):
+            seg = status_re.sub(f"**Status:** {resolution}", seg, count=1)
+        else:
+            # Insert before the trailing `---` if present, else at end of section
+            if _re.search(r"\n---\s*\n?\s*$", seg):
+                seg = _re.sub(
+                    r"\n---\s*\n?\s*$",
+                    f"\n\n**Status:** {resolution}\n\n---\n\n",
+                    seg,
+                    count=1,
+                )
+            else:
+                seg = seg.rstrip() + f"\n\n**Status:** {resolution}\n"
+
+        # 2. Append **Resolution:** and **Linked to:** before the closing ---
+        appendix_lines = []
+        if answer:
+            appendix_lines.append(f"**Resolution:** {answer}")
+        if linked_to:
+            appendix_lines.append(f"**Linked to:** [[{linked_to}]]")
+        if appendix_lines:
+            appendix = "\n\n" + "\n\n".join(appendix_lines) + "\n"
+            if _re.search(r"\n---\s*\n?\s*$", seg):
+                seg = _re.sub(r"\n---\s*\n?\s*$", appendix + "\n---\n\n", seg, count=1)
+            else:
+                seg = seg.rstrip() + appendix
+
+        sections[idx] = seg
+        new_text = preamble + "".join(sections)
+        write_atomic(path, new_text)
 
     summary = f"Resolved {path.name} entry {item!r} -> status={resolution}"
     if linked_to:
@@ -1015,20 +1009,22 @@ def handle_record_finding(arguments: dict) -> str:
                 cascade_msgs.append(tag_slug)
 
         # Update cross-project index (append-only, dedup by line content)
+        from smriti.core.files import edit_lock, write_atomic
+
         idx_path = cp_root / "index.md"
-        if not idx_path.exists():
-            idx_path.write_text(
-                "# Cross-Project Findings\n\n"
-                "Findings that touched multiple projects, indexed by tag. "
-                "Cascade-maintained -- each tag dir collects links to "
-                "per-project findings.\n\n",
-                encoding="utf-8",
-            )
-        idx_text = idx_path.read_text(encoding="utf-8")
         idx_line = f"- [[semantic/concepts/cross-project/findings/{_slugify(tags[0])}]] -- {title} ({project}, {date_str})"
-        if idx_line not in idx_text:
-            idx_text = idx_text.rstrip() + "\n" + idx_line + "\n"
-            idx_path.write_text(idx_text, encoding="utf-8")
+        with edit_lock(idx_path):
+            if idx_path.exists():
+                idx_text = idx_path.read_text(encoding="utf-8")
+            else:
+                idx_text = (
+                    "# Cross-Project Findings\n\n"
+                    "Findings that touched multiple projects, indexed by tag. "
+                    "Cascade-maintained -- each tag dir collects links to "
+                    "per-project findings.\n\n"
+                )
+            if idx_line not in idx_text:
+                write_atomic(idx_path, idx_text.rstrip() + "\n" + idx_line + "\n")
 
     msg = f"Recorded finding: {project}/findings/{path.name}"
     if cascade_msgs:
@@ -1105,18 +1101,12 @@ def handle_record_feature(arguments: dict) -> str:
             f"Known: {', '.join(_known_projects()) or '(none)'}."
         )
 
+    from smriti.core.files import edit_lock
+
     # Features live in {project}/.ai/features/active/ (junctioned in via mirror/ai)
-    features_active = mirror / "ai" / "features" / "active"
-    features_active.mkdir(parents=True, exist_ok=True)
-
-    # Refuse if the slug already exists in any of active/shipped/abandoned --
-    # caller should use a different slug rather than overwrite.
     base = mirror / "ai" / "features"
-    for sub in ("active", "shipped", "abandoned"):
-        existing = base / sub / f"{slug}.md"
-        if existing.exists():
-            return f"Error: feature slug {slug!r} already exists at {sub}/{slug}.md"
-
+    features_active = base / "active"
+    features_active.mkdir(parents=True, exist_ok=True)
     path = features_active / f"{slug}.md"
     date_str = datetime.now().astimezone().strftime("%Y-%m-%d")
     why_now = arguments.get("why_now", "").strip()
@@ -1147,7 +1137,15 @@ def handle_record_feature(arguments: dict) -> str:
     body.append("## Findings\n\n_Filled as the build produces lessons._\n")
     body.append("## Documentation\n\n_Once shipped, this section becomes the canonical doc._\n")
 
-    path.write_text(fm + "\n".join(body), encoding="utf-8")
+    # Refuse if the slug already exists in any of active/shipped/abandoned --
+    # caller should use a different slug rather than overwrite. The features
+    # lock keeps a concurrent open or move from slipping in between.
+    with edit_lock(base):
+        for sub in ("active", "shipped", "abandoned"):
+            if (base / sub / f"{slug}.md").exists():
+                return f"Error: feature slug {slug!r} already exists at {sub}/{slug}.md"
+        with path.open("x", encoding="utf-8") as f:
+            f.write(fm + "\n".join(body))
     return f"Opened feature: {project}/.ai/features/active/{slug}.md"
 
 
@@ -1169,18 +1167,9 @@ def handle_update_feature_status(arguments: dict) -> str:
     if mirror is None:
         return f"Error: project {project!r} has no mirror."
 
-    base = mirror / "ai" / "features"
-    # Find current location
-    current_path = None
-    for sub in ("active", "shipped", "abandoned"):
-        candidate = base / sub / f"{slug}.md"
-        if candidate.exists():
-            current_path = candidate
-            current_sub = sub
-            break
-    if current_path is None:
-        return f"Error: feature {slug!r} not found in {project}/.ai/features/"
+    from smriti.core.files import edit_lock, write_atomic
 
+    base = mirror / "ai" / "features"
     # Destination
     if new_status in ("building", "reviewing"):
         dest_sub = "active"
@@ -1192,31 +1181,45 @@ def handle_update_feature_status(arguments: dict) -> str:
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_path = dest_dir / f"{slug}.md"
 
-    # Read, mutate frontmatter
-    text = current_path.read_text(encoding="utf-8")
-    text = _re.sub(r"^status:\s*\S+", f"status: {new_status}", text, count=1, flags=_re.MULTILINE)
-    if new_status == "shipped":
-        date_str = datetime.now().astimezone().strftime("%Y-%m-%d")
-        text = _re.sub(r"^shipped:\s*\S*", f"shipped: {date_str}", text, count=1, flags=_re.MULTILINE)
+    # Under the features lock, so a concurrent update or open can't move the
+    # spec, or lose an edit, between this read and the write.
+    with edit_lock(base):
+        # Find current location
+        current_path = None
+        for sub in ("active", "shipped", "abandoned"):
+            candidate = base / sub / f"{slug}.md"
+            if candidate.exists():
+                current_path = candidate
+                current_sub = sub
+                break
+        if current_path is None:
+            return f"Error: feature {slug!r} not found in {project}/.ai/features/"
 
-    # Append notes if provided
-    if notes:
-        section_title = (
-            "## Implementation notes" if new_status == "shipped"
-            else "## Why abandoned" if new_status == "abandoned"
-            else "## Status notes"
-        )
-        # Replace stub if it's the placeholder; else append
-        stub_re = _re.compile(rf"^{_re.escape(section_title)}\n\n_Filled during build\._", _re.MULTILINE)
-        if stub_re.search(text):
-            text = stub_re.sub(f"{section_title}\n\n{notes}", text)
-        else:
-            text = text.rstrip() + f"\n\n{section_title}\n\n{notes}\n"
+        # Read, mutate frontmatter
+        text = current_path.read_text(encoding="utf-8")
+        text = _re.sub(r"^status:\s*\S+", f"status: {new_status}", text, count=1, flags=_re.MULTILINE)
+        if new_status == "shipped":
+            date_str = datetime.now().astimezone().strftime("%Y-%m-%d")
+            text = _re.sub(r"^shipped:\s*\S*", f"shipped: {date_str}", text, count=1, flags=_re.MULTILINE)
 
-    # Write to destination, remove from source if different
-    dest_path.write_text(text, encoding="utf-8")
-    if dest_path != current_path:
-        current_path.unlink()
+        # Append notes if provided
+        if notes:
+            section_title = (
+                "## Implementation notes" if new_status == "shipped"
+                else "## Why abandoned" if new_status == "abandoned"
+                else "## Status notes"
+            )
+            # Replace stub if it's the placeholder; else append
+            stub_re = _re.compile(rf"^{_re.escape(section_title)}\n\n_Filled during build\._", _re.MULTILINE)
+            if stub_re.search(text):
+                text = stub_re.sub(f"{section_title}\n\n{notes}", text)
+            else:
+                text = text.rstrip() + f"\n\n{section_title}\n\n{notes}\n"
+
+        # Write to destination, remove from source if different
+        write_atomic(dest_path, text)
+        if dest_path != current_path:
+            current_path.unlink()
 
     if new_status == dest_sub or current_sub == dest_sub:
         return f"Updated feature {slug} -> status={new_status} (in {dest_sub}/)"

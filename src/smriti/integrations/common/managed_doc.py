@@ -23,11 +23,12 @@ write can never leave a partial doc.
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+
+from smriti.core.files import write_atomic
 
 MANAGED_BEGIN = "<!-- smriti:managed:begin -->"
 MANAGED_END = "<!-- smriti:managed:end -->"
@@ -102,14 +103,6 @@ def classify_doc(path: Path) -> DocState:
     return DocState("managed", "exactly one marker pair")
 
 
-def _atomic_write(path: Path, text: str) -> None:
-    """Write via temp file + os.replace so interruption never truncates."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
-
-
 def write_managed_doc(path: Path, block_content: str, *, title: str | None = None) -> bool:
     """Create or rewrite the managed block; user content is untouchable.
 
@@ -126,7 +119,7 @@ def write_managed_doc(path: Path, block_content: str, *, title: str | None = Non
     block = render_managed_block(block_content)
     if state.kind == "missing":
         head = f"{title}\n\n" if title else ""
-        _atomic_write(path, head + block + "\n")
+        write_atomic(path, head + block + "\n")
         return True
     if state.kind in ("migration-required", "malformed"):
         raise ManagedDocError(state.detail)
@@ -136,7 +129,7 @@ def write_managed_doc(path: Path, block_content: str, *, title: str | None = Non
     new_text = text[:start] + block + text[end:]
     if new_text == text:
         return False
-    _atomic_write(path, new_text)
+    write_atomic(path, new_text)
     return True
 
 
@@ -191,7 +184,7 @@ def migrate_agent_doc(path: Path, block_content: str) -> Path:
 
     backup = path.with_name(path.name + ".pre-migrate.bak")
     shutil.copy2(path, backup)
-    _atomic_write(path, new_text)
+    write_atomic(path, new_text)
     return backup
 
 

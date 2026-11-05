@@ -216,26 +216,19 @@ def _legacy_queue_enabled() -> bool:
 
 
 def _append_entry(path: Path, entry_block: str) -> None:
-    """Append an entry to a daily file, creating it atomically if needed."""
+    """Append an entry to a daily file, under the file's edit lock.
+
+    Every open session's MCP server can write the same day's file. Unlocked,
+    a writer that created the file could write over an entry another had
+    just appended, and Windows appends aren't atomic between processes.
+    """
+    from smriti.core.files import edit_lock
+
     data = entry_block.encode("utf-8")
-
-    if not path.exists():
-        try:
-            fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
-            try:
-                os.write(fd, data)
-            finally:
-                os.close(fd)
-            return
-        except FileExistsError:
-            pass
-
-    separator = b"\n---\n\n"
-    fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT)
-    try:
-        os.write(fd, separator + data)
-    finally:
-        os.close(fd)
+    with edit_lock(path), path.open("ab") as f:
+        if f.tell():
+            data = b"\n---\n\n" + data
+        f.write(data)
 
 
 def _reindex_one(path: Path, root: Path) -> None:
