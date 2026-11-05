@@ -446,6 +446,56 @@ def _names_a_location(remote: str) -> bool:
     return any(c in remote for c in ":/\\")
 
 
+def _url_rewrites(root: Path) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """git's URL rewrites, ``(insteadOf, pushInsteadOf)``: each base with its prefixes.
+
+    Bases keep the order of their first appearance in the config, as git's
+    own list of rewrites does; that order breaks ties between equal prefixes.
+    """
+    done = _git(root, "config", "-z", "--get-regexp", r"^url\..*\.(insteadof|pushinsteadof)$")
+    if done.returncode not in (0, 1):  # 1: none set
+        raise subprocess.SubprocessError(done.stderr.strip() or "git config failed")
+    fetch: dict[str, list[str]] = {}
+    push: dict[str, list[str]] = {}
+    for entry in done.stdout.split("\0"):
+        key, newline, value = entry.partition("\n")  # -z: key, newline, value
+        if not newline:
+            continue  # no value: git refuses such a rewrite (and the push with it)
+        base, _, var = key[len("url."):].rpartition(".")
+        (push if var == "pushinsteadof" else fetch).setdefault(base, []).append(value)
+    return fetch, push
+
+
+def _rewrite(url: str, rewrites: dict[str, list[str]]) -> str | None:
+    """``url`` rewritten by the longest matching prefix, or None when none matches.
+
+    git's ``alias_url``: the first of equally long prefixes wins.
+    """
+    best: tuple[int, str] | None = None
+    for base, prefixes in rewrites.items():
+        for prefix in prefixes:
+            if url.startswith(prefix) and (best is None or len(prefix) > best[0]):
+                best = (len(prefix), base)
+    return None if best is None else best[1] + url[best[0]:]
+
+
+def _direct_push_url(root: Path, url: str) -> str:
+    """Where ``git push <url>`` really sends, for a URL that names no remote.
+
+    As git works it out (``url.<base>.pushInsteadOf`` and ``.insteadOf`` in
+    git-config(1)): a matching pushInsteadOf rewrites the URL as given and
+    wins; otherwise a matching insteadOf does; within each, the longest
+    matching prefix. A named remote needs none of this: ``git remote get-url
+    --push`` applies the same rules itself.
+    """
+    fetch, push = _url_rewrites(root)
+    for rewrites in (push, fetch):
+        rewritten = _rewrite(url, rewrites)
+        if rewritten is not None:
+            return rewritten
+    return url
+
+
 def backup_remote(root: Path) -> tuple[str | None, str]:
     """The remote ``backup.py`` pushes to, or (None, why) when it pushes nothing.
 
@@ -482,7 +532,8 @@ def _push_urls(root: Path, remote: str) -> list[str]:
     elif "no such remote" not in url.stderr.lower():
         raise subprocess.SubprocessError(url.stderr.strip() or f"git exited {url.returncode}")
     elif _names_a_location(remote):
-        lines = [remote]  # an upstream that names a URL or path directly: git pushes there
+        # An upstream that names a URL or path directly: git pushes there, rewritten.
+        lines = [_direct_push_url(root, remote)]
     else:
         lines = []
     urls: list[str] = []
@@ -622,8 +673,11 @@ def remote_explanation(root: Path, git: GitState) -> str:
         crypt = f"here {git.crypt_detail}"
     else:
         crypt = "here it isn't set up for log/"
-    if git.remote in git.remote_urls:  # the upstream names the URL itself
+    if _names_a_location(git.remote):  # the upstream names the URL itself
         where = git.destinations
+        if git.remote not in git.remote_urls:
+            where += (f" (the branch's upstream names {git.remote}, which git's url "
+                      "rewriting, pushInsteadOf or insteadOf, sends there)")
     elif len(git.remote_urls) == 1:
         where = f"{git.remote}, {git.destinations}"
     else:

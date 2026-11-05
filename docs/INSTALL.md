@@ -122,7 +122,9 @@ the machine. The installer asks two questions before it changes anything:
    otherwise the installer says why nothing is pushed and skips it. When
    that remote has several push URLs, `git push` pushes to each, so the
    question names them all: "Are `<a>` and `<b>` all private
-   repositories that only you can read?" smriti never sets up git-crypt.
+   repositories that only you can read?" Each URL is the one git really
+   pushes to, after its `url.<base>.pushInsteadOf` and `insteadOf`
+   rewrites, so changing a rewrite asks again. smriti never sets up git-crypt.
    When the answer is no, or nobody answered, the installer prints the
    steps; [PRIVACY.md](PRIVACY.md#what-is-pushed-in-the-clear) has them
    too.

@@ -120,6 +120,21 @@ def _upstream_names_a_url(tmp_path: Path) -> tuple[Path, list[str]]:
     return repo, [origin, direct]
 
 
+def _upstream_names_a_rewritten_url(tmp_path: Path) -> tuple[Path, list[str]]:
+    """The upstream names .../private/memory.git; a pushInsteadOf sends pushes to public/."""
+    repo, origin = _repo(tmp_path), _bare(tmp_path, "origin")
+    urls = []
+    for side in ("private", "public"):
+        (tmp_path / side).mkdir()
+        _git(tmp_path, "init", "-q", "--bare", str(tmp_path / side / "memory.git"))
+        urls.append((tmp_path / side / "memory.git").as_posix())
+    _git(repo, "remote", "add", "origin", origin)
+    _track(repo, urls[0])
+    _git(repo, "config", f"url.{(tmp_path / 'public').as_posix()}/.pushInsteadOf",
+         f"{(tmp_path / 'private').as_posix()}/")
+    return repo, [origin, *urls]
+
+
 def _no_remote(tmp_path: Path) -> tuple[Path, list[str]]:
     return _repo(tmp_path), []
 
@@ -142,6 +157,7 @@ SETUPS: dict[str, Setup] = {
     "upstream with another name": _upstream_with_another_name,
     "no upstream": _no_upstream,
     "upstream names a URL": _upstream_names_a_url,
+    "upstream names a rewritten URL": _upstream_names_a_rewritten_url,
     "no remote": _no_remote,
     "unborn branch": _unborn_branch,
     "detached HEAD": _detached,
@@ -164,7 +180,8 @@ def test_the_installer_and_the_backup_agree_on_the_remote(
 
 
 @pytest.mark.parametrize("setup", ["upstream on another remote", "no upstream",
-                                   "upstream names a URL", "detached HEAD"])
+                                   "upstream names a URL", "upstream names a rewritten URL",
+                                   "detached HEAD"])
 def test_the_backup_pushes_exactly_where_the_installer_says(tmp_path: Path, setup: str) -> None:
     repo, remotes = SETUPS[setup](tmp_path)
     (repo / "note.md").write_text("hello\n", encoding="utf-8")
@@ -260,3 +277,92 @@ def test_a_detached_head_pushes_nothing_and_says_so(tmp_path: Path) -> None:
     plan = _decide(repo, remote_private=True)
     assert plan.remote == privacy.Choice(None, privacy.SKIPPED)
     assert "pushed:    nothing; HEAD is detached" in privacy.summary(repo, plan)
+
+
+# ── git's URL rewrites ──────────────────────────────────────────────
+
+PRIVATE = "https://example.com/private/memory.git"
+PUBLIC = "https://example.com/public/memory.git"
+
+
+def _rewrite(repo: Path, kind: str, base: str, prefix: str) -> None:
+    _git(repo, "config", "--add", f"url.{base}.{kind}", prefix)
+
+
+def _direct_upstream(tmp_path: Path, url: str = PRIVATE) -> Path:
+    repo = _fake_remotes(tmp_path)
+    _track(repo, url)
+    return repo
+
+
+def test_push_instead_of_wins_over_instead_of(tmp_path: Path) -> None:
+    repo = _direct_upstream(tmp_path)
+    # insteadOf has the longer prefix, and still pushInsteadOf decides the push.
+    _rewrite(repo, "insteadOf", "https://mirror.example.com/private/", "https://example.com/private/")
+    _rewrite(repo, "pushInsteadOf", "https://push.example.com/", "https://example.com/")
+    state = privacy.inspect_git(repo)
+    assert state.remote == PRIVATE  # what the branch names
+    assert state.remote_urls == ("https://push.example.com/private/memory.git",)  # git's push
+
+
+@pytest.mark.parametrize("kind", ["insteadOf", "pushInsteadOf"])
+def test_the_longest_matching_prefix_wins(tmp_path: Path, kind: str) -> None:
+    repo = _direct_upstream(tmp_path)
+    _rewrite(repo, kind, "https://short.example.com/", "https://example.com/")
+    _rewrite(repo, kind, "https://long.example.com/", "https://example.com/private/")
+    _rewrite(repo, kind, "https://shortest.example.com/", "https:")
+    assert privacy.inspect_git(repo).remote_urls == ("https://long.example.com/memory.git",)
+
+
+def test_instead_of_alone_rewrites_the_push(tmp_path: Path) -> None:
+    repo = _direct_upstream(tmp_path)
+    _rewrite(repo, "insteadOf", "https://example.com/public/", "https://example.com/private/")
+    assert privacy.inspect_git(repo).remote_urls == (PUBLIC,)
+
+
+def test_a_url_no_rewrite_matches_is_pushed_as_it_is(tmp_path: Path) -> None:
+    repo = _direct_upstream(tmp_path)
+    _rewrite(repo, "pushInsteadOf", "https://example.com/public/", "https://other.example.com/")
+    assert privacy.inspect_git(repo).remote_urls == (PRIVATE,)
+
+
+@pytest.mark.parametrize("kind", ["insteadOf", "pushInsteadOf"])
+def test_a_named_remote_s_urls_come_rewritten_from_git(tmp_path: Path, kind: str) -> None:
+    repo = _fake_remotes(tmp_path)
+    _git(repo, "remote", "set-url", "mirror", PRIVATE)
+    _track(repo, "mirror")
+    _rewrite(repo, kind, "https://example.com/public/", "https://example.com/private/")
+    state = privacy.inspect_git(repo)
+    assert state.remote == "mirror" and state.remote_urls == (PUBLIC,)
+
+
+def test_the_question_names_where_the_push_goes(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    repo = _direct_upstream(tmp_path)
+    _rewrite(repo, "pushInsteadOf", "https://example.com/public/", "https://example.com/private/")
+    asked: list[str] = []
+
+    def read(prompt: str) -> str:
+        asked.append(prompt)
+        return "n"
+
+    _decide(repo, interactive=True, read=read)
+    assert asked == [f"{privacy.REMOTE_QUESTION.format(url=PUBLIC)} [y/n] "]
+    out = " ".join(capsys.readouterr().out.split())
+    assert f"to {PUBLIC} (the branch's upstream names {PRIVATE}" in out
+    record = json.loads(privacy.record_path(repo).read_text(encoding="utf-8"))
+    assert record["remote"]["urls"] == [PUBLIC]
+
+
+def test_changing_a_rewrite_makes_the_saved_answer_stale(tmp_path: Path) -> None:
+    repo = _direct_upstream(tmp_path)
+    _rewrite(repo, "pushInsteadOf", "https://example.com/private2/", "https://example.com/private/")
+    _decide(repo, remote_private=True)
+    assert _decide(repo).remote == privacy.Choice(True, privacy.KEPT)
+
+    _git(repo, "config", "--unset-all", "url.https://example.com/private2/.pushInsteadOf")
+    _rewrite(repo, "pushInsteadOf", "https://example.com/public/", "https://example.com/private/")
+    plan = _decide(repo)
+    assert plan.remote == privacy.Choice(None, privacy.DEFAULT)
+    assert f"to {PUBLIC}, in plaintext" in privacy.summary(repo, plan)
+
