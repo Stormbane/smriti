@@ -513,8 +513,8 @@ def briefing(
     Parameters
     ----------
     memory_root:
-        Entity memory root. Defaults to ``$SMRITI_ROOT`` or
-        ``~/.narada``.
+        Entity memory root. Defaults to :func:`smriti.core.tree.tree_root`
+        (``$SMRITI_ROOT``, else an existing ``~/.narada``, else ``~/.smriti``).
     cwd:
         Working directory whose project mirror should be loaded.
         Defaults to ``os.getcwd()``.
@@ -532,7 +532,9 @@ def briefing(
         pass the reference profile's ``WakeSources`` over a temporary tree.
     """
     if memory_root is None:
-        memory_root = Path(os.environ.get("SMRITI_ROOT", str(Path.home() / ".narada")))
+        from smriti.core.tree import tree_root
+
+        memory_root = tree_root()
     else:
         memory_root = Path(memory_root)
     if cwd is None:

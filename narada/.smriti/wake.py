@@ -1,7 +1,7 @@
 """wake.py — SessionStart shim for smriti-managed entities.
 
-This file ships in the entity's ``.smriti/`` directory (e.g.
-``~/.narada/.smriti/wake.py``) and is pointed at by every harness's
+This file ships in the entity's ``.smriti/`` directory
+(``<root>/.smriti/wake.py``) and is pointed at by every harness's
 SessionStart hook. All real logic lives in
 ``smriti.integrations.common.wake_runner.run`` so a fix or behavior
 change happens in one place across all harnesses.

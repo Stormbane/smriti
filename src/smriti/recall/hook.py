@@ -107,9 +107,11 @@ def _build_query(file_path: str) -> str | None:
         return None
 
     # Don't recurse into the memory tree.
-    narada = (Path.home() / ".narada").resolve()
+    from smriti.core.tree import tree_root
+
+    memory_root = tree_root().resolve()
     try:
-        if str(p.resolve()).startswith(str(narada)):
+        if str(p.resolve()).startswith(str(memory_root)):
             return None
     except OSError:
         pass

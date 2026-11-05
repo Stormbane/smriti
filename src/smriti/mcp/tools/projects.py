@@ -445,7 +445,7 @@ TOOLS = (
     Tool(
         name="smriti_add_todo",
         description="Append a new task line to a project's .ai/todo.md (via the mirror "
-            "junction at ~/.narada/mirrors/{project}/ai/todo.md). Fails loud if "
+            "junction at <root>/mirrors/{project}/ai/todo.md). Fails loud if "
             "the project slug is not a known mirror — no silent misroute. "
             "Substring-dedups on `topic` to avoid pile-up. Use Edit (not this "
             "tool) when restructuring or placing among related items — this tool "
@@ -455,7 +455,7 @@ TOOLS = (
             "properties": {
                 "project": {
                     "type": "string",
-                    "description": "Project slug (matches a directory under ~/.narada/mirrors/).",
+                    "description": "Project slug (matches a directory under <root>/mirrors/).",
                 },
                 "topic": {
                     "type": "string",
@@ -484,7 +484,7 @@ TOOLS = (
     Tool(
         name="smriti_record_finding",
         description="Record a durable lesson learned for a project. Cascade-aware: "
-            "writes to ~/.narada/mirrors/{project}/findings/{date}-{slug}.md, "
+            "writes to <root>/mirrors/{project}/findings/{date}-{slug}.md, "
             "then upward propagation surfaces cross-project patterns at "
             "semantic/concepts/cross-project/findings/. Use whenever a "
             "session produces an insight worth carrying forward.",
@@ -493,7 +493,7 @@ TOOLS = (
             "properties": {
                 "project": {
                     "type": "string",
-                    "description": "Project slug (matches a directory under ~/.narada/mirrors/).",
+                    "description": "Project slug (matches a directory under <root>/mirrors/).",
                 },
                 "title": {
                     "type": "string",
@@ -527,7 +527,7 @@ TOOLS = (
     Tool(
         name="smriti_record_decision",
         description="Record an architectural decision (ADR) with alternatives considered. "
-            "Writes to ~/.narada/mirrors/{project}/decisions/{date}-{slug}.md. "
+            "Writes to <root>/mirrors/{project}/decisions/{date}-{slug}.md. "
             "Use for any choice you'd want to look up later as 'why did we do "
             "it that way?' -- protects against re-doing rejected paths.",
         input_schema={

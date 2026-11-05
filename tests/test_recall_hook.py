@@ -11,7 +11,6 @@ from __future__ import annotations
 import io
 import json
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -114,12 +113,14 @@ def test_handles_claude_read(fake_recall, monkeypatch, tmp_path):
 
 
 def test_skips_paths_in_memory_tree(fake_recall, monkeypatch, tmp_path):
-    """Paths inside the memory tree are skipped to prevent recursion."""
-    fake_home = tmp_path
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
-    narada = fake_home / ".narada"
-    (narada / "journal").mkdir(parents=True)
-    target = narada / "journal" / "today.md"
+    """Paths inside the memory tree are skipped to prevent recursion.
+
+    The tree is the configured root (tree_root()), not a fixed ~/.narada.
+    """
+    root = tmp_path / "ari-memory"
+    monkeypatch.setenv("SMRITI_ROOT", str(root))
+    (root / "journal").mkdir(parents=True)
+    target = root / "journal" / "today.md"
     target.write_text("entry", encoding="utf-8")
 
     recorded = fake_recall([

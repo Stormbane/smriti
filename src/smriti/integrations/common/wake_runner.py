@@ -2,7 +2,7 @@
 
 Both Claude Code's SessionStart hook and Codex's
 ``[[hooks.SessionStart]]`` hook point at the same ``wake.py`` shim in
-the entity tree (``~/.narada/.smriti/wake.py``). Output framing is
+the entity tree (``<root>/.smriti/wake.py``). Output framing is
 the only thing that differs:
 
     raw          — print the briefing string verbatim. Claude Code
@@ -56,7 +56,8 @@ def run(
 ) -> int:
     """Emit the wake briefing, framed for the calling harness.
 
-    ``entity_root`` defaults to ``$SMRITI_ROOT`` or ``~/.narada``.
+    ``entity_root`` defaults to :func:`smriti.core.tree.tree_root`
+    (``$SMRITI_ROOT``, else an existing ``~/.narada``, else ``~/.smriti``).
     ``script_dir`` is where the ``last-activity`` touch-file lives
     (typically the directory of the calling shim). Wake doesn't back the
     tree up: the hourly ``smriti-backup`` task does.
@@ -66,9 +67,9 @@ def run(
         return 0
 
     if entity_root is None:
-        entity_root = Path(
-            os.environ.get("SMRITI_ROOT", str(Path.home() / ".narada"))
-        )
+        from smriti.core.tree import tree_root
+
+        entity_root = tree_root()
     if framing is None:
         framing = os.environ.get("SMRITI_WAKE_FRAMING", "raw").strip()
 

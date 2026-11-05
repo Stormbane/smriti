@@ -1,7 +1,7 @@
 """Unified metrics logging for smriti.
 
 All smriti components write structured events to a single JSONL file at
-``~/.narada/.smriti/metrics.jsonl``. Index runs, searches, writes and
+``<root>/.smriti/metrics.jsonl``. Index runs, searches, writes and
 index-page updates produce events that ``smriti metrics`` and ``smriti
 eval`` summarise.
 

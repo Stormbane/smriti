@@ -124,8 +124,8 @@ def handle_status(arguments: Arguments) -> str:
 def handle_write_handoff(arguments: Arguments) -> str:
     """Write the single-slot handoff doc consumed by wake on next session start.
 
-    Path: ~/.narada/.smriti/handoff-pending.md (single slot — overwrites).
-    Wake archives it to ~/.narada/.smriti/handoff-consumed/{utc-iso}.md after
+    Path: <root>/.smriti/handoff-pending.md (single slot — overwrites).
+    Wake archives it to <root>/.smriti/handoff-consumed/{utc-iso}.md after
     reading, so subsequent sessions don't see the same handoff twice.
     """
     from datetime import datetime

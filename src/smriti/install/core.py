@@ -23,8 +23,18 @@ TEMPLATES = _REPO_ROOT / "narada"  # wake.py, backup.py, narada-p.sh
 MEMORY_TEMPLATE = _REPO_ROOT / "memory_template"  # identity tree skeleton
 
 HOME = Path.home()
-DEFAULT_MEMORY_ROOT = HOME / ".narada"
 DEFAULT_PROJECTS_ROOT = Path("C:/Projects")
+
+
+def default_memory_root() -> Path:
+    """The memory root to install into when none is given: :func:`smriti.core.tree.tree_root`.
+
+    ``$SMRITI_ROOT`` when set, else an existing ``~/.narada`` (an install
+    made before 0.2), else ``~/.smriti``. Resolved when called, not at import.
+    """
+    from smriti.core.tree import tree_root
+
+    return tree_root()
 
 
 # ── Platform helpers ────────────────────────────────────────────────

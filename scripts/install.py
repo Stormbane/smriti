@@ -37,8 +37,8 @@ from pathlib import Path
 
 from smriti.install import privacy
 from smriti.install.core import (
-    DEFAULT_MEMORY_ROOT,
     DEFAULT_PROJECTS_ROOT,
+    default_memory_root,
     run_core,
 )
 
@@ -50,8 +50,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--memory-root",
-        default=str(DEFAULT_MEMORY_ROOT),
-        help="Entity memory root (default: ~/.narada/)",
+        default=None,
+        help="Entity memory root (default: $SMRITI_ROOT, else ~/.narada if it exists, "
+             "else ~/.smriti)",
     )
     parser.add_argument(
         "--projects-root",
@@ -128,7 +129,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    memory_root = Path(args.memory_root).expanduser()
+    memory_root = (Path(args.memory_root).expanduser() if args.memory_root
+                   else default_memory_root())
     projects_root = Path(args.projects_root).expanduser()
     harness = args.harness.strip().lower()
 
@@ -222,7 +224,8 @@ def main(argv: list[str] | None = None) -> int:
     print("recall config: SMRITI_RECALL_BACKEND={qmd|smriti}, "
           "SMRITI_RECALL_THRESHOLD, SMRITI_RECALL_QMD_URL, SMRITI_RECALL_NO_HTTP.")
     print("LLM provider:  SMRITI_LLM_PROVIDER={anthropic_api|claude_cli|openai_api|ollama}.")
-    print("optional: `smriti recall index` to (re)build the qmd index for ~/.narada.")
+    print("optional: `smriti recall index` to (re)build the qmd index of the memory root "
+          "(`smriti status` shows which).")
     print(privacy.summary(memory_root, plan))
     return 0
 

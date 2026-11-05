@@ -1,9 +1,11 @@
 #!/usr/bin/env python
-"""Backup helper for the narada memory tree.
+"""Backup helper for the memory tree.
 
-Quietly commits — and optionally pushes — the SMRITI_ROOT git repo. A push
-sends the current branch to its upstream (``origin`` and the same branch name
-when it has none yet); a detached HEAD isn't pushed.
+Quietly commits — and optionally pushes — the SMRITI_ROOT git repo: the
+tree this script is deployed in (``<root>/.smriti/backup.py``) unless
+SMRITI_ROOT (or the legacy NARADA_ROOT) names another. A push sends the
+current branch to its upstream (``origin`` and the same branch name when it
+has none yet); a detached HEAD isn't pushed.
 Called from:
   - the smriti-backup task (hourly)  -> --push, via `smriti backup`
   - smriti nightly       -> the witness step (commit, then --push)
@@ -60,7 +62,9 @@ NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
 def repo_root() -> Path:
-    return Path(os.environ.get("SMRITI_ROOT", Path.home() / ".narada"))
+    env = os.environ.get("SMRITI_ROOT") or os.environ.get("NARADA_ROOT")
+    # Deployed as <root>/.smriti/backup.py, so with no variable it backs up its own tree.
+    return Path(env) if env else Path(__file__).resolve().parent.parent
 
 
 _GIT_DIRS: dict[str, tuple[Path, Path]] = {}

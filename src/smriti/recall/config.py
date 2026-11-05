@@ -11,7 +11,7 @@ Environment variables:
                               (CUDA crash on Windows + RTX). Re-enable
                               once that lands.
     SMRITI_RECALL_LOG_PATH    Override JSONL log path.
-                              Default ``~/.narada/.smriti/recall.jsonl``.
+                              Default ``<root>/.smriti/recall.jsonl``.
     SMRITI_RECALL_QMD_URL     Base URL for qmd's HTTP daemon.
                               Default ``http://localhost:8181``.
     SMRITI_RECALL_NO_HTTP     Set to ``1`` to disable the HTTP fast
@@ -41,8 +41,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-
-_DEFAULT_LOG = Path.home() / ".narada" / ".smriti" / "recall.jsonl"
+from smriti.core.tree import tree_root
 
 
 @dataclass(frozen=True)
@@ -73,7 +72,8 @@ def load_config() -> RecallConfig:
         max_inject=int(os.environ.get("SMRITI_RECALL_MAX_INJECT", "2")),
         timeout_s=float(os.environ.get("SMRITI_RECALL_TIMEOUT_S", "20")),
         rerank=os.environ.get("SMRITI_RECALL_RERANK", "").strip() == "1",
-        log_path=Path(os.environ.get("SMRITI_RECALL_LOG_PATH", str(_DEFAULT_LOG))),
+        log_path=Path(os.environ.get("SMRITI_RECALL_LOG_PATH")
+                      or tree_root() / ".smriti" / "recall.jsonl"),
         qmd_url=os.environ.get(
             "SMRITI_RECALL_QMD_URL", "http://localhost:8181",
         ).rstrip("/"),

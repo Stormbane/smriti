@@ -35,7 +35,7 @@ def compose_agent_doc(
         the harness's hook mechanism, config file paths, and any
         idiosyncrasies (file size caps, file precedence rules).
     memory_rel:
-        ``~/.narada``-style path the agent should reference for the
+        ``~/.smriti``-style path the agent should reference for the
         memory tree. Substituted into the AGENT.md ``{memory_rel}``
         placeholder.
     header:

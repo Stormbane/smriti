@@ -18,7 +18,8 @@ What it does:
   4. Cleans up stale junctions from old setups.
 
 Use --no-template to skip the template copy (only create mirrors).
-Use --memory-root to target a different entity (default: ~/.narada).
+Use --memory-root to target a different entity (default: $SMRITI_ROOT, else
+~/.narada if it exists, else ~/.smriti; the root `smriti status` shows).
 """
 
 from __future__ import annotations
@@ -295,8 +296,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--memory-root",
-        default=str(HOME / ".narada"),
-        help="Entity memory root (default: ~/.narada)",
+        default=None,
+        help="Entity memory root (default: $SMRITI_ROOT, else ~/.narada if it exists, "
+             "else ~/.smriti)",
     )
     parser.add_argument(
         "--harness",
@@ -312,7 +314,12 @@ def main() -> int:
     args = parser.parse_args()
 
     project = Path(args.project).resolve() if args.project else Path.cwd().resolve()
-    memory_root = Path(args.memory_root).expanduser()
+    if args.memory_root:
+        memory_root = Path(args.memory_root).expanduser()
+    else:
+        from smriti.core.tree import tree_root
+
+        memory_root = tree_root()
     mirrors = memory_root / "mirrors"
     harness = args.harness
 

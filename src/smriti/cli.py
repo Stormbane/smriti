@@ -114,13 +114,15 @@ def _cmd_write(args: argparse.Namespace) -> int:
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
-    from smriti.core.tree import smriti_db_path, tree_root
+    from smriti.core.tree import smriti_db_path, tree_root, tree_root_source, tree_root_warning
     from smriti.store.schema import open_readonly, pending_vectors
 
     db_path = smriti_db_path()
     root = tree_root()
 
-    print(f"Tree root:  {root}")
+    print(f"Tree root:  {root} ({tree_root_source()})")
+    if warning := tree_root_warning():
+        print(f"Warning:    {warning}")
     print(f"Database:   {db_path}")
 
     if not db_path.exists():
@@ -187,6 +189,10 @@ def _print_daylog_status() -> None:
             print("Day-log:    not started (run 'smriti logd')")
     except Exception as exc:  # noqa: BLE001 — status must always print
         print(f"Day-log:    unavailable ({exc})")
+
+
+_ROOT_HELP = ("Memory root (default: $SMRITI_ROOT, else ~/.narada if it exists, "
+              "else ~/.smriti)")
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
@@ -425,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
     p_doctor = sub.add_parser("doctor", help="Verify a harness bridge without changing state")
     p_doctor.add_argument("--harness", required=True, choices=["codex", "claude-code"])
     p_doctor.add_argument("--project", required=True, help="Project root to inspect")
-    p_doctor.add_argument("--memory-root", default=None, help="Memory root (default: ~/.narada)")
+    p_doctor.add_argument("--memory-root", default=None, help=_ROOT_HELP)
 
     # ── nightly / morning / logd (the narrow cycle) ──────────────────
     p_nightly = sub.add_parser(
@@ -460,8 +466,7 @@ def main(argv: list[str] | None = None) -> int:
         "embed", help="The shared embedding service: one model for every session's server"
     )
     embed_root = argparse.ArgumentParser(add_help=False)
-    embed_root.add_argument("--root", type=str, default=None,
-                            help="Memory root (default: SMRITI_ROOT or ~/.narada)")
+    embed_root.add_argument("--root", type=str, default=None, help=_ROOT_HELP)
     p_embed_sub = p_embed.add_subparsers(dest="embed_cmd", required=True)
     p_embed_serve = p_embed_sub.add_parser(
         "serve", parents=[embed_root],
@@ -628,7 +633,9 @@ def _cmd_recall(args: argparse.Namespace) -> int:
         if not cmd:
             print("qmd not found. install via: npm install -g @tobilu/qmd", file=sys.stderr)
             return 1
-        memory_root = Path.home() / ".narada"
+        from smriti.core.tree import tree_root
+
+        memory_root = tree_root()
         if not memory_root.exists():
             print(f"memory tree not found at {memory_root}", file=sys.stderr)
             return 1
