@@ -345,6 +345,93 @@ def test_purge_drops_deleted_and_newly_excluded_sources(mini_tree: Path) -> None
     assert "identity.md" in left
 
 
+def test_an_edit_older_than_the_last_run_is_still_reindexed(mini_tree: Path) -> None:
+    """An edit made while a run was embedding has an mtime before that run's
+    timestamp. Comparing mtime with indexed_at skipped it forever."""
+    import os
+    import time
+
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+    mind = mini_tree / "mind.md"
+    mind.write_text("# Mind\n\nAn edit made mid-run.\n", encoding="utf-8")
+    old = time.time() - 3600
+    os.utime(mind, (old, old))
+    stats = index_tree(root=mini_tree, db=db_path)
+    assert stats["indexed"] == 1 and stats["skipped"] == 3
+
+
+def test_an_emptied_file_loses_its_old_chunks(mini_tree: Path) -> None:
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+    (mini_tree / "mind.md").write_text("", encoding="utf-8")
+    index_tree(root=mini_tree, db=db_path)
+    assert "mind.md" not in _sources(db_path)
+    assert index_tree(root=mini_tree, db=db_path)["indexed"] == 0  # recorded, so skipped now
+
+
+def test_an_index_from_before_source_records_is_adopted_not_reembedded(
+        mini_tree: Path) -> None:
+    import sqlite3
+
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("DELETE FROM sources")
+    conn.commit()
+    conn.close()
+    stats = index_tree(root=mini_tree, db=db_path)
+    assert (stats["indexed"], stats["skipped"]) == (0, 4)
+    conn = sqlite3.connect(str(db_path))
+    assert conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 4
+    conn.close()
+
+
+def test_a_full_reindex_that_fails_leaves_the_old_index(
+        mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import smriti.store.indexer as indexer_mod
+
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+    before = _sources(db_path)
+    real = indexer_mod._get_embedding_provider()
+
+    class DiesMidEmbed:
+        model_name, dimension = real.model_name, real.dimension
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("embedder died")
+
+    monkeypatch.setattr(indexer_mod, "_get_embedding_provider", DiesMidEmbed)
+    with pytest.raises(RuntimeError, match="embedder died"):
+        index_tree(full=True, root=mini_tree, db=db_path)
+    assert _sources(db_path) == before
+
+
+def test_only_a_full_reindex_changes_the_vector_dimension(
+        mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sqlite3
+
+    import smriti.store.indexer as indexer_mod
+
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+
+    class Tiny:
+        model_name, dimension = "tiny-test", 8
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0] + [0.0] * 7 for _ in texts]
+
+    monkeypatch.setattr(indexer_mod, "_get_embedding_provider", Tiny)
+    with pytest.raises(RuntimeError, match="--full"):
+        index_tree(root=mini_tree, db=db_path)
+    assert index_tree(full=True, root=mini_tree, db=db_path)["indexed"] == 4
+    conn = sqlite3.connect(str(db_path))
+    assert conn.execute("SELECT value FROM meta WHERE key = 'dimension'").fetchone()[0] == "8"
+    conn.close()
+
+
 def test_index_file_follows_the_same_policy(mini_tree: Path) -> None:
     from smriti.store.indexer import index_file
 

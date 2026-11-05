@@ -2,7 +2,8 @@
 
 The indexer scans the tree for markdown files, chunks them, embeds the
 chunks, and upserts into the database.  Incremental by default — only
-files whose mtime has changed since the last index run are re-processed.
+files whose mtime or size differs from when they were last read are
+re-processed.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import os
 import sqlite3
 import struct
 from datetime import datetime, timezone
@@ -143,8 +145,22 @@ def _indexed_files(conn: sqlite3.Connection) -> dict[str, str]:
     return {r[0]: r[1] for r in rows}
 
 
+def _recorded_sources(conn: sqlite3.Connection) -> dict[str, tuple[int, int]]:
+    """Return a mapping of source path → (mtime_ns, size) when it was last read."""
+    rows = conn.execute("SELECT source, mtime_ns, size FROM sources").fetchall()
+    return {r[0]: (r[1], r[2]) for r in rows}
+
+
+def _record_source(conn: sqlite3.Connection, source: str, st: os.stat_result) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO sources (source, mtime_ns, size) VALUES (?, ?, ?)",
+        (source, st.st_mtime_ns, st.st_size),
+    )
+
+
 def _delete_source(conn: sqlite3.Connection, source: str) -> None:
-    """Remove all chunks (and their vec/fts rows) for a given source."""
+    """Remove all chunks (and their vec/fts rows) and the record for a given source."""
+    conn.execute("DELETE FROM sources WHERE source = ?", (source,))
     # Get rowids before deleting so we can clean up vec0
     rowids = [
         r[0]
@@ -221,42 +237,12 @@ def index_tree(
             "SELECT value FROM meta WHERE key = 'dimension'"
         ).fetchone()
         meta_dim = int(meta_dim_row[0]) if meta_dim_row else dim
-        if meta_dim != dim:
-            if not full:
-                raise RuntimeError(
-                    f"index dimension is {meta_dim} but provider "
-                    f"{provider.model_name!r} embeds at {dim}; run "
-                    "'smriti index --full' to migrate the index"
-                )
-            if conn.has_vec:
-                conn.execute("DROP TABLE chunks_vec")
-                conn.execute(
-                    "CREATE VIRTUAL TABLE chunks_vec USING vec0"
-                    f"(embedding float[{dim}])"
-                )
-            conn.execute(
-                "INSERT OR REPLACE INTO meta (key, value) "
-                "VALUES ('dimension', ?)",
-                (str(dim),),
+        if meta_dim != dim and not full:
+            raise RuntimeError(
+                f"index dimension is {meta_dim} but provider "
+                f"{provider.model_name!r} embeds at {dim}; run "
+                "'smriti index --full' to migrate the index"
             )
-
-        key = provider_key(provider)
-        if key:
-            conn.execute(
-                "INSERT OR REPLACE INTO meta (key, value) "
-                "VALUES ('embedding_provider', ?)",
-                (key,),
-            )
-        conn.commit()
-
-        if full:
-            log.info("Full re-index requested — clearing existing data")
-            conn.execute("DELETE FROM chunks")
-            if conn.has_vec:
-                conn.execute("DELETE FROM chunks_vec")
-            if conn.has_fts:
-                conn.execute("DELETE FROM chunks_fts")
-            conn.commit()
 
         # ── Scan tree ────────────────────────────────────────────────────
         root_resolved = root.resolve()
@@ -269,53 +255,61 @@ def index_tree(
 
         # ── Purge sources that are gone or now excluded ──────────────────
         # Judged against the disk, not this scan, so a scan that misses a
-        # directory once can't wipe its chunks.
+        # directory once can't wipe its chunks. A full run replaces
+        # everything anyway.
         indexed = _indexed_files(conn)
+        recorded = _recorded_sources(conn)
         stats["purged"] = 0
-        for source in list(indexed):
-            if not is_indexable(source) or not (root / source).is_file():
-                _delete_source(conn, source)
-                del indexed[source]
-                stats["purged"] += 1
-        if stats["purged"]:
-            conn.commit()
-            log.info("Purged %d sources (deleted or excluded)", stats["purged"])
+        if not full:
+            for source in sorted(set(indexed) | set(recorded)):
+                if not is_indexable(source) or not (root / source).is_file():
+                    _delete_source(conn, source)
+                    indexed.pop(source, None)
+                    recorded.pop(source, None)
+                    stats["purged"] += 1
+            if stats["purged"]:
+                conn.commit()
+                log.info("Purged %d sources (deleted or excluded)", stats["purged"])
 
         # ── Determine which files need (re-)indexing ─────────────────────
-        to_index: list[tuple[Path, str]] = []
+        # Each file is stat'ed before it is read, and that stat is what
+        # gets recorded: an edit made after the read leaves the file
+        # newer than its record, so the next run picks it up.
+        to_index: list[tuple[Path, str, os.stat_result]] = []
+        adopted: list[tuple[str, os.stat_result]] = []
 
         for sf in scanned_files:
-            rel_source = str(sf.path.relative_to(root.resolve())).replace("\\", "/")
-            prev = indexed.get(rel_source)
-            if prev and not full:
-                prev_dt = datetime.fromisoformat(prev)
-                file_dt = datetime.fromtimestamp(sf.mtime, tz=timezone.utc)
-                if file_dt <= prev_dt:
-                    stats["skipped"] += 1
-                    continue
-            to_index.append((sf.path, rel_source))
+            rel_source = str(sf.path.relative_to(root_resolved)).replace("\\", "/")
+            try:
+                st = sf.path.stat()
+            except OSError:
+                continue  # gone since the scan; the next run purges it
+            if not full:
+                was = recorded.get(rel_source)
+                if was is not None:
+                    if was == (st.st_mtime_ns, st.st_size):
+                        stats["skipped"] += 1
+                        continue
+                elif rel_source in indexed:
+                    # Indexed before sources were recorded: trust the old
+                    # mtime test this once, and record the file as it is.
+                    prev_dt = datetime.fromisoformat(indexed[rel_source])
+                    if datetime.fromtimestamp(st.st_mtime, tz=timezone.utc) <= prev_dt:
+                        adopted.append((rel_source, st))
+                        stats["skipped"] += 1
+                        continue
+            to_index.append((sf.path, rel_source, st))
 
-        if not to_index:
+        if to_index:
+            log.info("Indexing %d files (%d skipped)", len(to_index), stats["skipped"])
+        else:
             log.info("Nothing to index (all files up to date)")
-            conn.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_indexed', ?)",
-                (datetime.now(timezone.utc).isoformat(),),
-            )
-            conn.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES ('model', ?)",
-                (provider.model_name,),
-            )
-            conn.commit()
-            conn.close()
-            return stats
-
-        log.info("Indexing %d files (%d skipped)", len(to_index), stats["skipped"])
 
         # ── Chunk all files ──────────────────────────────────────────────
         all_chunks = []
-        chunk_sources = []
+        read_sources: list[tuple[str, os.stat_result]] = []
 
-        for fpath, rel_source in to_index:
+        for fpath, rel_source, st in to_index:
             try:
                 text = fpath.read_text(encoding="utf-8")
             except Exception as exc:
@@ -329,25 +323,46 @@ def index_tree(
                     c.source, c.start_line, c.end_line, c.content_hash, provider.model_name
                 )
                 all_chunks.append((cid, c, rel_source, fpath))
-            chunk_sources.append(rel_source)
+            read_sources.append((rel_source, st))
 
-        if not all_chunks:
-            log.info("No chunks produced")
-            conn.close()
-            return stats
-
-        # ── Embed all chunks in one batch ────────────────────────────────
+        # ── Embed, with no write lock held ───────────────────────────────
         texts = [c.content for _, c, _, _ in all_chunks]
-        log.info("Embedding %d chunks...", len(texts))
-        embeddings = asyncio.run(provider.embed(texts))
+        if texts:
+            log.info("Embedding %d chunks...", len(texts))
+        embeddings = asyncio.run(provider.embed(texts)) if texts else []
 
-        # ── Delete old data for re-indexed sources ───────────────────────
-        for src in chunk_sources:
-            _delete_source(conn, src)
-        conn.commit()
-
-        # ── Insert ───────────────────────────────────────────────────────
+        # ── Write, in one transaction ────────────────────────────────────
+        # Searches keep seeing the old index until this commits, and a run
+        # that fails anywhere leaves it as it was: a full run used to
+        # commit its delete-everything before the embed (minutes), so
+        # search found nothing meanwhile, and nothing at all if it crashed.
         now = datetime.now(timezone.utc).isoformat()
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        if full:
+            if conn.has_vec and meta_dim != dim:
+                conn.execute("DROP TABLE chunks_vec")
+                conn.execute(
+                    "CREATE VIRTUAL TABLE chunks_vec USING vec0"
+                    f"(embedding float[{dim}])"
+                )
+            conn.execute("DELETE FROM chunks")
+            if conn.has_vec:
+                conn.execute("DELETE FROM chunks_vec")
+            if conn.has_fts:
+                # The delete trigger already removed each row; this clears
+                # any entries an old crash left without a chunk.
+                conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')")
+            conn.execute("DELETE FROM sources")
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('dimension', ?)",
+                (str(dim),),
+            )
+        else:
+            for src, _ in read_sources:
+                _delete_source(conn, src)
+        for src, st in adopted + read_sources:
+            _record_source(conn, src, st)
 
         for i, (cid, c, rel_source, fpath) in enumerate(all_chunks):
             dist = trunk_distance(fpath, root)
@@ -389,10 +404,17 @@ def index_tree(
                     (rowid, _serialize_f32(embeddings[i])),
                 )
 
-        stats["indexed"] = len(chunk_sources)
+        stats["indexed"] = len(read_sources)
         stats["chunks"] = len(all_chunks)
 
         # ── Update metadata ──────────────────────────────────────────────
+        key = provider_key(provider)
+        if key:
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) "
+                "VALUES ('embedding_provider', ?)",
+                (key,),
+            )
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_indexed', ?)",
             (now,),
@@ -458,6 +480,7 @@ def index_file(path: Path, *, root: Path | None = None, db: Path | None = None) 
     rel_source = str(path.resolve().relative_to(root.resolve())).replace("\\", "/")
     if not is_indexable(rel_source):
         return 0  # the same policy as index_tree; its purge removes any old chunks
+    st = path.stat()  # before the read: an edit after it leaves the file newer than its record
     text = path.read_text(encoding="utf-8")
 
     provider = _get_embedding_provider()
@@ -467,6 +490,7 @@ def index_file(path: Path, *, root: Path | None = None, db: Path | None = None) 
     conn = ensure_schema(db, provider.dimension)
     try:
         _delete_source(conn, rel_source)
+        _record_source(conn, rel_source, st)
         now = datetime.now(timezone.utc).isoformat()
         dist = trunk_distance(path, root)
         for i, c in enumerate(chunks):

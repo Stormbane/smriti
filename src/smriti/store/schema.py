@@ -18,7 +18,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -197,6 +197,18 @@ def _ensure_schema_inner(
         "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
         (str(SCHEMA_VERSION),),
     )
+
+    # ── Sources: each indexed file as it was when it was read ────────
+    # The incremental index skips a file only while its mtime and size
+    # still match. (Comparing mtime with the time of indexing missed an
+    # edit made while a run was embedding: its mtime predated the run.)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sources (
+            source   TEXT PRIMARY KEY,
+            mtime_ns INTEGER NOT NULL,
+            size     INTEGER NOT NULL
+        )
+    """)
     conn.execute(
         "INSERT OR IGNORE INTO meta (key, value) VALUES ('dimension', ?)",
         (str(dimension),),
