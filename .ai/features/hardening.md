@@ -353,7 +353,12 @@ a recheck.
 - **H9.12 done**: outside review #4 at `f1319a1`, Opus B (was B-), Sonnet B+ (was B).
   The findings are H11.
 - **H10.0-H10.3 and H10.5 implemented** (2026-11-05, branch `hardening/h10-embed`;
-  H10.4 was dropped for H11.9); the Codex diff review is still to run. An MCP
+  H10.4 was dropped for H11.9). Codex diff review: three P2 findings, each fixed
+  with a regression test that fails without it (a write made without sqlite-vec
+  was recorded as having vectors, so no repair ever filled it; a crashed
+  service whose pid still probed alive, a zombie or a reused pid, was knocked on
+  twice and never replaced; `smriti embed stop` during the model load never
+  sent the stop); the recheck is to come. An MCP
   server with the service on measured 42-44 MB after searches and writes, with
   no torch, onnxruntime or provider module loaded, against 1,028 MB before.
   Choices the plan left open: the identity's revision is the hub snapshot hash

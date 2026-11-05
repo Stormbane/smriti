@@ -426,25 +426,40 @@ def service_state(root: Path, *, timeout_s: float = 0.5) -> ServiceState:
 
 
 def stop_service(root: Path, *, wait_s: float = 60.0) -> str:
-    """Ask the service for ``root`` to drain and exit; wait for it. Returns what happened."""
+    """Ask the service for ``root`` to drain and exit; wait for it. Returns what happened.
+
+    A service still loading its model ("starting") can't take a request yet,
+    so the discovery record is read again throughout the wait, and the stop
+    is sent as soon as the service is ready. A draining one is only waited for.
+    """
     runtime = runtime_dir(create=False)
     paths = service_paths(runtime, root)
-    found = read_discovery(paths)
-    if found is None or not pid_alive(found.pid) or found.state == "failed":
+    first = read_discovery(paths)
+    if first is None or not pid_alive(first.pid) or first.state == "failed":
         return "not running"
-    if found.state == "ready" and found.port:
-        try:
-            ServiceEmbedding(root, spawn=False)._call(
-                found, load_key(runtime, create=False), paths, time.monotonic() + 5.0,
-                {"op": "stop"})
-        except (EmbeddingUnavailable, _Gone, OSError) as exc:
-            return f"could not ask it to stop: {exc}"
+    pid, instance = first.pid, first.instance
+    client = ServiceEmbedding(root, spawn=False)
+    sent = False
+    trouble = ""
     deadline = time.monotonic() + wait_s
     while time.monotonic() < deadline:
-        if not pid_alive(found.pid):
-            return f"stopped (pid {found.pid})"
+        if not pid_alive(pid):
+            return f"stopped (pid {pid})"
+        found = read_discovery(paths)
+        if found is not None and found.pid == pid:
+            instance = found.instance  # the same process, now past "starting"
+            if found.state == "failed":
+                return f"it failed to start: {found.error}"
+            if not sent and found.state == "ready" and found.port:
+                try:
+                    client._call(found, load_key(runtime, create=False), paths,
+                                 min(deadline, time.monotonic() + 5.0), {"op": "stop"})
+                    sent = True
+                except (EmbeddingUnavailable, _Gone, OSError) as exc:
+                    trouble = f"; asking it to stop failed: {exc}"  # tried again next look
         time.sleep(0.05)
-    return f"still running after {wait_s:.0f}s (pid {found.pid})"
+    state = "not yet ready, so not asked to stop" if not sent else "asked to stop"
+    return f"still running after {wait_s:.0f}s (pid {pid}, instance {instance}, {state}{trouble})"
 
 
 _providers: dict[str, ServiceEmbedding] = {}

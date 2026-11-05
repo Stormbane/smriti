@@ -826,6 +826,37 @@ def test_an_unreachable_service_that_holds_its_lock_is_left_alone(root: Path) ->
     assert found is not None and found.instance == "alive-but-busy" and started == []
 
 
+def test_stop_reaches_a_service_that_was_still_starting(root: Path) -> None:
+    """Codex review of H10, P2: `smriti embed stop` during the model load found the
+    service "starting", sent no stop, and only watched the pid: the service came
+    up and stayed up."""
+    runtime = runtime_dir()
+    slow_start = (
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "import smriti.embed.service as s\n"
+        "load = s._load_provider\n"
+        "def slow(db):\n"
+        "    time.sleep(2.0)  # a model loading\n"
+        "    return load(db)\n"
+        "s._load_provider = slow\n"
+        "sys.exit(s.serve(Path(sys.argv[1]), idle_s=120))\n")
+    proc = subprocess.Popen([sys.executable, "-c", slow_start, str(root)],
+                            env=_service_env(runtime), stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    try:
+        paths = service_paths(runtime, root)
+        assert _wait(lambda: (d := read_discovery(paths)) is not None
+                     and d.state == "starting", 60)
+        t0 = time.monotonic()
+        outcome = stop_service(root, wait_s=20)
+        assert outcome == f"stopped (pid {proc.pid})", outcome
+        assert proc.wait(10) == 0 and time.monotonic() - t0 < 15
+        assert read_discovery(paths) is None
+    finally:
+        _kill([proc])
+
+
 # ── Real processes ───────────────────────────────────────────────────
 
 
