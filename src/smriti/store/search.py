@@ -221,7 +221,13 @@ def search(
                                 "trunk_distance": row[4],
                             }
         except Exception as exc:
-            log.warning("Vector search failed: %s", exc)
+            # Fall back to exactly a keyword-only search: without this the
+            # vector weight stayed in the sum with nothing behind it, and
+            # every score silently lost half its range.
+            log.warning("Vector search failed; searching by keyword only: %s", exc)
+            has_vec = False
+            vec_scores.clear()
+            candidates.clear()
 
     # ── FTS search ───────────────────────────────────────────────────
     has_fts = conn.has_fts

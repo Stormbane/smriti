@@ -619,6 +619,34 @@ def test_only_a_full_reindex_changes_the_vector_dimension(
     conn.close()
 
 
+def test_a_failed_vector_leg_scores_like_keyword_only(
+        mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Outside review #3: when embedding the query raised, the vector weight
+    stayed in the sum, so every score lost half its range and missed callers'
+    thresholds."""
+    import smriti.store.indexer as indexer_mod
+    from smriti.store.schema import open_readonly
+
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+    db = open_readonly(db_path)
+    try:
+        keyword_only = search(db, "Viveka discrimination", use_vectors=False, use_reranker=False)
+
+        class EmbedderDown:
+            model_name, dimension = "down", 384
+
+            async def embed(self, texts: list[str]) -> list[list[float]]:
+                raise RuntimeError("embedder unavailable")
+
+        monkeypatch.setattr(indexer_mod, "_get_embedding_provider", EmbedderDown)
+        degraded = search(db, "Viveka discrimination", use_reranker=False)
+    finally:
+        db.close()
+    assert keyword_only and [(r.source, r.score) for r in degraded] == [
+        (r.source, r.score) for r in keyword_only]
+
+
 def test_index_file_follows_the_same_policy(mini_tree: Path) -> None:
     from smriti.store.indexer import index_file
 
