@@ -481,9 +481,56 @@ directly; Opus B, Codex C on that run, which is outside the trend):
   went into H12.0; the last is below.
 
 Result (`scripts/bench.py`, 2026-11-06; a copy of the reference tree, 10
-queries, two alternating rounds each; A is `13ac56a`, B is this branch):
+queries, a warm-up and two alternating rounds each; A is `13ac56a`, B is a
+clean export of `8a20716`):
 
-BENCH-TABLE
+| Measure | A: 13ac56a | B: 8a20716 | B/A |
+|---|---|---|---|
+| MCP server: start and initialize | 156 ms | 167 ms | 1.07 |
+| tools/list, first | 0 ms | 28 ms | (once per server) |
+| tools/list, warm | 0 ms | 2 ms | (per call) |
+| smriti_read: first query | 14.85 s | 814 ms | 0.05 |
+| smriti_read: until vector results | 14.85 s | 15.62 s | 1.05 |
+| smriti_read: warm p50 | 165 ms | 166 ms | 1.01 |
+| smriti_read: warm p90 | 180 ms | 176 ms | 0.98 |
+| smriti_write: p50 | 57 ms | 61 ms | 1.08 |
+| smriti_write: max | 73 ms | 83 ms | 1.14 |
+| wake hook (median of 3) | 697 ms | 720 ms | 1.03 |
+| `smriti status` | 212 ms | 295 ms | 1.39 |
+| CLI `smriti read` (median of 3) | 25.24 s | 11.79 s | 0.47 |
+| `smriti index`, nothing changed | 16.51 s | 15.70 s | 0.95 |
+| `smriti index`, 5 new files | 16.83 s | 15.79 s | 0.94 |
+| MCP server memory | 1041 MB | 45 MB | 0.04 |
+| embedding service memory | - | 1038 MB | - |
+
+Top 5 the same for all 10 queries; the wake briefings identical (9,446
+characters); 13 tools on both sides. Before H12.0 (`bcec9a2`): warm read
+187 ms, write 81 ms, wake 0.91 s.
+
+What is still over the baseline, and why it stays:
+
+- **`smriti status`, +83 ms: new information shown.** It now reports the
+  embedding service, pending vectors and capture. With a service running, as
+  in every bench round, it connects and authenticates to ask the service for
+  its live state (served, queued, idle): about 315 ms against 270 with none
+  running. With none, what's left is the `smriti.embed` modules behind the
+  line, about 20 ms (medians of 8 alternating runs: 269 against 249).
+- **`tools/list`, +28 ms once per server and +1.5 ms per call: the profile
+  seam.** The first call reads daylog.json and loads the profile: the cached
+  lookup (4 ms) and the profile's own import. Each call re-reads the config,
+  so a change of profile takes effect without a restart.
+- **`smriti_write`, +4 ms p50 (1.08) and +10 ms max: safety features.** The
+  embedding costs the same through the service as in-process (15.8 against
+  16.5 ms for 26 texts). The write path's own work takes 3-7 ms more: H1's
+  write transaction, with its identity check and source bookkeeping, the
+  edit lock, and the `index.md` upkeep. The max is each session's first
+  write, on both sides (A 83 and 56, B 91 and 76). Rounds of the same code
+  vary by 10-20 ms here.
+- **Within noise:** MCP initialize (+11 ms; run 4 had 162 against 162), the
+  wake (+23 ms, 3%; 747 against 734 over 8 alternating runs), and the time
+  until vector results (+5%). In B the model loads in its own process,
+  started by the first query, which a keyword answer meets at once; the bench
+  polls every 0.5 s.
 
 Not doing:
 - **Masking stays pattern-based** (Sonnet 2): it catches credential shapes and
@@ -554,8 +601,10 @@ a recheck.
   findings are H12.
 - **H12**: planned, awaiting approval.
 - **H12.0 implemented** (2026-11-06, `hardening/h12a`; not yet reviewed or
-  merged): keep-alive, the profile cache, `scripts/bench.py`, and the two
-  import fixes the benchmark found. The result is under "H12.0 design".
+  merged): keep-alive, the profile cache, `scripts/bench.py`, and the
+  fixes the benchmark found. The three slower measures are back at the
+  baseline (warm read 166 ms against 165, write 61 against 57, wake 720
+  against 697); the result is under "H12.0 design".
 - **H11.1, H11.5, H11.10 done** (2026-11-06, merged at `498ce0e` after a Codex diff
   review; its two findings, the capture override and the metrics scrub, fixed). Capture is off unless `daylog.json` says
   `"capture": true` (the default sources; the installer's `--capture` writes it) or
