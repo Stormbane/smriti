@@ -22,7 +22,8 @@ from smriti.daylog import nightly
 from smriti.daylog.config import DaylogConfig
 from smriti.daylog.model import AGENT, USER, Turn, parse_ts
 from smriti.daylog.nightly import run_lock_key, run_nightly
-from smriti.daylog.writer import append_turns
+from smriti.daylog.render import input_hash, read_input_hash
+from smriti.daylog.writer import append_turns, read_day_turns
 from smriti.llm.types import LLMRequest, LLMResponse
 
 NIGHT_1 = datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc)  # 03:05 on 09-05, UTC+10
@@ -228,6 +229,101 @@ def test_concurrent_witness_proofs_each_use_their_own_temp_file(tmp_path: Path) 
     assert _in_threads(8, lambda: witness._save(Proof(), path)) == []
     assert path.read_bytes() == b"proof bytes"
     assert _leftovers(tmp_path) == []
+
+
+# ---------------------------------------------------------------- one snapshot per day
+
+DAY = "2026-09-04"
+RACED = "a turn appended between the render and the digest"
+
+
+def _race_between_render_and_digest(cfg: DaylogConfig,
+                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """Append a turn to the day just before the nightly's digest of it begins, once."""
+    real = nightly.digest_day
+    done: list[bool] = []
+
+    def racing(cfg_: DaylogConfig, day: str, attempts: list[dict[str, str]],
+               **kw: object) -> Path | None:
+        if not done:
+            done.append(True)
+            append_turns(cfg, [_turn(f"{day}T03:00:00Z", RACED)])
+        return real(cfg_, day, attempts, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(nightly, "digest_day", racing)
+
+
+def _current(cfg: DaylogConfig, day: str = DAY) -> str:
+    return input_hash(read_day_turns(cfg.day_jsonl(day)))
+
+
+def test_a_turn_appended_between_render_and_digest_leaves_the_digest_stale(
+        tmp_path: Path, fake_llm: FakeProvider, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _cfg(tmp_path)
+    _seed(cfg, DAY)
+    _race_between_render_and_digest(cfg, monkeypatch)
+    assert _run(cfg, NIGHT_1)["ok"] is True
+    # The digest hashes the turns it summarised, as the render does: the raced
+    # turn is in neither, so both are stale. It used to hash the turns as they
+    # were when the digest began, raced turn included, while summarising the
+    # render made before it: a current-looking digest without the turn.
+    assert RACED not in fake_llm.requests[0].user
+    assert read_input_hash(cfg.day_digest(DAY)) == read_input_hash(cfg.day_md(DAY))
+    assert read_input_hash(cfg.day_digest(DAY)) != _current(cfg)
+    monkeypatch.setattr(nightly, "digest_day", digest_mod.digest_day)
+
+    # The next night redoes it, and the turn reaches the digest.
+    again = _run(cfg, NIGHT_1.replace(minute=30))
+    assert again["steps"]["digest"]["days"] == [DAY]  # type: ignore[index]
+    assert RACED in fake_llm.requests[-1].user
+    assert read_input_hash(cfg.day_digest(DAY)) == _current(cfg)
+
+
+def test_a_raced_digest_is_redone_even_after_a_night_that_only_renders(
+        tmp_path: Path, fake_llm: FakeProvider, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A render alone (the day past the digest cap) must not make the raced digest current."""
+    cfg = _cfg(tmp_path)
+    _seed(cfg, DAY)
+    _race_between_render_and_digest(cfg, monkeypatch)
+    _run(cfg, NIGHT_1)
+    monkeypatch.setattr(nightly, "digest_day", digest_mod.digest_day)
+
+    render_only = _run(cfg, NIGHT_1.replace(minute=30), digest_cap=0)
+    assert render_only["steps"]["render"]["days"] == [DAY]  # type: ignore[index]
+    assert render_only["steps"]["digest"]["days"] == []  # type: ignore[index]
+    assert read_input_hash(cfg.day_md(DAY)) == _current(cfg)
+
+    last = _run(cfg, NIGHT_1.replace(minute=45))
+    assert last["steps"]["digest"]["days"] == [DAY]  # type: ignore[index]
+    assert RACED in fake_llm.requests[-1].user
+
+
+def test_the_digest_reads_the_snapshot_exactly_as_it_read_the_rendered_file(
+        tmp_path: Path, fake_llm: FakeProvider) -> None:
+    """Digesting the snapshot sends the model the same text as reading DD.md did."""
+    cfg = _cfg(tmp_path)
+    append_turns(cfg, [
+        _turn(f"{DAY}T01:00:00Z", "a question\r\nover two lines\rand a third"),
+        _turn(f"{DAY}T01:00:05Z", "an answer with a key sk-ant-api03-" + "A" * 40, who=AGENT),
+    ])
+    _run(cfg, NIGHT_1)
+    through_snapshot = fake_llm.requests[-1].user
+    digest_mod.digest_day(cfg, DAY, [])  # reads DD.md, as every digest did before
+    assert fake_llm.requests[-1].user == through_snapshot
+    assert "sk-ant-api03-" + "A" * 40 not in through_snapshot  # the masked render
+
+
+def test_a_digest_without_a_snapshot_records_the_hash_of_the_render_it_read(
+        tmp_path: Path, fake_llm: FakeProvider) -> None:
+    from smriti.daylog.render import render_day
+
+    cfg = _cfg(tmp_path)
+    _seed(cfg, DAY)
+    render_day(cfg, DAY)
+    append_turns(cfg, [_turn(f"{DAY}T03:00:00Z", RACED)])
+    digest_mod.digest_day(cfg, DAY, [])
+    assert read_input_hash(cfg.day_digest(DAY)) == read_input_hash(cfg.day_md(DAY))
+    assert read_input_hash(cfg.day_digest(DAY)) != _current(cfg)
 
 
 def test_the_cli_reports_a_skipped_run_as_success(

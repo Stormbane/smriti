@@ -34,12 +34,16 @@ def mask(text: str) -> str:
     return scrub(text)
 
 
-def write_memory(path: Path, text: str) -> None:
+def write_memory(path: Path, text: str) -> str:
     """Replace *path* with *text*, masked, in one step (:func:`write_atomic`).
 
-    A read-modify-write holds the file's :func:`edit_lock` from its read to this.
+    Returns the masked text, which is what a reader of *path* gets (with
+    ``read_text``'s newlines). A read-modify-write holds the file's
+    :func:`edit_lock` from its read to this.
     """
-    write_atomic(path, scrub(text))
+    masked = scrub(text)
+    write_atomic(path, masked)
+    return masked
 
 
 def create_memory(path: Path, text: str, *, unique: bool = True) -> Path:

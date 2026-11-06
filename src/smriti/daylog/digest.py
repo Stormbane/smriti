@@ -31,7 +31,7 @@ from pathlib import Path
 from smriti.core.memwrite import write_memory
 from smriti.daylog.config import DaylogConfig
 from smriti.daylog.model import USER, Turn, day_tz
-from smriti.daylog.render import AUTONOMOUS_HEADING, input_hash
+from smriti.daylog.render import AUTONOMOUS_HEADING, DaySnapshot, input_hash, input_hash_of
 from smriti.daylog.writer import read_day_turns
 from smriti.llm import LLMError, LLMRequest, get_provider
 
@@ -415,19 +415,33 @@ def _digest_in_parts(cfg: DaylogConfig, day: str, plan: _Plan, autonomous: str,
     return digest, notes_cut
 
 
-def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]]) -> Path | None:
+def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]], *,
+               snapshot: DaySnapshot | None = None) -> Path | None:
     """Write ``DD-digest.md`` for *day*. Returns None if there is no log.
+
+    The digest records the input hash of the turns behind the text it
+    summarised, so it is stale whenever that text is (H12.11). The nightly
+    passes the *snapshot* it rendered the day from: the rendered text, the
+    turns it was rendered from and their hash, all from one read. Without
+    one, the digest summarises ``DD.md`` as it is and records the hash that
+    file carries.
 
     A failed call (any part, or the merge) raises, and no digest is written.
     """
-    turns = read_day_turns(cfg.day_jsonl(day))
-    if not turns:
-        return None
-    rendered = cfg.day_md(day)
-    try:
-        log_text = rendered.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
+    if snapshot is not None:
+        turns, digested = snapshot.turns, snapshot.input_hash
+        log_text = snapshot.text
+        if "\r" in log_text:  # as read_text would give it back from DD.md
+            log_text = log_text.replace("\r\n", "\n").replace("\r", "\n")
+    else:
+        turns = read_day_turns(cfg.day_jsonl(day))
+        if not turns:
+            return None
+        try:
+            log_text = cfg.day_md(day).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        digested = input_hash_of(log_text) or input_hash(turns)
     autonomous = _autonomous_sample(turns)
     notes_cut = 0
     if len(log_text) <= _MAX_LOG_CHARS:
@@ -447,7 +461,7 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]]) 
     fields = [
         "---",
         f"date: {day}",
-        f"input_hash: {input_hash(turns)}",
+        f"input_hash: {digested}",
         f"tz_offset: {tz.utcoffset(None)}",
         f"parts: {coverage.parts}",
         f"chars_seen: {coverage.chars_seen}",

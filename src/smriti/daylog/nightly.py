@@ -26,7 +26,7 @@ from smriti.core.oslock import BUSY, UNAVAILABLE, LockKey, lock_path, try_lock
 from smriti.daylog.config import DaylogConfig, load_config
 from smriti.daylog.digest import digest_day
 from smriti.daylog.model import day_key, day_tz
-from smriti.daylog.render import input_hash, read_input_hash, render_day
+from smriti.daylog.render import input_hash, read_input_hash, render_day, render_snapshot
 from smriti.daylog.rollup import build_rollup, enumerate_stale_periods
 from smriti.daylog.state import DaylogState
 from smriti.daylog.writer import read_day_turns
@@ -157,17 +157,26 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
         # Render everything (cheap, deterministic); digest newest-first
         # under a per-night cap so a large backfill catches up over a
         # few nights instead of burning the seat in one.
-        for day in stale:
-            if render_day(cfg, day) is not None:
-                rendered.append(day)
         digest_days = sorted(stale, reverse=True)[:digest_cap]
+        to_digest = set(digest_days)
+        for day in stale:
+            if day not in to_digest and render_day(cfg, day) is not None:
+                rendered.append(day)
+        # A digested day is rendered and digested from one read of its turns,
+        # so its digest hashes exactly what it summarised (H12.11).
         for day in digest_days:
+            snapshot = render_snapshot(cfg, day)
+            if snapshot is None:
+                continue
+            rendered.append(day)
             try:
-                if digest_day(cfg, day, attempts) is not None:
+                if digest_day(cfg, day, attempts, snapshot=snapshot) is not None:
                     digested.append(day)
             except Exception as exc:  # noqa: BLE001 — a failed digest leaves
                 # the stale hash in place; the next nightly retries it.
                 digest_errors[day] = str(exc)[:300]
+            del snapshot  # one day's turns in memory at a time
+        rendered.sort()
         steps["render"] = {"ok": True, "days": rendered}
         # A failed digest is a failed night (diff review P1): the wake
         # briefing must say so, and the CLI must exit nonzero.
