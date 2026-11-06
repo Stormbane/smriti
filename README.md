@@ -112,7 +112,9 @@ Flags answer them without a terminal: `--capture` or `--no-capture`, and `--remo
 - **Backups** push everything git tracks in the tree: the memory notes, the captured conversations and their renders, the digests and rollups, and `daylog.json`. The template's `.gitignore` keeps out the index, metrics, runtime state and the private store's key. Even with git-crypt, file names, sizes and commit messages stay readable. [`docs/PRIVACY.md`](docs/PRIVACY.md#what-is-pushed-in-the-clear) lists it all.
 - **The nightly digest** sends each day's conversation log (up to 248,000 characters: four parts of 60,000 and 8,000 of autonomous-session markers) to the configured LLM CLI.
 - **The witness** sends a hash to public timestamp calendars, and **the morning message** uses web search when `morning_web_search` is on.
-- **The optional private store** encrypts its files; its key stays in `private/.key`, which git ignores, and the index skips `private/`.
+- **The optional private store** encrypts its files; its key stays in `private/.key`, which git ignores, and the index skips `private/`. It keeps private notes from the remote, not from anyone with the machine.
+
+[`SECURITY.md`](SECURITY.md#what-leaves-the-machine) lists every outbound flow, what each sends, to whom and when, and how to turn it off, and states the private store's threat model.
 
 ## Install
 

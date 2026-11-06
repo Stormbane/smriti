@@ -183,6 +183,15 @@ at the model that reads it. What holds such an instruction:
 
 ## Other network requests
 
+[SECURITY.md](../SECURITY.md#what-leaves-the-machine) lists every outbound
+flow in one place, with how to turn each off.
+
+- **The reranker** that `smriti read` uses (the MCP server's search doesn't
+  rerank): the Hugging Face hub library downloads
+  `Alibaba-NLP/gte-reranker-modernbert-base` on first use, and asks the hub
+  for its file list on every run. No memory text is sent. `smriti read
+  --no-rerank` skips it; under `HF_HUB_OFFLINE=1` it fails and the combined
+  scores stand.
 - **The embedding model** (the `read` extra). The first time a model is
   needed, the Hugging Face hub library downloads `gpahal/bge-m3-onnx-int8`
   (about 560 MB on disk: its tokenizer and an int8 ONNX model) into its
