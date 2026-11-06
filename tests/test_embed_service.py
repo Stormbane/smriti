@@ -62,6 +62,8 @@ class Services:
     def __init__(self) -> None:
         self.running: list[tuple[EmbedService, threading.Thread]] = []
         self.reasons: dict[str, str] = {}
+        # Held while a service publishes its state; see read_in_turn.
+        self.publishing = threading.Lock()
 
     def start(self, root: Path, provider: Any = None, *, publish: bool = True,
               **kw: Any) -> EmbedService:
@@ -72,8 +74,10 @@ class Services:
 
         def on_state(state: str) -> None:
             svc = holder[0]
-            write_discovery(paths, Discovery(os.getpid(), state, svc.instance, port=svc.port,
-                                             identity=svc.identity, root=str(paths.root)))
+            with self.publishing:
+                write_discovery(paths, Discovery(
+                    os.getpid(), state, svc.instance, port=svc.port, identity=svc.identity,
+                    root=str(paths.root)))
 
         svc = EmbedService(provider=provider or StubEmbedding(), key=load_key(runtime),
                            db=root / ".smriti" / "index.db",
@@ -111,6 +115,25 @@ def services() -> Iterator[Services]:
     s = Services()
     yield s
     s.stop_all()
+
+
+def read_in_turn(monkeypatch: pytest.MonkeyPatch, services: Services) -> None:
+    """The client's discovery reads take turns with ``services``' state publishes.
+
+    Windows refuses to open a file while ``os.replace`` swaps it, and
+    ``read_discovery`` reads that refusal (a PermissionError) as no service at
+    all. A client polling the file while an in-thread service publishes can meet
+    that moment; with turns it reads the record from just before or just after.
+    """
+    import smriti.embed.client as client
+
+    real = client.read_discovery
+
+    def read(paths: Any) -> Discovery | None:
+        with services.publishing:
+            return real(paths)
+
+    monkeypatch.setattr(client, "read_discovery", read)
 
 
 @pytest.fixture()
@@ -1288,9 +1311,18 @@ def test_stop_reaches_a_service_that_was_still_starting(root: Path) -> None:
 
 
 def test_a_query_does_not_wait_while_the_service_is_starting(
-        root: Path, services: Services) -> None:
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
     """H11.10: during a cold start (about 30 s of model loading) every query
-    waited out its whole 3 s deadline before falling back to keywords."""
+    waited out its whole 3 s deadline before falling back to keywords.
+
+    The write below polls the discovery file while the service, started 0.3 s
+    in, replaces it with its "ready" record. Once on windows-latest (388cb24) a
+    poll met the replace: Windows refused the open, read_discovery gave None,
+    and the writer, which may not start a service, raised "the embedding
+    service is not running". The polls and the publish take turns
+    (read_in_turn), so the test checks the waiting, not the moment.
+    """
+    read_in_turn(monkeypatch, services)
     paths = service_paths(runtime_dir(), root)
     # A live service, still loading its model: the record a starting `serve` writes.
     write_discovery(paths, Discovery(os.getpid(), "starting", "warming", root=str(paths.root)))
