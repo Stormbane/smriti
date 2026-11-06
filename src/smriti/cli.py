@@ -342,7 +342,34 @@ def _cmd_logd(args: argparse.Namespace) -> int:
     if args.ensure:
         ensure_running()
         return 0
+    if args.rescan:
+        return _rescan(args.rescan)
     run_logd(interval_s=args.interval, max_passes=1 if args.once else None)
+    return 0
+
+
+def _rescan(name: str) -> int:
+    """``smriti logd --rescan NAME``: offsets of one source back to 0, then one pass.
+
+    Only the capture state's offsets change before the pass; the pass then
+    appends the turns the day-log doesn't hold yet (dedup by turn id drops
+    the rest), so it is safe to repeat. Files longer than one read finish
+    over the daemon's next passes.
+    """
+    from smriti.daylog.collect import collect_once, rescan_source
+    from smriti.daylog.config import capture_note, load_config
+
+    cfg = load_config()
+    if name not in {spec.name for spec in cfg.sources}:
+        print(f"No source named {name!r} is captured. Capture is {capture_note(cfg)}",
+              file=sys.stderr)
+        return 1
+    reset = rescan_source(cfg, name)
+    print(f"Rescan: {name}: {_count(reset, 'known file')} will be read again from the start")
+    report = collect_once(cfg)
+    print(f"Pass: +{report.appended} turns, {report.files_scanned} files scanned, "
+          f"{report.parse_errors} parse errors, {len(report.skipped)} records skipped as too long; "
+          f"days changed: {', '.join(sorted(map(str, report.changed_days))) or 'none'}")
     return 0
 
 
@@ -509,6 +536,9 @@ def main(argv: list[str] | None = None) -> int:
     p_logd.add_argument("--once", action="store_true", help="Run a single pass and exit")
     p_logd.add_argument("--ensure", action="store_true",
                         help="Keepalive: start a detached daemon if none is running")
+    p_logd.add_argument("--rescan", metavar="SOURCE", default=None,
+                        help="Backfill: read every file of SOURCE (e.g. codex) again from the "
+                             "start, then run a pass; turns the day-log holds are skipped")
     p_embed = sub.add_parser(
         "embed", help="The shared embedding service: one model for every session's server"
     )

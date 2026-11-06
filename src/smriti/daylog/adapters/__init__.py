@@ -42,6 +42,18 @@ def complete_lines(blob: bytes) -> tuple[list[bytes], int]:
     return blob[:consumed].split(b"\n")[:-1], consumed
 
 
+# Transcript namespaces produced by smriti's OWN internal LLM subprocesses
+# (see smriti.llm.workdir): never captured, or derived text would feed back
+# into future digests. Claude Code names the transcript's directory after
+# the session's cwd; a Codex rollout's path doesn't say, only its cwd does.
+INTERNAL_MARKERS = ("llm-workdir",)
+
+
+def is_internal(path_or_cwd: str) -> bool:
+    """Whether a transcript path, or a session's working directory, is smriti's own."""
+    return any(marker in path_or_cwd for marker in INTERNAL_MARKERS)
+
+
 def project_of(cwd: str) -> str:
     """The last component of a session's working directory, from any platform.
 

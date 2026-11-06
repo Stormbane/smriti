@@ -61,7 +61,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-from smriti.daylog.adapters import Adapter, get_adapter
+from smriti.daylog.adapters import Adapter, get_adapter, is_internal
 from smriti.daylog.config import DaylogConfig, SourceSpec
 from smriti.daylog.lock import writer_lock
 from smriti.daylog.state import (
@@ -80,11 +80,6 @@ log = logging.getLogger(__name__)
 _MAX_CHUNK = 8 * 1024 * 1024
 # How much of a record longer than that a pass reads at a time, looking for its end.
 _SCAN_CHUNK = 1024 * 1024
-
-# Transcript namespaces produced by smriti's OWN internal LLM
-# subprocesses (see smriti.llm.workdir) — never captured, or derived
-# text would feed back into future digests.
-_EXCLUDE_SUBSTRINGS = ("llm-workdir",)
 
 
 @dataclass
@@ -128,6 +123,23 @@ def collect_once(cfg: DaylogConfig, *, lock_timeout_s: float = 60.0) -> CollectR
     return report
 
 
+def rescan_source(cfg: DaylogConfig, name: str, *, lock_timeout_s: float = 60.0) -> int:
+    """Read every file of source *name* again from its start; returns how many files.
+
+    Only the capture state changes: each file's offset goes back to 0, so
+    the next pass reads it all again, and the writer drops every turn the
+    day-log already holds. It is how turns that an older adapter couldn't
+    read are backfilled (H12.17).
+    """
+    with writer_lock(cfg.lock_path, timeout_s=lock_timeout_s):
+        state = DaylogState.load(cfg.state_path)
+        files = state.sources[name].files if name in state.sources else {}
+        for fstate in files.values():
+            fstate.offset = fstate.waiting = fstate.stalled = 0
+        state.save()
+    return len(files)
+
+
 def _collect_locked(cfg: DaylogConfig, state: DaylogState, batch: AppendPass) -> CollectReport:
     report = CollectReport()
     for spec in cfg.sources:
@@ -138,7 +150,7 @@ def _collect_locked(cfg: DaylogConfig, state: DaylogState, batch: AppendPass) ->
             state.source(spec.name).parse_errors += 1
             continue
         for raw_path in sorted(globmod.glob(spec.glob)):
-            if any(marker in raw_path for marker in _EXCLUDE_SUBSTRINGS):
+            if is_internal(raw_path):  # smriti's own LLM calls (see adapters.is_internal)
                 continue
             path = Path(raw_path)
             fstate = state.file(spec.name, path)

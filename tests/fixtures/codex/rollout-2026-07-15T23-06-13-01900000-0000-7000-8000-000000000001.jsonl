@@ -1,0 +1,10 @@
+{"timestamp": "2026-07-15T13:10:02.130Z", "type": "session_meta", "payload": {"id": "01900000-0000-7000-8000-000000000001", "cwd": "C:\\Users\\sam\\projects\\orchard", "originator": "codex-tui", "cli_version": "0.144.4"}}
+{"timestamp": "2026-07-15T13:10:02.300Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<environment_context>cwd: orchard</environment_context>"}]}}
+{"timestamp": "2026-07-15T13:10:02.435Z", "type": "event_msg", "payload": {"type": "user_message", "message": "hi", "images": []}}
+{"timestamp": "2026-07-15T13:10:03.100Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "getting oriented", "phase": "commentary"}}
+{"timestamp": "2026-07-15T13:10:04.000Z", "type": "response_item", "payload": {"type": "function_call", "name": "shell", "arguments": "{}", "call_id": "c1"}}
+{"timestamp": "2026-07-15T13:10:15.273Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "Hi Sam, what shall we work on?", "phase": "final_answer"}}
+{"timestamp": "2026-07-15T13:10:15.273Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "phase": "final_answer", "content": [{"type": "output_text", "text": "Hi Sam, what shall we work on?"}]}}
+{"timestamp": "2026-07-15T14:30:00.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "  Let's tidy the ledger.  \n"}}
+{"timestamp": "2026-07-15T14:33:55.323Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "Done: the ledger rounds once now."}}
+{"timestamp": "2026-07-15T14:33:56.000Z", "type": "event_msg", "payload": {"type": "token_count", "info": null}}
