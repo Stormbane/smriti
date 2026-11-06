@@ -330,7 +330,8 @@ def _line(name: str, outcome: Outcome, tz: tzinfo | None) -> str:
     return line + (f": {outcome.detail}" if outcome.detail else "")
 
 
-_REMOTE_RE = re.compile(r'^\s*\[\s*remote\s+"([^"]+)"\s*\]', re.MULTILINE | re.IGNORECASE)
+# Compiled on first use (re caches it): only a failed push needs it.
+_REMOTE_PATTERN = r'^\s*\[\s*remote\s+"([^"]+)"\s*\]'
 
 
 def _remote_configured(common: Path, target: str) -> bool:
@@ -341,7 +342,7 @@ def _remote_configured(common: Path, target: str) -> bool:
         config = (common / "config").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return True
-    return target in _REMOTE_RE.findall(config)
+    return target in re.findall(_REMOTE_PATTERN, config, re.MULTILINE | re.IGNORECASE)
 
 
 def backup_status(root: Path) -> BackupStatus:
