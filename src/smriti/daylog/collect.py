@@ -13,6 +13,26 @@ read-modify-write, clobber each other's saves, or regress offsets.
 File identity: a stored head-fingerprint + size. A size regression or
 fingerprint change means the path was truncated or reused — re-read
 from zero; dedup by turn id absorbs any overlap.
+
+Persistence order, which is why a crash at any point loses no turn:
+
+1. Under the writer lock, the state is loaded from disk.
+2. For each file, its new bytes are read from the saved offset, the
+   adapter extracts the turns of the complete lines, and the writer
+   appends those whose ids the day-file doesn't hold, closing a torn
+   last line first. The new offset is kept in memory only.
+3. When every file is done, the day-files written are flushed to disk,
+   and then the state (offsets, counters, dirty days) is saved by an
+   atomic replace.
+
+A crash before step 3 leaves the old offsets on disk, so the next pass
+reads the same bytes again and the writer drops every turn whose id the
+day-file holds; a turn whose record was torn isn't held (its fragment
+doesn't parse), so it is appended again, whole. A crash in step 3 leaves
+the old state or the new one, never a mix. The saved offsets never run
+ahead of the day-log, so replay plus dedup by turn id recovers every
+turn. A state file that can't be read counts as a fresh one: everything
+is read again from the start, and dedup absorbs it.
 """
 
 from __future__ import annotations
@@ -27,7 +47,7 @@ from smriti.daylog.adapters import get_adapter
 from smriti.daylog.config import DaylogConfig
 from smriti.daylog.lock import writer_lock
 from smriti.daylog.state import DaylogState, fingerprint_head
-from smriti.daylog.writer import append_turns_unlocked
+from smriti.daylog.writer import AppendPass, append_turns_unlocked
 
 # Read at most this much new data from one file per pass; huge backlogs
 # drain over successive passes instead of ballooning memory.
@@ -45,6 +65,7 @@ class CollectReport:
     changed_days: set[date] = field(default_factory=set)
     files_scanned: int = 0
     parse_errors: int = 0
+    repaired_days: list[str] = field(default_factory=list)  # day-files whose torn line was closed
 
 
 def collect_once(cfg: DaylogConfig, *, lock_timeout_s: float = 60.0) -> CollectReport:
@@ -56,16 +77,20 @@ def collect_once(cfg: DaylogConfig, *, lock_timeout_s: float = 60.0) -> CollectR
     """
     with writer_lock(cfg.lock_path, timeout_s=lock_timeout_s):
         state = DaylogState.load(cfg.state_path)
-        report = _collect_locked(cfg, state)
+        batch = AppendPass()
+        report = _collect_locked(cfg, state, batch)
+        batch.sync()  # the day-log on disk before the offsets that cover it
         # Persist dirty-day markers so historical changes captured by the
         # daemon survive until the next nightly repair pass (diff review
         # P1) — nightly consumes and clears them.
         state.mark_dirty(report.changed_days)
+        state.note_days(batch.invalid, batch.repaired)
+        report.repaired_days = batch.repaired
         state.save()
     return report
 
 
-def _collect_locked(cfg: DaylogConfig, state: DaylogState) -> CollectReport:
+def _collect_locked(cfg: DaylogConfig, state: DaylogState, batch: AppendPass) -> CollectReport:
     report = CollectReport()
     for spec in cfg.sources:
         state.note_scan(spec.name)
@@ -103,7 +128,7 @@ def _collect_locked(cfg: DaylogConfig, state: DaylogState) -> CollectReport:
             result = adapter.extract(path, blob)
             if result.consumed <= 0 and not result.errors:
                 continue
-            appended, changed = append_turns_unlocked(cfg, result.turns)
+            appended, changed = append_turns_unlocked(cfg, result.turns, batch)
             report.appended += appended
             report.changed_days |= changed
             fstate.offset += result.consumed

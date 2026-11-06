@@ -179,17 +179,27 @@ def _print_daylog_status() -> None:
             return  # nothing to scan, so nothing is stalled or not started
         if cfg.state_path.exists():
             print("Day-log:")
-            for name, h in sorted(DaylogState.load(cfg.state_path).health().items()):
+            state = DaylogState.load(cfg.state_path)
+            for name, h in sorted(state.health().items()):
                 scan = h["scan_age_s"]
                 scanning = "STALLED" if (scan == -1 or float(scan) > 600) else "scanning"
                 print(
                     f"  {name}: {scanning} (last scan {scan}s ago, "
                     f"{h['files']} files, {h['parse_errors']} parse errors)"
                 )
+            if state.corrupt_lines or state.torn_repairs:
+                days = ", ".join(f"{day}: {n}" for day, n in sorted(state.corrupt_lines.items()))
+                corrupt = _count(sum(state.corrupt_lines.values()), "corrupt line")
+                print(f"  day-log files: {corrupt}" + (f" ({days})" if days else "")
+                      + f"; {_count(state.torn_repairs, 'torn last line')} closed")
         else:
             print("Day-log:    not started (run 'smriti logd')")
     except Exception as exc:  # noqa: BLE001 — status must always print
         print(f"Day-log:    unavailable ({exc})")
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
 
 
 _ROOT_HELP = ("Memory root (default: $SMRITI_ROOT, else ~/.narada if it exists, "

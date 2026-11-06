@@ -9,6 +9,13 @@ the at-least-once/exactly-once contract.
 Health is defined by *scan* recency, not append recency, so a
 legitimately quiet channel is distinguishable from a stalled tail
 (spec: review round 1, finding 9).
+
+The day-log's own health rides along: how many lines of each day-file
+aren't records, as the writer last read it (a torn append leaves one),
+and how many torn last lines the writer has closed (H12.6). Both are
+written only when there is something to say, so a healthy state file
+looks as it did. An entry that can't be read is dropped, and that file
+is read again from the start; dedup absorbs the overlap.
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 _FINGERPRINT_BYTES = 256
 
@@ -43,6 +51,18 @@ class SourceState:
     parse_errors: int = 0
 
 
+def _file_state(raw: dict[str, Any]) -> FileState:
+    """A file's saved state; raises TypeError or ValueError on a value of the wrong kind."""
+    return FileState(
+        offset=int(raw.get("offset", 0)),
+        size=int(raw.get("size", 0)),
+        fingerprint=str(raw.get("fingerprint", "")),
+        last_scan=float(raw.get("last_scan", 0.0)),
+        last_turn=float(raw.get("last_turn", 0.0)),
+        parse_errors=int(raw.get("parse_errors", 0)),
+    )
+
+
 def fingerprint_head(path: Path) -> str:
     try:
         with path.open("rb") as f:
@@ -62,35 +82,48 @@ class DaylogState:
         # Persisted so a historical change the daemon captured survives
         # until nightly consumes it (diff review P1).
         self.dirty_days: set[str] = set()
+        # Lines of each day-file that aren't records, as the writer last read it.
+        self.corrupt_lines: dict[str, int] = {}
+        # How many torn last lines the writer has closed, ever.
+        self.torn_repairs = 0
 
     @classmethod
     def load(cls, path: Path) -> "DaylogState":
         state = cls(path)
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return state
+        if not isinstance(raw, dict):
             return state
         dirty = raw.get("dirty_days")
         if isinstance(dirty, list):
             state.dirty_days = {str(d) for d in dirty}
-        for name, src in raw.get("sources", {}).items():
+        corrupt = raw.get("corrupt_lines")
+        if isinstance(corrupt, dict):
+            state.corrupt_lines = {str(day): n for day, n in corrupt.items()
+                                   if isinstance(n, int) and n > 0}
+        repairs = raw.get("torn_repairs")
+        state.torn_repairs = repairs if isinstance(repairs, int) else 0
+        sources = raw.get("sources")
+        for name, src in (sources.items() if isinstance(sources, dict) else ()):
             if not isinstance(src, dict):
                 continue
-            source = SourceState(
-                last_scan=float(src.get("last_scan", 0.0)),
-                last_turn=float(src.get("last_turn", 0.0)),
-                parse_errors=int(src.get("parse_errors", 0)),
-            )
-            for fpath, fstate in (src.get("files") or {}).items():
+            try:
+                source = SourceState(
+                    last_scan=float(src.get("last_scan", 0.0)),
+                    last_turn=float(src.get("last_turn", 0.0)),
+                    parse_errors=int(src.get("parse_errors", 0)),
+                )
+            except (TypeError, ValueError):
+                source = SourceState()
+            files = src.get("files")
+            for fpath, fstate in (files.items() if isinstance(files, dict) else ()):
                 if isinstance(fstate, dict):
-                    source.files[fpath] = FileState(
-                        offset=int(fstate.get("offset", 0)),
-                        size=int(fstate.get("size", 0)),
-                        fingerprint=str(fstate.get("fingerprint", "")),
-                        last_scan=float(fstate.get("last_scan", 0.0)),
-                        last_turn=float(fstate.get("last_turn", 0.0)),
-                        parse_errors=int(fstate.get("parse_errors", 0)),
-                    )
+                    try:
+                        source.files[fpath] = _file_state(fstate)
+                    except (TypeError, ValueError):
+                        pass  # read again from the start; dedup absorbs it
             state.sources[name] = source
         return state
 
@@ -109,11 +142,24 @@ class DaylogState:
         for day in days:
             self.dirty_days.add(day if isinstance(day, str) else _day_key(day))
 
+    def note_days(self, invalid: dict[str, int], repaired: Iterable[str]) -> None:
+        """Record what the writer saw of the day-files it read: their invalid lines and repairs."""
+        for day, count in invalid.items():
+            if count > 0:
+                self.corrupt_lines[day] = count
+            else:
+                self.corrupt_lines.pop(day, None)
+        self.torn_repairs += sum(1 for _ in repaired)
+
     def save(self) -> None:
-        payload = {
+        payload: dict[str, object] = {
             "sources": {n: asdict(s) for n, s in self.sources.items()},
             "dirty_days": sorted(self.dirty_days),
         }
+        if self.corrupt_lines:
+            payload["corrupt_lines"] = dict(sorted(self.corrupt_lines.items()))
+        if self.torn_repairs:
+            payload["torn_repairs"] = self.torn_repairs
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # PID-unique temp name: concurrent savers (daemon + nightly, when
         # not lock-serialized, e.g. crash recovery) must never collide on
