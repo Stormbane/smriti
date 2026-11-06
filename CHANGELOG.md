@@ -5,6 +5,38 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### Changed
+
+- The nightly's codex fallback is opt-in: `"nightly_fallback": "codex_cli"` in
+  `daylog.json`, or `SMRITI_NIGHTLY_FALLBACK`, which wins when set (empty: none).
+  Without either, a day Claude Code fails gets no digest that night, and the next
+  nightly retries it. An install that relied on the fallback must set the key; the
+  reference install does.
+- An append to a daily file keeps the file's line ending. Since H1.4's binary
+  append, new entries were LF beside CRLF ones on Windows; a new file gets the
+  platform's, as before H1.4.
+- The credential scrub is about 30 times faster on ordinary text (50 kB: 19 ms to
+  0.6 ms), with the same masks.
+
+### Fixed
+
+- The morning message falls back again when Claude Code fails, if the nightly's
+  fallback is on: from the digest alone, without web search. Since `d2e0518` a
+  failed compose sent nothing that day. `smriti morning --dry-run` falls back the
+  same way.
+
+### Security
+
+- Every write of memory text into the tree is masked at one chokepoint,
+  `smriti.core.memwrite`: besides `smriti_write`, the project tools (findings and
+  their cross-project stubs, decisions, feature specs and status notes, todos),
+  the handoff, the reference profile's outbox, rendered days, digests, rollups and
+  `index.md` listings, titles and metadata included. A feature slug shaped like a
+  credential is refused. A test scans the source and fails on a file write
+  outside the chokepoint and an allowlist of runtime and index state.
+- The codex fallback is off by default (above): its read-only sandbox stops writes
+  and the network but not reads, while it reads untrusted transcripts.
+
 ## [0.2.0] - 2026-11-06
 
 Since 0.1.0 the parked pipelines are removed, the maintainer's own setup is an

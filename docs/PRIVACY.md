@@ -37,12 +37,14 @@ the memory template's `.gitignore`, that is:
   blocks); everything else stays, including names, pasted file contents
   and personal details.
 - **What the nightly derives from them:** `DD-digest.md` and the week,
-  month and year rollups.
+  month and year rollups, masked as they are written, like the render.
 - **Everything written to memory:** `identity.md`, `mind/`, `people/`,
   `open-threads/`, `journal/`, `projects/`, `notes/`, `sources/` and
-  `semantic/`. What `smriti_write` (or `smriti write`) saves goes through
-  the same credential scrub as captured turns; files edited directly
-  don't.
+  `semantic/`. Everything smriti writes into the tree goes through the
+  same credential scrub as captured turns (`smriti.core.memwrite`): what
+  `smriti_write` (or `smriti write`) saves, the project tools' findings,
+  decisions, feature specs and todos, the handoff, the `index.md`
+  listings, and the nightly's files. Files you edit directly don't.
 - **Configuration and session files under `.smriti/`:** `daylog.json`
   (names, `location`, `notify_cmd`), `privacy.json` (the installer's
   record of your answers), `wake-context.md`, a pending handoff and its
@@ -127,8 +129,9 @@ history and force-push.
 ## What goes to an LLM
 
 The nightly and the morning send memory text to an LLM through a CLI you
-are logged in to, under that provider's terms: `claude -p` first, and
-`codex exec` as the nightly's fallback.
+are logged in to, under that provider's terms: `claude -p`, and `codex
+exec` as a fallback only if you turn one on (`"nightly_fallback":
+"codex_cli"` in `daylog.json`).
 
 - **The digest** sends each day's rendered conversation log, which is
   everything capture keeps (see [README](../README.md#privacy) for the
@@ -152,14 +155,24 @@ at the model that reads it. What holds such an instruction:
   `tests/test_llm_tool_boundary.py` checks the flags against the installed
   CLI. An injection can still change what a call writes: a wrong digest, or
   text of its choosing carried into the tree, the index, the wake briefing,
-  the morning message and the backup.
-- **The codex fallback** runs `codex exec --sandbox read-only` with no MCP
-  servers, from an empty working directory, but its sandbox still lets it
-  read files and run read-only commands, and how strictly it holds depends
-  on the platform. An injected instruction could make it copy a local
-  file into the digest, which is then indexed, committed and pushed. Set
-  `SMRITI_NIGHTLY_FALLBACK=` (empty) to run the nightly on Claude Code
-  only. The morning never falls back to codex.
+  the morning message and the backup. Credential shapes in what it writes
+  are masked, nothing else.
+- **The codex fallback is off unless you turn it on**, with
+  `"nightly_fallback": "codex_cli"` in `daylog.json` or
+  `SMRITI_NIGHTLY_FALLBACK=codex_cli` (the variable wins when it is set;
+  empty turns the fallback off). Until hardening H12.2 it was on by
+  default. It runs `codex exec --sandbox read-only` with no MCP servers,
+  from an empty working directory. Read-only stops its commands writing
+  files and reaching the network, not reading: they can read any file you
+  can, by absolute path (your keys, other projects, the memory tree), and
+  how strictly the sandbox holds depends on the platform. The empty
+  working directory is only where it starts, and your own Codex
+  configuration still loads, apart from its MCP servers. An injected
+  instruction in a transcript could make it copy a local file into the
+  digest, which is then indexed, committed and pushed. With the fallback
+  on, a morning whose Claude Code call fails falls back to it as well,
+  with the digest-only prompt and no web search, whatever
+  `morning_web_search` says.
 - **With `morning_web_search` on, the morning call can search the web, and
   nothing else.** That gives an injection a way off the machine while the
   call runs: an instruction in a transcript (carried into the digest) or in a

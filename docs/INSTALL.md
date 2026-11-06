@@ -258,7 +258,7 @@ Claude Code transcripts, Codex rollouts and voice transcripts (the default
 sources) are merged in real time into one chronological day-log at
 `<root>/log/YYYY/MM/DD.jsonl` by `smriti logd`. The 03:00 `smriti
 nightly` run renders each day to markdown, writes an LLM digest
-(`claude -p` primary, `codex exec` fallback — subscription seats only),
+(`claude -p`, with `codex exec` as an opt-in fallback — subscription seats only),
 builds week/month/year rollups, and refreshes the indexes. The 07:00
 `smriti morning` run sends one good-morning message (digest
 highlights + world headlines) through the `notify_cmd` configured in
@@ -285,6 +285,7 @@ defaults apply, and capture is off.
 | `notify_cmd` | none | The command `smriti morning` pipes its message to; no command, no morning |
 | `location` | none | Where the user lives, for the morning's local headlines |
 | `morning_web_search` | `false` | `true` lets the morning call search the web for headlines, and only that; off, it gets no tools and writes from the digest alone. Search results can carry a prompt injection: see [PRIVACY.md](PRIVACY.md#what-goes-to-an-llm) |
+| `nightly_fallback` | none | The provider the digests, rollups and morning message fall back to when Claude Code fails, e.g. `"codex_cli"`; the morning's fallback writes from the digest alone, without web search. Off by default: codex's read-only sandbox still reads your files while it reads untrusted transcripts (see [PRIVACY.md](PRIVACY.md#what-goes-to-an-llm)). `SMRITI_NIGHTLY_FALLBACK`, when set, wins |
 | `user_name` | `"User"` | The user's display name: the day render, the presence line, the nightly and morning prompts, the core tools' text, the reading list's person file (`people/<name>/<name>.md`) |
 | `agent_name` | `"Agent"` | The agent's display name, used in the same places |
 | `profile` | none | An optional profile: the name an installed package registers in the `smriti.profiles` entry-point group; see below |
@@ -318,11 +319,11 @@ wheel carries none of it; install it with `pip install -e profiles/reference`. I
 `smriti_ask_suti`, `smriti_propose_goal_shift` and `smriti_resolve_outbox`
 tools, the wake's `HANDS`, `SUTI NOW` and `ACROSS SURFACES` sections, and
 the morning persona. That installation enables it, with the morning's web
-search, with:
+search and the codex fallback, with:
 
 ```json
 {"profile": "reference", "user_name": "Suti", "agent_name": "Narada",
- "morning_web_search": true}
+ "morning_web_search": true, "nightly_fallback": "codex_cli"}
 ```
 
 To write your own, make a package whose module holds a

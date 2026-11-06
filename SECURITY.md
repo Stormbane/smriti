@@ -30,13 +30,16 @@ security backport series or guaranteed response time.
 - Those LLM calls, and the morning message's, read that untrusted text. On
   Claude Code they run with no tools, MCP servers or skills
   (`tests/test_llm_tool_boundary.py` checks the flags against the installed
-  CLI), so an injection can change what they write but can't act. The nightly's
-  fallback, `codex exec`, has a read-only sandbox that can still read local
-  files into a digest; `SMRITI_NIGHTLY_FALLBACK=` (empty) turns it off. With
-  `morning_web_search` on, the morning call can search the web, and an injected
-  instruction could leak digest text through its search queries. It is off by
-  default. [`docs/PRIVACY.md`](docs/PRIVACY.md#what-goes-to-an-llm) has the
-  details.
+  CLI), so an injection can change what they write but can't act. The
+  fallback, `codex exec`, is off unless configured (`"nightly_fallback":
+  "codex_cli"` in `daylog.json`, or `SMRITI_NIGHTLY_FALLBACK`, which wins when
+  set): its read-only sandbox stops writes and the network, not reads, so an
+  injection could have it read any of the user's files into a digest that is
+  committed and pushed. When it is on, the morning falls back to it too, from
+  the digest alone and without web search. With `morning_web_search` on, the
+  morning call can search the web, and an injected instruction could leak
+  digest text through its search queries. It is off by default.
+  [`docs/PRIVACY.md`](docs/PRIVACY.md#what-goes-to-an-llm) has the details.
 - The embedding service listens on a loopback TCP port, and every process of the
   same user that holds its key can use it; other users can connect but are
   refused. See [The embedding service](#the-embedding-service).
@@ -79,9 +82,14 @@ security backport series or guaranteed response time.
   path's entries and their modification times; a missing, corrupt or stale
   cache means a fresh scan.
 - `daylog/scrub.py` masks recognised credential patterns before captured turns
-  are persisted. This is pattern-based, not comprehensive secret or personal-data
-  detection. Unrecognised secrets and ordinary personal information remain; direct
-  memory writes do not pass through this capture scrubber.
+  are persisted, and `smriti.core.memwrite` applies it to every write of memory
+  text into the tree: entries, the project tools' files, the handoff, the
+  reference profile's outbox, rendered days, digests, rollups and `index.md`
+  listings, titles and metadata included. `tests/test_memwrite.py` fails on a
+  file write anywhere else in the source outside an allowlist of runtime and
+  index state. This is pattern-based, not comprehensive secret or personal-data
+  detection. Unrecognised secrets and ordinary personal information remain, and
+  files edited by hand are not scrubbed.
 
 ## The embedding service
 
@@ -162,5 +170,5 @@ whether to capture conversations, or takes `--capture` (which writes
 `"capture": true`) / `--no-capture` (which writes `"sources": []`); with neither a
 terminal nor a flag, a new memory root captures nothing, and an existing one keeps
 what its `daylog.json` says (`extra_sources` still adds explicit sources). There is
-no blanket anonymisation of captured conversations; captured turns and
-`smriti_write` entries are scrubbed of credential-shaped strings.
+no blanket anonymisation of captured conversations; captured turns, and everything
+smriti writes into the tree, are scrubbed of credential-shaped strings.

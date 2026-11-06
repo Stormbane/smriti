@@ -649,6 +649,70 @@ a recheck.
   15.88/16.52 s with five new files (rounds 15.7-16.1 against 16.3-16.8; it
   runs no code these commits touch); memory 46/46 MB and 1038/1037 MB. Top 5
   the same for all queries; the wake briefings identical.
+- **H12.1 implemented** (2026-11-06, `hardening/h12p`; not yet reviewed or
+  merged). `smriti.core.memwrite` is the one way memory text reaches the
+  tree: `write_memory` (an atomic replace), `create_memory` (an exclusive
+  create, suffixed or not) and `append_memory` (under the edit lock) mask the
+  whole text, then write through `smriti.core.files`. Through it: `smriti_write`,
+  the project tools (todos, findings with their per-tag stubs and the
+  cross-project index, decisions, feature specs, status notes), the handoff,
+  the reference profile's outbox, digests and rollups, and two the brief
+  didn't list, rendered days and `index.md` listings (a day captured before a
+  pattern existed, a heading written by hand). A name that becomes a path is
+  masked by its caller first (a finding's or decision's title, a tag), and a
+  feature slug shaped like a credential is refused, since it names the spec
+  for life. A read-modify-write masks the whole file it writes; no project
+  mirror on the reference install holds text the scrub would change.
+  `tests/test_memwrite.py` scans `src/` and the profile (AST) for file writes
+  and fails on any outside the chokepoint and a 33-entry allowlist of
+  runtime and index state, each with its reason, or on a stale entry;
+  `tests/test_masked_paths.py` and the profile's tests plant credential
+  shapes in each path, a fake model answering with them for the digest and
+  the rollup, and every one fails with the mask removed. Where it differs
+  from the brief: the scrub cost 0.4 ms per kB (19 ms for 50 kB of ordinary
+  text, 35 ms for the reference tree's largest `index.md`), too much for
+  index pages and renders, so each pattern got a hint (a literal it needs)
+  and the `\b`-led ones a literal-first form, with the same masks
+  (`tests/test_scrub.py` holds it to the old patterns over 4,000 fuzzed
+  texts): 50 kB 0.6 ms, that `index.md` 1.8 ms, a typical day's render (0.3
+  MB) 20 ms more on its 20-40 ms, the largest day (13.6 MB) 1.3 s more on
+  0.5 s; and the chokepoint lives in `smriti.core`, not `store`, so a tool's
+  first call imports nothing new but the scrub.
+- **H12.2 implemented** (same branch). No fallback unless one is asked for:
+  `"nightly_fallback": "codex_cli"` in daylog.json, or `SMRITI_NIGHTLY_FALLBACK`,
+  which wins when set (empty: none); `compose` takes the config, and the
+  digest and rollups pass theirs. The morning follows the setting:
+  `compose_message` composes on claude_cli as before and, when that fails with
+  the fallback on, on the fallback with the digest-only prompt (a profile's
+  persona kept, no headlines) and the codex seat's own call, whatever
+  `morning_web_search` says; `smriti morning --dry-run` uses it too. The
+  codex provider's docstring now says what read-only allows. **The reference
+  install must set `"nightly_fallback": "codex_cli"` in its daylog.json when
+  this merges** (its test config does).
+- **H12.16, the line endings, implemented** (same branch). An append takes
+  the ending of the file's first line, and an entry's own CRLFs follow it; a
+  new file gets the platform's, as `13ac56a`'s text-mode `os.open` gave. The
+  outbox appends share it (they were text mode: CRLF on Windows, whatever the
+  file had). The tests write the file's ending first, so both run on every
+  platform.
+- **Benchmark** (h12p; `scripts/bench.py`, 2026-11-06, the reference tree's
+  copy, 10 queries, two alternating rounds; A master `fc27d39`, B `4ab4c32`,
+  the last code commit): no measure slower beyond noise. MCP initialize
+  189/176 ms; tools/list first 38/27 ms; first query 888/974 ms (rounds
+  1137/639 against 984/964, inside A's spread; a read imports the same 212
+  modules on both sides); until vectors 17.07/17.12 s; warm read p50 188/182
+  ms, p90 210/196; write p50 75/60 ms, max 105/107 (rounds 99/112 against
+  121/94; a write imports one module more, `smriti.core.memwrite`); wake
+  728/772 ms, slower in both rounds, but it imports the same 149 modules and
+  runs no code these commits change, and eight alternating runs afterwards
+  gave 716 against 723 ms (spreads 692-786 and 702-897); `smriti status`
+  298/307 ms; CLI read 12.56/12.69 s; `smriti index` 16.05/16.22 s unchanged
+  and 16.28/16.50 s with five new files (rounds 16.06/16.04 against
+  16.62/15.82, and 16.60/15.95 against 17.14/15.86); memory 46/46 MB and
+  1039/1037 MB. Top 5 the same for all queries; the wake briefings identical
+  (9,478 characters). The nightly's new costs, measured apart: a typical
+  day's render 20 ms more, the largest day's 1.3 s more; a digest's or a
+  rollup's mask under a millisecond.
 - **H11.1, H11.5, H11.10 done** (2026-11-06, merged at `498ce0e` after a Codex diff
   review; its two findings, the capture override and the metrics scrub, fixed). Capture is off unless `daylog.json` says
   `"capture": true` (the default sources; the installer's `--capture` writes it) or

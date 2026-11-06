@@ -60,7 +60,9 @@ log needs only a collector, not new instrumentation.
   presence injection. LLM calls happen in exactly three places: nightly digest,
   boundary rollups, morning message composition.
 - **Subscription seats only.** Digest/rollup/morning run `claude -p` primary,
-  `codex exec` fallback (Suti's ruling 2026-09-04). No per-token API billing.
+  `codex exec` fallback (Suti's ruling 2026-09-04), opt-in since hardening
+  H12.2 (`"nightly_fallback": "codex_cli"` in `daylog.json`; the reference
+  install sets it). No per-token API billing.
 - **At-least-once capture, exactly-once log.** Capture may re-read source
   ranges after a crash; the log stays duplicate-free because every turn
   carries a stable identity and all writers dedupe against it (see Design 1).
@@ -195,10 +197,10 @@ local (UTC+10) day; 03:00 is the cutoff for that day's digest.
    the rollup manifest scan in step 5 — late arrivals invalidate downstream
    artifacts regardless of age.
 3. **Render** `DD.md` from the sorted JSONL.
-4. **Digest** — one `claude -p` call (codex fallback; each attempt and
-   outcome recorded in the night's status), no tools, text in → text out →
-   `DD-digest.md` with `input_hash`. Highlights, decisions, threads, a light
-   summary of autonomous activity.
+4. **Digest** — one `claude -p` call (codex fallback when configured; each
+   attempt and outcome recorded in the night's status), no tools, text in →
+   text out → `DD-digest.md` with `input_hash`, masked as it is written.
+   Highlights, decisions, threads, a light summary of autonomous activity.
 5. **Rollups — scan, not boundary-trigger.** Enumerate all *closed* periods
    (weeks/months/years) missing a rollup or whose member digests changed;
    generate each with one call, newest first, capped per night (default 2)
@@ -225,7 +227,9 @@ hash; re-running a night that already completed is a no-op.
    has no tools (the digest's flags); with `morning_web_search` on, it has web
    search and nothing else (no MCP, no file tools), fetches broad world
    headlines and picks 3–5 worth knowing. The prompt offers headlines only
-   when the call can search.
+   when the call can search. If the call fails and the nightly's fallback is
+   on (H12.2), the fallback composes instead, from the digest alone: the
+   digest-only prompt, no web search, and the codex seat's own isolation.
 3. Mark the entry `sending`, if the claim is still this run's (a run that
    outlived its claim stops here), fail-closed: a crash after this point
    means a silent morning, never a double send. Then smriti's own code
