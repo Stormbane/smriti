@@ -46,7 +46,9 @@ def test_status_loads_neither_sqlite_vec_nor_the_indexer(_isolated_memory_root: 
         "import contextlib, io\nfrom smriti.cli import main\n"
         "with contextlib.redirect_stdout(io.StringIO()), contextlib.suppress(SystemExit):\n"
         "    main(['status'])",
-        ["numpy", "sqlite_vec", "smriti.store.indexer", "asyncio"])
+        # And, with no embedding service running, nothing to reach one with.
+        ["numpy", "sqlite_vec", "smriti.store.indexer", "asyncio",
+         "socket", "subprocess", "secrets", "hmac", "base64"])
     assert not any(imported.values()), imported
 
 

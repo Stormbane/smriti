@@ -26,16 +26,19 @@ import json
 import logging
 import math
 import os
-import secrets
-import socket
-import subprocess
 import sys
 import threading
 import time
 import weakref
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # Imported where they are used: `smriti status` asks only the discovery
+    # file when no service runs, and needs neither (nor secrets).
+    import socket
+    import subprocess
 
 from smriti.embed.identity import Embedded, EmbeddingIdentity, EmbeddingUnavailable
 from smriti.embed.protocol import (
@@ -98,6 +101,8 @@ class _Stale(Exception):
 def _peer_closed(sock: socket.socket) -> bool:
     """Whether an idle connection has something to read: only its end, since the service
     sends nothing unasked."""
+    import socket
+
     try:
         sock.settimeout(0.0)  # every later read and write sets its own deadline
         sock.recv(1, socket.MSG_PEEK)
@@ -406,6 +411,9 @@ class ServiceEmbedding:
     def _connect(self, found: Discovery, key: bytes, paths: ServicePaths, deadline: float,
                  where: tuple[str, str, int]) -> _Conn:
         """A new connection to the service in ``found``, authenticated both ways."""
+        import secrets
+        import socket
+
         # A live service accepts on loopback at once. Nobody listening is refused
         # on POSIX, but on Windows only after about 2 s of retries: a connect that
         # takes this long is as good as refused (_recover then checks the lock).
@@ -539,6 +547,8 @@ class ServiceEmbedding:
 
 def spawn_service(paths: ServicePaths) -> subprocess.Popen[bytes]:
     """Start ``python -m smriti embed serve --root <root>`` with a hidden console."""
+    import subprocess
+
     # A hidden console, never DETACHED_PROCESS: a process with no console makes
     # every console child it runs open a visible window.
     flags = 0

@@ -33,15 +33,15 @@ one, so every pairing of versions works; the protocol number is unchanged.
 
 from __future__ import annotations
 
-import base64
 import hashlib
-import hmac
 import json
 import re
-import socket
 import struct
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import socket  # only its type: the frames work on any socket the caller made
 
 PROTOCOL = 1
 MAX_FRAME = 4 * 1024 * 1024  # bytes in one frame, either way
@@ -117,21 +117,29 @@ def is_nonce(value: object) -> bool:
 
 
 def server_proof(key: bytes, client_nonce: str, server_nonce: str, instance: str) -> str:
+    import hmac  # here, not at the top: a reader of the discovery file needs none of it
+
     msg = f"smriti-embed/server|{client_nonce}|{server_nonce}|{instance}".encode()
     return hmac.new(key, msg, hashlib.sha256).hexdigest()
 
 
 def client_proof(key: bytes, client_nonce: str, server_nonce: str) -> str:
+    import hmac
+
     msg = f"smriti-embed/client|{server_nonce}|{client_nonce}".encode()
     return hmac.new(key, msg, hashlib.sha256).hexdigest()
 
 
 def proofs_match(given: object, expected: str) -> bool:
+    import hmac
+
     return isinstance(given, str) and hmac.compare_digest(given.encode(), expected.encode())
 
 
 def encode_vectors(vectors: list[list[float]]) -> str:
     """Vectors as base64 float64: exact (JSON floats are too, but three times larger)."""
+    import base64
+
     flat = [x for v in vectors for x in v]
     return base64.b64encode(struct.pack(f"<{len(flat)}d", *flat)).decode("ascii")
 
@@ -139,6 +147,8 @@ def encode_vectors(vectors: list[list[float]]) -> str:
 def decode_vectors(text: object, count: int, dim: int) -> list[list[float]]:
     if not isinstance(text, str):
         raise ProtocolError("vectors missing")
+    import base64
+
     try:
         raw = base64.b64decode(text, validate=True)
     except ValueError as exc:

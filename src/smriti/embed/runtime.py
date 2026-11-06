@@ -17,7 +17,6 @@ import json
 import logging
 import os
 import re
-import secrets
 import stat
 import sys
 import time
@@ -71,6 +70,8 @@ def load_key(runtime: Path, *, create: bool = True) -> bytes:
     except FileNotFoundError:
         if not create:
             raise
+    import secrets  # only to make a key: reading one, or a discovery file, needn't load it
+
     tmp = runtime / f".{_KEY_NAME}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
     try:
