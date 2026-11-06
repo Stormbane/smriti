@@ -434,12 +434,14 @@ def test_the_running_scripts_directory_is_not_searched(
     index write."""
     import smriti.profiles as profiles
 
-    before = profiles._search_path()
     scripts = write_profile_package(tmp_path / "tree" / ".smriti")
     main = types.ModuleType("__main__")
     main.__file__ = str(scripts / "wake.py")
     main.__spec__ = None
     monkeypatch.setitem(sys.modules, "__main__", main)
+    # Read with the same __main__: under the `pytest` console script the real
+    # one's directory is skipped too, so a reading taken before the swap differs.
+    before = profiles._search_path()
     monkeypatch.syspath_prepend(str(scripts))
 
     assert profiles._search_path() == before
