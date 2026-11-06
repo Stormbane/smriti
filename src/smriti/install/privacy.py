@@ -363,11 +363,14 @@ def redact_url(url: str) -> str:
 def _git(root: Path, *args: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
     # No console of its own: the nightly runs windowless, and a console child of
     # a windowless parent opens a visible window (smriti.daylog.schedule).
+    flags = 0
+    if sys.platform == "win32":  # a statement, which mypy narrows on every platform
+        flags = subprocess.CREATE_NO_WINDOW
     return subprocess.run(
         ["git", "-C", str(root), *args],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         input=stdin, stdin=None if stdin is not None else subprocess.DEVNULL, timeout=60,
-        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        creationflags=flags,
     )
 
 

@@ -117,12 +117,15 @@ def _run_script(script: Path, root: Path, tag: str, *, push: bool, timeout: int)
     # Wait, but never kill: killing the script mid-run cuts off its
     # commit/push/logging, and a killed git leaves .git/*.lock behind.
     # On timeout the script is left to finish on its own.
+    flags = 0
+    if sys.platform == "win32":  # a statement, which mypy narrows on every platform
+        flags = subprocess.CREATE_NO_WINDOW
     proc = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env=env,
-        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        creationflags=flags,
     )
     try:
         code = proc.wait(timeout=timeout)
