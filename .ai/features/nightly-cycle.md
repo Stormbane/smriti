@@ -33,6 +33,17 @@ introspection work.
 > cwd is smriti's own llm-workdir gives no turns. `smriti logd --rescan SOURCE` reads
 > one source's files again from the start, to backfill; dedup drops what the log holds.
 
+> **Since 2026-11-06 (hardening H12.11-H12.13):** one nightly at a time per memory root,
+> held by a run lock from the reconcile to the status file; a second run waits 10 s,
+> then skips (ok, not failed) without touching the status file. A digested day is
+> rendered and digested from one read of its turns, so a digest's `input_hash` is the
+> hash of the turns it summarised. Digests and rollups record `prompt_fp`, the
+> fingerprint of their prompts, budgets, provider chain and names, and a rollup records
+> `members_hash`, a manifest of its members' content read before its call: a different
+> one makes the artifact stale. An artifact written before H12.12 has neither and keeps
+> its old rule, so the upgrade regenerates nothing. The status file has a `backup` step:
+> the last commit and push from the backup log, and a failed one fails the night.
+
 ## Goal
 
 Replace the over-ambitious sleep pipeline with a narrow cycle built on a
@@ -157,9 +168,12 @@ log needs only a collector, not new instrumentation.
   derives the `[autonomous: …]` marker per session per day; markers are a
   property of the rendered view, never of the captured record.
 - Derived artifacts per day: `DD.md` (rendered timeline) and `DD-digest.md`,
-  each carrying an `input_hash` (hash of the sorted turn IDs) in frontmatter.
+  each carrying an `input_hash` (hash of the sorted turn IDs) in frontmatter;
+  a digest's is the hash of the turns behind the text it summarised (H12.11).
   Rollups: `log/YYYY/MM/weekN.md`, `log/YYYY/MM.md`, `log/YYYY.md`, each with
-  a manifest of the input digests they consumed.
+  a manifest of the input digests they consumed: `members_hash` over their
+  content, and `inputs_hash` over their input hashes, the rule before H12.12.
+  Digests and rollups also carry `prompt_fp` (H12.12, see Design 4).
 
 ### 2. `smriti logd` — the watcher daemon
 
@@ -200,9 +214,14 @@ String formatting only, preview truncated, silent on any failure.
 
 ### 4. Sleep task — `smriti nightly` (~03:00)
 
-Takes the writer lock (waits briefly, then proceeds only if acquired —
-overlapping runs are impossible by construction). Target date: the just-closed
-local (UTC+10) day; 03:00 is the cutoff for that day's digest.
+Holds a run lock (`smriti.core.oslock`, named `nightly`, per memory root)
+from its first step to its status file, so a manual run and the scheduled one
+never overlap (H12.11; the writer lock this said it took was only ever held
+per write burst). A second run waits 10 s, then returns a status that says it
+skipped, ok and not failed, writes no status file and exits 0. When no lock
+file can be opened at all, the night runs as before and its status says
+`"run_lock": "unavailable"`. Target date: the just-closed local (UTC+10) day;
+03:00 is the cutoff for that day's digest.
 
 1. **Reconcile sweep** — collector logic over the same per-source state and
    dedup rules; backstop for daemon gaps. May land turns in any historical
@@ -212,19 +231,43 @@ local (UTC+10) day; 03:00 is the cutoff for that day's digest.
    the day's current `input_hash` against its rendered/digest artifacts and
    regenerate any that are stale. Changed digests then propagate through
    the rollup manifest scan in step 5 — late arrivals invalidate downstream
-   artifacts regardless of age.
-3. **Render** `DD.md` from the sorted JSONL.
+   artifacts regardless of age. A digest is also stale when its `prompt_fp`
+   differs from the current one (H12.12): the fingerprint of the digest's
+   three prompts, the budgets that decide what its calls see, the provider
+   chain, and the user's and agent's names. A digest without one, written
+   before H12.12, is judged by its input hash alone.
+3. **Render** `DD.md` from the sorted JSONL. A day that is digested tonight is
+   rendered from one read of its turns, and the digest gets that rendered
+   text, those turns and their hash (H12.11): a turn appended after the read
+   leaves both stale for the next night, never a digest that claims a turn its
+   text lacks.
 4. **Digest** — one `claude -p` call (codex fallback when configured; each
    attempt and outcome recorded in the night's status), no tools, text in →
-   text out → `DD-digest.md` with `input_hash`, masked as it is written.
-   Highlights, decisions, threads, a light summary of autonomous activity.
+   text out → `DD-digest.md` with `input_hash` and `prompt_fp`, masked as it
+   is written. Highlights, decisions, threads, a light summary of autonomous
+   activity.
 5. **Rollups — scan, not boundary-trigger.** Enumerate all *closed* periods
-   (weeks/months/years) missing a rollup or whose member digests changed;
+   (weeks/months/years) missing a rollup or whose members changed;
    generate each with one call, newest first, capped per night (default 2)
    so a long outage catches up over a few nights rather than burning the
-   seat in one.
+   seat in one. A rollup is stale when its `members_hash`, a manifest of its
+   members' content taken from the read its call was built from (before the
+   call), or its `prompt_fp` no longer matches (H12.12): a digest rewritten
+   from the same turns makes its week stale, and a new week its month. A
+   rollup written before H12.12 has only `inputs_hash`, over its members'
+   input hashes (a member rollup's file hash), and is judged by that until it
+   is regenerated; new rollups write it too, so an older smriti reads them as
+   current.
 6. **Reindex**: `smriti index` incremental + qmd update/embed, best-effort.
-7. Write `log/.nightly-status.json` (per-step outcomes; consumed by wake
+7. **Witness**: commit the tree, timestamp its HEAD, push; the step records
+   what the push did.
+8. **Backup** (H12.13): the last commit and push from
+   `.git/smriti-backup.jsonl`, whoever made them (the witness, the hourly
+   task), and since when pushes fail. A failed last commit or push fails the
+   night, so the wake names it; a push with nowhere to go (no upstream and no
+   `origin`, or a detached HEAD) is skipped, not failed. `smriti status` shows
+   the same line.
+9. Write `log/.nightly-status.json` (per-step outcomes; consumed by wake
    briefing: "while you slept" + failure surfacing).
 
 Idempotent by construction: every step is derive-from-inputs with an input

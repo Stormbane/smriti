@@ -17,8 +17,31 @@ All notable changes to this project are documented here, following
   platform's, as before H1.4.
 - The credential scrub is about 30 times faster on ordinary text (50 kB: 19 ms to
   0.6 ms), with the same masks.
+- Digests and rollups record `prompt_fp`, a fingerprint of their prompts, budgets,
+  provider chain and the two names, and rollups `members_hash`, a manifest of their
+  members' content; a different one makes them stale, and the next nights redo
+  them within the usual caps. Those written before have neither and are judged by
+  the old rule until they are next regenerated, so upgrading redoes nothing.
+- A failed backup commit or push shows: `smriti status` prints the last commit and
+  push from `.git/smriti-backup.jsonl` and since when pushes fail, the nightly
+  records them as a `backup` step that fails the night, and `smriti backup` prints
+  what it did (still exiting 0). A push with nowhere to go isn't a failure. The
+  deployed `backup.py` tags its log lines with the caller's run; reinstall to get it.
 
 ### Fixed
+
+- A manual `smriti nightly` and the scheduled one could run at once. One run holds
+  a lock for the memory root; a second waits 10 seconds, then skips without
+  touching the status file.
+- A turn appended between a day's render and its digest was counted in the
+  digest's hash but missing from its text, and a later render could make the pair
+  look current: the turn never reached a digest. Render and digest now work from
+  one read of the day.
+- A digest regenerated from the same turns left its week's rollup current, and a
+  rollup's manifest was taken after its LLM call, so a member changed during the
+  call passed as read.
+- The nightly's status file and the witness proof were written through temp files
+  another writer could share.
 
 - The morning message falls back again when Claude Code fails, if the nightly's
   fallback is on: from the digest alone, without web search. Since `d2e0518` a

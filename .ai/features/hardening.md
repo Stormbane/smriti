@@ -787,6 +787,80 @@ a recheck.
   "<dir>/*/*/*/rollout-*.jsonl"}]`, run `smriti logd --once` until a pass adds
   nothing, then remove the source and the copies. Ids match the rewritten
   records, so what the log holds is dropped.
+- **H12.11 implemented** (2026-11-06, `hardening/h12n`; not yet reviewed or
+  merged). A run holds a named OS lock (`nightly`, per memory root) from its
+  reconcile to its status file. A second run waits 10 s, then returns a status
+  saying it skipped (ok, not failed), writes no status file and exits 0; when no
+  lock file can be opened at all, the night runs as before and says `"run_lock":
+  "unavailable"` (oslock gains `try_lock`: held, busy or unavailable). Render,
+  digest and rollup already wrote through `write_atomic` (H12.1's memwrite), whose
+  temp name is the process's and thread's; the status file (named by the second)
+  and the witness proof (a fixed `.tmp`) now do too, and `write_atomic` takes
+  bytes. A digested day is rendered and digested from one read of its turns
+  (`render_snapshot`): the digest gets the masked rendered text, those turns and
+  their hash, and records that hash, so a turn appended after the read leaves
+  both stale. Before, the digest hashed the turns as it began, and a later render
+  alone (a day past the digest cap) made the pair look current: the turn never
+  reached a digest. The model gets the same text as before (a test holds the
+  snapshot's equal to DD.md read back). Tests: a barrier test of overlapping runs
+  (one digests, the other skips and leaves the first's status), a run that waits
+  for one finishing, eight concurrent writers of each artifact, and a turn
+  appended between render and digest, with and without a render-only night
+  after; each fails on `388cb24`'s code. Of the brief's two options for the
+  snapshot, the first: the other would hold the writer lock across a render and
+  a digest's LLM calls, holding up capture for minutes.
+- **H12.12 implemented** (same branch). A rollup records `members_hash`, a
+  manifest of its members' content (line endings aside) from the one read its
+  body is built from, before its call: a digest regenerated from the same turns
+  makes its week stale, a regenerated week its month. Digests and rollups record
+  `prompt_fp` (their prompts, a digest's three; the budgets that decide what the
+  call sees; the provider chain; both names), and a different one makes them
+  stale. The upgrade regenerates nothing: an artifact without the new fields, as
+  every existing one is, is judged by its old rule (the input hash; a rollup's
+  `inputs_hash`) and gets them when it is next regenerated for a reason that rule
+  sees. New rollups write `inputs_hash` by the old rule too, so an older smriti
+  reads them as current. Heads are read from their first 8 KiB, which gives the
+  2,000 characters reading the whole file did. One existing test changed: the
+  scan test built a rollup without the config, so its prompt named the default
+  agent; it passes the config now, as the nightly does. Scheduling check
+  (`scripts/bench_nightly.py --schedule`, a copy of the reference tree, a stub
+  model, capture off, five nights): `388cb24`, master `1af2076` and this branch
+  schedule the same each night. Plain: 11-06's digest (three calls), then
+  nothing. With a late turn appended to 10-15: that digest and
+  `2026/10/week3.md` (the week by its old rule) the first night, `2026/10.md`
+  the second, `2026/11/week1.md` when it closes. Nothing because of the upgrade.
+- **H12.13 implemented** (same branch). `smriti.backup.backup_status` reads the
+  last commit and push from `.git/smriti-backup.jsonl`, newest line first (a full
+  log in 1-2 ms), and since when pushes fail. `smriti status` prints it in a line
+  ("push FAILED since ..., last tried ...: <git's reason>"); the nightly records
+  it as a `backup` step, and a failed last commit or push fails the night, so the
+  wake names it. Where it differs from the brief, which asked for the outcome to
+  be reported: failing the night is what makes it seen, and a push with nowhere
+  to go (no upstream and no `origin`, or a detached HEAD) is reported as skipped,
+  not failed, since the hourly task pushes on every install and a remote-less
+  one's nights would otherwise fail daily. `trigger` returns what its own run did,
+  from its lines: the deployed script now puts the caller's `SMRITI_BACKUP_RUN`
+  on each line and its tag on the push line (an older script's lines are matched
+  by position and tag; **the reference install's `.smriti/backup.py` gets the run
+  ids when the installer redeploys it**). The witness step records the push it
+  triggered; `smriti backup` prints the outcome and still exits 0; the script
+  still never blocks or fails its caller. Tests use real git: an unreachable
+  remote (status says FAILED and since when, the same "since" an hour later), a
+  working one, none at all, and the witness's push.
+- **Nightly benchmark** (`scripts/bench_nightly.py`, 2026-11-06; fresh copies of
+  the reference tree's `log/`, daylog.json and voice transcripts, read once
+  before timing; alternating rounds, medians). Master `1af2076` against this
+  branch, eight rounds: reconcile 443 / 456 ms (the same code); the stale-day
+  scan 766 / 622; the render of the three latest days and the largest 1869 /
+  1868; the rollup scan 27 / 26; the backup status read - / 2 (a full synthetic
+  log); a whole nightly with both caps at 0 and no index or witness 1058 / 919
+  (the branch's with the backup read). Against `388cb24`, five rounds: 520 /
+  436, 757 / 611, 1830 / 1879 (1.03, inside both spreads; 1.00 over the eight
+  against master), 27 / 26, 1012 / 925. No measure slower beyond noise. `smriti
+  status` on a copy of the reference index: 259 against 267 ms over eleven
+  alternating runs each (spreads 240-292 and 245-273); its new backup line costs
+  about 5 ms, importing `smriti.backup` (three dataclasses) and reading a full
+  log, the cost of the new information.
 - **H11.1, H11.5, H11.10 done** (2026-11-06, merged at `498ce0e` after a Codex diff
   review; its two findings, the capture override and the metrics scrub, fixed). Capture is off unless `daylog.json` says
   `"capture": true` (the default sources; the installer's `--capture` writes it) or
