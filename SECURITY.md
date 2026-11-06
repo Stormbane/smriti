@@ -109,8 +109,9 @@ listens on loopback only.
   `"nightly_fallback"` in `daylog.json` or `SMRITI_NIGHTLY_FALLBACK` names one
   (`codex_cli` in practice). *When:* the nightly (`smriti nightly`, 03:00), for
   at most 10 days (`--digest-cap`) and 2 rollups (`--rollup-cap`) a night; a
-  long day goes in parts and a merge. *Off:* capture off (nothing to digest), both caps at 0, or
-  no `smriti-nightly` task.
+  long day goes in parts and a merge. *Off:* both caps at 0, or no `smriti-nightly`
+  task. Turning capture off stops new collection only: the nightly still digests
+  the day-logs already on disk that have no current digest, and rolls them up.
 - **The morning message.** Yesterday's digest, at most 20,000 characters, goes
   to `claude -p` (and to the fallback, when one is set and `claude -p` fails);
   the message it composes goes to your `notify_cmd`, on its stdin, and from
