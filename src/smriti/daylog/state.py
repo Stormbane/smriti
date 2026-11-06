@@ -49,10 +49,15 @@ class FileState:
     waiting: int = 0
     # The records skipped as longer than one read: [offset, bytes, unix time].
     skipped: list[list[int]] = field(default_factory=list)
+    # Passes in which the file grew while its offset stayed put; two or more is stuck.
+    stalled: int = 0
 
 
 # Saved only when set, so the state of a file that never needed them looks as it did.
-_OPTIONAL = {"waiting": 0, "skipped": []}
+_OPTIONAL = {"waiting": 0, "skipped": [], "stalled": 0}
+
+# A file that grew in this many passes without its offset moving is stuck.
+STUCK_PASSES = 2
 
 
 @dataclass
@@ -74,6 +79,7 @@ def _file_state(raw: dict[str, Any]) -> FileState:
         parse_errors=int(raw.get("parse_errors", 0)),
         waiting=int(raw.get("waiting", 0)),
         skipped=[[int(x) for x in entry] for entry in raw.get("skipped", [])][-MAX_SKIPS_KEPT:],
+        stalled=int(raw.get("stalled", 0)),
     )
 
 

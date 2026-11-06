@@ -17,6 +17,10 @@ import os
 import sys
 import traceback
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from smriti.daylog.state import SourceState
 
 # Ensure UTF-8 output on Windows
 if sys.platform == "win32":
@@ -187,6 +191,8 @@ def _print_daylog_status() -> None:
                     f"  {name}: {scanning} (last scan {scan}s ago, "
                     f"{h['files']} files, {h['parse_errors']} parse errors)"
                 )
+                for note in _file_notes(state.sources[name]):
+                    print(f"    {note}")
             if state.corrupt_lines or state.torn_repairs:
                 days = ", ".join(f"{day}: {n}" for day, n in sorted(state.corrupt_lines.items()))
                 corrupt = _count(sum(state.corrupt_lines.values()), "corrupt line")
@@ -200,6 +206,39 @@ def _print_daylog_status() -> None:
 
 def _count(n: int, noun: str) -> str:
     return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
+_MAX_FILE_NOTES = 10  # files named per source; the rest are counted
+
+
+def _file_notes(source: SourceState) -> list[str]:
+    """What needs a look in one source: files stuck or waited for, and records skipped."""
+    from datetime import datetime
+
+    from smriti.daylog.state import STUCK_PASSES
+
+    def mib(n: int) -> str:
+        return f"{n / 2**20:.1f} MiB"
+
+    notes: list[str] = []
+    for path, f in sorted(source.files.items()):
+        if f.waiting > f.offset:
+            notes.append(f"waiting for the end of a record longer than one read, at byte "
+                         f"{f.offset:,} of {path} ({mib(f.waiting - f.offset)} so far)")
+        elif f.stalled >= STUCK_PASSES and f.size > f.offset:
+            notes.append(f"STUCK at byte {f.offset:,} of {f.size:,} in {path}: it grew in "
+                         f"{f.stalled} passes and capture read nothing more of it")
+    if len(notes) > _MAX_FILE_NOTES:
+        notes[_MAX_FILE_NOTES:] = [f"and {len(notes) - _MAX_FILE_NOTES} more files like these"]
+    skipped = [(skip, path) for path, f in source.files.items() for skip in f.skipped]
+    if skipped:
+        (offset, size, when), path = max(skipped, key=lambda item: item[0][2])
+        files = len({path for _, path in skipped})
+        at = datetime.fromtimestamp(when).strftime("%Y-%m-%d %H:%M")
+        notes.append(f"skipped {_count(len(skipped), 'record')} longer than one read in "
+                     f"{_count(files, 'file')}; the last {mib(size)} at byte {offset:,} of "
+                     f"{path}, {at}")
+    return notes
 
 
 _ROOT_HELP = ("Memory root (default: $SMRITI_ROOT, else ~/.narada if it exists, "

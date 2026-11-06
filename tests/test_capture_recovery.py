@@ -321,3 +321,84 @@ def test_skipping_a_long_record_reads_it_a_step_at_a_time(tmp_path: Path) -> Non
     assert len(report.skipped) == 1 and report.skipped[0].size > 40 * MIB
     assert peak < 12 * MIB, f"peak {peak / MIB:.1f} MiB"  # one read and one step, not 40 MiB
     assert [t.text for t in read_day_turns(cfg.day_jsonl(DAY))] == ["after"]
+
+
+# ------------------------------------------------------------ a stuck source is visible
+
+
+def _configured(tmp_path: Path) -> tuple[DaylogConfig, Path]:
+    """A source configured in the memory root's daylog.json, as `smriti status` reads it."""
+    from smriti.core.tree import tree_root
+    from smriti.daylog.config import load_config
+
+    transcripts = tmp_path / "transcripts"
+    transcripts.mkdir()
+    root = tree_root()
+    (root / ".smriti").mkdir(parents=True, exist_ok=True)
+    (root / ".smriti" / "daylog.json").write_text(json.dumps({"sources": [
+        {"name": "claude", "kind": "claude_jsonl", "glob": str(transcripts / "*.jsonl")}]}),
+        encoding="utf-8")
+    return load_config(root), transcripts / "5a3e0001.jsonl"
+
+
+def _status(capsys: pytest.CaptureFixture[str]) -> str:
+    from smriti.cli import main
+
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    return capsys.readouterr().out
+
+
+def test_status_names_a_file_that_grows_while_capture_reads_none_of_it(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str],
+        caplog: pytest.LogCaptureFixture) -> None:
+    cfg, transcript = _configured(tmp_path)
+    _say(transcript, _claude(0, "read, and long enough that the head fingerprint stays " * 5))
+    collect_once(cfg)
+    stuck_at = transcript.stat().st_size
+    with caplog.at_level("WARNING", logger="smriti.daylog.collect"):
+        for minute in (1, 2, 3):  # old Mac line endings: no line ever ends, as capture sees it
+            _say(transcript, _claude(minute, "unread")[:-1] + "\r")
+            collect_once(cfg)
+    fstate = DaylogState.load(cfg.state_path).sources["claude"].files[str(transcript)]
+    assert fstate.offset == stuck_at and fstate.stalled == 3
+    assert sum("is stuck at byte" in r.getMessage() for r in caplog.records) == 1  # said once
+    out = _status(capsys)
+    assert (f"STUCK at byte {stuck_at:,} of {transcript.stat().st_size:,} in {transcript}: "
+            "it grew in 3 passes") in out
+
+    _say(transcript, "\n")  # the line ends at last: capture moves, and the file isn't stuck
+    collect_once(cfg)
+    assert DaylogState.load(cfg.state_path).sources["claude"].files[str(transcript)].stalled == 0
+    assert "STUCK" not in _status(capsys)
+
+
+def test_a_partial_line_that_stops_growing_is_not_stuck(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    cfg, transcript = _configured(tmp_path)
+    _say(transcript, _claude(0, "read"), _claude(1, "the writer died mid-line")[:30])
+    _passes(cfg, 4)  # it grew once, then never again
+    fstate = DaylogState.load(cfg.state_path).sources["claude"].files[str(transcript)]
+    assert fstate.stalled < 2
+    out = _status(capsys)
+    assert "STUCK" not in out and "waiting" not in out and "skipped" not in out
+
+
+def test_status_says_a_long_record_is_waited_for_and_then_skipped(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    cfg, transcript = _configured(tmp_path)
+    _say(transcript, _claude(0, "before"), _huge(1, 9 * MIB, end=False))
+    _passes(cfg, 2)
+    start = len(_claude(0, "before").encode())
+    out = _status(capsys)
+    assert (f"waiting for the end of a record longer than one read, at byte {start:,} of "
+            f"{transcript} (") in out
+    assert "STUCK" not in out  # the waiting line says why it doesn't move
+
+    _say(transcript, "\n", _claude(2, "after"))
+    collect_once(cfg)
+    out = _status(capsys)
+    assert "waiting" not in out
+    assert "skipped 1 record longer than one read in 1 file; the last 9.0 MiB at byte " in out
+    assert f"{start:,} of {transcript}" in out
+    assert "1 parse errors" in out

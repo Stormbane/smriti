@@ -44,6 +44,12 @@ as a partial line is, and the file's state says so
 (``FileState.waiting``); a later pass looks only at the bytes that came
 since. Before, a pass read the same 8 MiB again forever, and every later
 turn in the file was lost without an error.
+
+A stuck source is visible: a file that grew in two or more passes while
+its offset didn't move (``FileState.stalled``; any cause, a record
+waited for, line endings an adapter can't split, a bug) is logged when
+it becomes stuck, and ``smriti status`` names it, with the records
+skipped and the ones waited for.
 """
 
 from __future__ import annotations
@@ -58,7 +64,13 @@ from pathlib import Path
 from smriti.daylog.adapters import Adapter, get_adapter
 from smriti.daylog.config import DaylogConfig, SourceSpec
 from smriti.daylog.lock import writer_lock
-from smriti.daylog.state import MAX_SKIPS_KEPT, DaylogState, FileState, fingerprint_head
+from smriti.daylog.state import (
+    MAX_SKIPS_KEPT,
+    STUCK_PASSES,
+    DaylogState,
+    FileState,
+    fingerprint_head,
+)
 from smriti.daylog.writer import AppendPass, append_turns_unlocked
 
 log = logging.getLogger(__name__)
@@ -141,11 +153,25 @@ def _collect_locked(cfg: DaylogConfig, state: DaylogState, batch: AppendPass) ->
                 fstate.fingerprint and fingerprint and fingerprint != fstate.fingerprint
             ):
                 # truncated or recreated: re-read, dedup absorbs
-                fstate.offset = fstate.waiting = 0
+                fstate.offset = fstate.waiting = fstate.stalled = 0
+            grew, start = size > fstate.size, fstate.offset
             fstate.size = size
             fstate.fingerprint = fingerprint
             _read_new(cfg, state, spec, adapter, path, fstate, report, batch)
+            _note_progress(path, fstate, start, grew)
     return report
+
+
+def _note_progress(path: Path, fstate: FileState, start: int, grew: bool) -> None:
+    """Count the passes in which the file grew while its offset stayed put."""
+    if fstate.offset != start or fstate.offset >= fstate.size:
+        fstate.stalled = 0
+    elif grew:
+        fstate.stalled += 1
+        if fstate.stalled == STUCK_PASSES and not fstate.waiting:
+            log.warning("capture: %s is stuck at byte %d of %d: it grew in %d passes and "
+                        "nothing more of it could be read", path, fstate.offset, fstate.size,
+                        fstate.stalled)
 
 
 def _read_new(cfg: DaylogConfig, state: DaylogState, spec: SourceSpec, adapter: Adapter,
