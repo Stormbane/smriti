@@ -846,7 +846,21 @@ a recheck.
   triggered; `smriti backup` prints the outcome and still exits 0; the script
   still never blocks or fails its caller. Tests use real git: an unreachable
   remote (status says FAILED and since when, the same "since" an hour later), a
-  working one, none at all, and the witness's push.
+  working one, none at all, and the witness's push. Codex diff review: three P2s,
+  all in `backup.py`, fixed with regression tests that fail without the fix. A
+  remote defined outside `.git/config` (an included file, the global or the
+  worktree config) read as "nowhere to push", and the night as ok: git decides
+  now (`privacy.push_has_destination`, a remote `git remote` lists or a URL or
+  path, the rule `_is_direct` uses; not `git remote get-url`, which knows only
+  the repository's own remotes while `git push` uses a global one too), asked
+  only when the last push failed (one `git remote`, about 40 ms on that path; a
+  healthy install's read is unchanged). A script that exited non-zero before
+  logging read as "nothing to commit, up to date": the run is now not ok and says
+  how it exited, keeping only what it logged. And a commit older than a
+  failure, success, failure run of pushes stretched the streak back past the
+  success. Found on the way, not changed: the privacy check's push URLs come from
+  `git remote get-url`, so the installer names no destination for a remote
+  defined only in the global config, though the backup pushes to it.
 - **Nightly benchmark** (`scripts/bench_nightly.py`, 2026-11-06; fresh copies of
   the reference tree's `log/`, daylog.json and voice transcripts, read once
   before timing; alternating rounds, medians). Master `1af2076` against this
