@@ -68,7 +68,7 @@ def runtime_dir(*, create: bool = True) -> Path:
     """The runtime directory, created and checked (only checked when ``create`` is False)."""
     env = os.environ.get(RUNTIME_ENV, "").strip()
     path = Path(env).expanduser() if env else default_runtime_dir()
-    if create:
+    if create and not path.is_dir():  # a mkdir that finds it there costs a failed syscall
         path.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.path.lexists(path):
         _verify_private_dir(path)

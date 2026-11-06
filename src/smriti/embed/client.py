@@ -186,6 +186,7 @@ class ServiceEmbedding:
         self._exited: dict[int, float] = {}  # pid of a service this started -> when seen gone
         self._kept: _Conn | None = None  # the connection kept for the next request
         self._kept_lock = threading.Lock()
+        self._service_paths: dict[str, ServicePaths] = {}  # by runtime directory
 
     def close(self) -> None:
         """Close the connection kept for the next request, if there is one."""
@@ -253,8 +254,16 @@ class ServiceEmbedding:
         return pid_alive(found.pid)
 
     def _paths(self) -> tuple[Path, ServicePaths]:
+        """The runtime directory and this root's files in it.
+
+        The files are worked out once per runtime directory: resolving the
+        root took 0.6 ms of every request on Windows.
+        """
         runtime = runtime_dir()
-        return runtime, service_paths(runtime, self.root)
+        paths = self._service_paths.get(str(runtime))
+        if paths is None:
+            paths = self._service_paths[str(runtime)] = service_paths(runtime, self.root)
+        return runtime, paths
 
     # The provider interface. The model is the service's: these are what it last said.
     @property
