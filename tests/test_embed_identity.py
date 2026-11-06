@@ -505,6 +505,111 @@ def test_a_repair_with_the_wrong_model_writes_nothing(
     assert _pending(tree) == 1 and _vectors(tree, "notes/lantern.md") == []
 
 
+# ── A write and a backlog (H12.0c) ───────────────────────────────────
+
+
+class Counting(StubEmbedding):
+    """The stub, counting the texts it embeds."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.texts = 0
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        self.texts += len(texts)
+        return await super().embed(texts)
+
+
+def _pending_source(tree: Path, providers: Providers, name: str, chunks: int) -> str:
+    """A source of ``chunks`` chunks whose vectors are pending."""
+    path = tree / "notes" / name
+    path.write_text("# Ledger\n\n" + "".join(f"## Entry {i}\n\nSam logged crate {i}.\n\n"
+                                             for i in range(chunks)), encoding="utf-8")
+    providers.current = Down()
+    assert index_file_result(path, root=tree, db=_db(tree)).chunks == chunks
+    return f"notes/{name}"
+
+
+def _write(tree: Path) -> Any:
+    note = tree / "notes" / "lantern.md"
+    note.write_text("# Lantern\n\nAri hung a brass lantern by the door.\n", encoding="utf-8")
+    return index_file_result(note, root=tree, db=_db(tree))
+
+
+@pytest.mark.parametrize("service", [False, True], ids=["in-process", "through the service"])
+def test_a_write_with_a_large_backlog_embeds_only_its_own_chunks(
+        tree: Path, providers: Providers, monkeypatch: pytest.MonkeyPatch,
+        service: bool) -> None:
+    """Codex regression audit: a write filled other sources' pending vectors before it
+    returned, and its 32-chunk cap still admitted one whole source of any size, so a
+    write waited (up to the service's 30 s) for unrelated files."""
+    index_tree(root=tree, db=_db(tree))
+    _pending_source(tree, providers, "ledger.md", 200)
+    counting = providers.current = Counting()
+    monkeypatch.setenv("SMRITI_EMBED_SERVICE", "1" if service else "0")
+
+    result = _write(tree)
+
+    assert result.chunks == 1 and not result.vectors_pending and result.others_pending
+    assert counting.texts == 1  # its own chunk; the 200 are left to the repairs
+    assert _pending(tree) == 1
+
+
+def test_in_process_a_write_fills_small_pending_sources_within_its_budget(
+        tree: Path, providers: Providers) -> None:
+    index_tree(root=tree, db=_db(tree))
+    large = _pending_source(tree, providers, "ledger.md", 200)  # first in the repair's order
+    small = _pending_source(tree, providers, "moth.md", 3)
+    counting = providers.current = Counting()
+
+    result = _write(tree)
+
+    assert result.chunks == 1 and not result.vectors_pending
+    assert counting.texts == 1 + 3  # its own, and the small one; the large is skipped
+    assert _pending(tree) == 1
+    assert _vectors(tree, small) == _expected(StubEmbedding(), tree, small)
+    assert _vectors(tree, large) == []
+    assert fill_pending_vectors(db=_db(tree), max_chunks=32, strict=True) == 0  # never fits
+
+
+def test_a_backlog_left_by_writes_still_empties_through_the_nightly_index(
+        tree: Path, providers: Providers) -> None:
+    index_tree(root=tree, db=_db(tree))
+    large = _pending_source(tree, providers, "ledger.md", 200)
+    providers.current = StubEmbedding()
+    _write(tree)
+    assert _pending(tree) == 1
+
+    assert index_tree(root=tree, db=_db(tree))["indexed"] == 1  # `smriti index`, unchanged file
+
+    assert _pending(tree) == 0
+    assert _vectors(tree, large) == _expected(StubEmbedding(), tree, large)
+
+
+def test_a_backlog_left_by_writes_still_empties_through_the_service_loop(
+        tree: Path, providers: Providers, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    from tests.test_embed_service import Services, _wait
+
+    index_tree(root=tree, db=_db(tree))
+    large = _pending_source(tree, providers, "ledger.md", 200)
+    providers.current = StubEmbedding()
+    monkeypatch.setenv("SMRITI_EMBED_SERVICE", "1")
+    _write(tree)
+    assert _pending(tree) == 1  # the write left it
+
+    services = Services()
+    try:
+        svc = services.start(tree, pending_poll_s=0.05)
+        t0 = time.monotonic()
+        assert _wait(lambda: _pending(tree) == 0, 30)
+        assert svc.stats.repaired == 1 and time.monotonic() - t0 < 30
+    finally:
+        services.stop_all()
+    assert _vectors(tree, large) == _expected(StubEmbedding(), tree, large)
+
+
 # ── Without sqlite-vec (the base install) ────────────────────────────
 
 

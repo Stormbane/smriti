@@ -657,8 +657,12 @@ def index_file_result(path: Path, *, root: Path | None = None,
     vectors are of a model the index doesn't record, even on a fresh try),
     the chunks are still indexed for keyword search at once and the source
     is recorded with its vectors pending; repairs fill them in later
-    (:func:`fill_pending_vectors`). A successful write fills a few pending
-    sources itself.
+    (:func:`fill_pending_vectors`): the embedding service's loop, between
+    requests, and the nightly's :func:`index_tree`. A write never waits for
+    other sources' vectors through the service. Embedding in this process
+    (the service off), a successful write fills small pending sources
+    itself, within :data:`WRITE_REPAIR_CHUNKS` chunks; a larger one is left
+    to the nightly.
     """
     if root is None:
         root = tree_root()
@@ -689,9 +693,20 @@ def index_file_result(path: Path, *, root: Path | None = None,
                         rel_source, again)
             result = _commit_file(db, path, root, rel_source, st, chunks, None,
                                   f"the embedder doesn't match the index: {again}")
-    if result.others_pending and embedded is not None and not result.vectors_pending:
+    if (result.others_pending and embedded is not None and not result.vectors_pending
+            and not _service_repairs()):
         _fill_some_pending(db)
     return result
+
+
+def _service_repairs() -> bool:
+    """Whether this process embeds through the service (the choice
+    :func:`_get_embedding_provider` makes), whose own loop fills pending vectors."""
+    if _IN_PROCESS.get():
+        return False
+    from smriti.embed.client import service_enabled
+
+    return service_enabled()
 
 
 def _try_embed(texts: list[str]) -> tuple[Embedded | None, str]:
@@ -781,23 +796,31 @@ def _can_fill(db: Path) -> bool:
         conn.close()
 
 
+WRITE_REPAIR_CHUNKS = 32  # the most other sources' chunks a write embeds in-process
+
+
 def _fill_some_pending(db: Path) -> None:
-    """After a write that made its vectors, fill a few pending sources too (best effort)."""
+    """After a write that made its vectors in-process, fill a few small pending sources
+    too (best effort), strictly within :data:`WRITE_REPAIR_CHUNKS`."""
     try:
-        fill_pending_vectors(db=db, max_chunks=32)
+        fill_pending_vectors(db=db, max_chunks=WRITE_REPAIR_CHUNKS, strict=True)
     except Exception as exc:  # noqa: BLE001 — logged; the service and index runs repair too
         log.warning("filling pending vectors after a write failed: %s", exc)
 
 
 def fill_pending_vectors(*, db: Path | None = None,
                          embed: Callable[[list[str]], Embedded] | None = None,
-                         max_chunks: int = 64, busy_ms: int | None = None) -> int:
+                         max_chunks: int = 64, busy_ms: int | None = None,
+                         strict: bool = False) -> int:
     """Make the vectors of sources indexed while the embedder was unavailable.
 
     Takes pending sources in order until ``max_chunks`` chunks (always at
-    least one source), embeds their chunks as they are in the index, with
-    no lock held, then writes the vectors in one transaction, checking the
-    identity there. A source rewritten meanwhile is left to its writer.
+    least one source, unless ``strict``: then a source with more chunks than
+    the budget has left is skipped, for a later repair, so a caller never
+    embeds more than ``max_chunks``), embeds their chunks as they are in the
+    index, with no lock held, then writes the vectors in one transaction,
+    checking the identity there. A source rewritten meanwhile is left to its
+    writer.
     Returns how many sources now have their vectors. Raises
     :class:`StaleEmbedding` when the vectors aren't the index's model, and
     whatever ``embed`` raises. ``busy_ms`` bounds the wait for another
@@ -818,13 +841,22 @@ def fill_pending_vectors(*, db: Path | None = None,
         for source, mtime_ns, size in conn.execute(
                 "SELECT source, mtime_ns, size FROM sources WHERE vectors = 0 "
                 "ORDER BY source LIMIT 256").fetchall():
+            if strict:
+                (count,) = conn.execute("SELECT COUNT(*) FROM chunks WHERE source = ?",
+                                        (source,)).fetchone()
+                if total + count > max_chunks:
+                    continue  # more than the budget has left; its content isn't read
             rows = conn.execute("SELECT rowid, id, content FROM chunks WHERE source = ? "
                                 "ORDER BY rowid", (source,)).fetchall()
-            if picked and total + len(rows) > max_chunks:
+            if total + len(rows) > max_chunks and (picked or strict):
+                if strict:
+                    continue  # it grew since it was counted
                 break
             picked.append((source, (mtime_ns, size), [(r[0], r[1]) for r in rows],
                            [r[2] for r in rows]))
             total += len(rows)
+            if strict and total >= max_chunks:
+                break
         if not picked:
             return 0
         texts = [t for _, _, _, contents in picked for t in contents]
