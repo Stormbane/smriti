@@ -726,7 +726,8 @@ a recheck.
   longer than one 8 MiB read is skipped once its newline is written, 1 MiB at a
   time (peak memory one read, tested at 40 MiB), counted as a parse error and
   recorded (offset, bytes, time); until then it is waited for, and later passes
-  read only what came since. A file that grew in two passes while its offset
+  read only what came since; a file that shrinks meanwhile is read again past
+  its offset (Codex review, P2). A file that grew in two passes while its offset
   stayed put is stuck: logged once, and named in `smriti status` with the files
   waiting on a long record and the records skipped. On the reference install
   one Codex rollout has been stuck this way since 2026-10-27. Beyond the brief:
@@ -743,10 +744,15 @@ a recheck.
   `AgentMessage` item, with no `user_message` or `agent_message` event. The
   last real Codex turn in the reference log is from 2026-09-10. 0.163
   (2026-10-22) then rewrote older rollouts into the paginated mode, compressed
-  as `.jsonl.zst`, which the glob doesn't match. The adapter reads both encodings with unchanged ids (on 40
-  rewritten rollouts the reference install had captured, every id matched; the
-  legacy fixture's ids are pinned to `fc27d39`'s), keeps a message written in
-  both once, and gives no turns for a session whose cwd is smriti's
+  as `.jsonl.zst`, which the glob doesn't match. The adapter reads both
+  encodings with unchanged ids (the 118 rewritten rollouts of 28 sessions the
+  reference install had captured, read as capture reads them, give back every
+  one of their 5,945 turns outside the llm-workdir with its id; the legacy
+  fixture's ids are pinned to `fc27d39`'s), keeps a message written in both
+  once however the file is split between reads (Codex review, P2: a memory of
+  the last five seconds' messages, as role, text hash, time and encoding, is
+  kept in the file's capture state with its offset), and gives no turns for a
+  session whose cwd is smriti's
   llm-workdir: the collector's path exclusion never covered Codex, so the
   nightly's codex fallback would have fed its digests back. Backfill: `smriti
   logd --rescan SOURCE` (procedure below). A read-only dry run on the reference
