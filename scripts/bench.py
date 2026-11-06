@@ -53,6 +53,7 @@ import os
 import queue
 import re
 import shutil
+import stat
 import statistics
 import subprocess
 import sys
@@ -86,8 +87,12 @@ DEFAULT_QUERIES = (
     "what the user does for work",
     "beliefs about evidence and experiments",
 )
-RESULT_RE = re.compile(r"^\[(\d+)\] (\S+)", re.M)
+# "[1] notes/storage design.md :: Heading (score: 0.91, depth: 2)": the source runs up to
+# the heading or the score, so a path with spaces stays whole.
+RESULT_RE = re.compile(r"^\[(\d+)\] (.+?)(?: :: .*?)? \(score: -?[\d.]+, depth: -?\d+\)\s*$",
+                       re.M)
 KEYWORD_ONLY = "keyword-only"
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 
 # (key, what the table calls it, unit)
 MEASURES: tuple[tuple[str, str, str], ...] = (
@@ -181,6 +186,39 @@ def resolve_checkout(spec: str, work: Path) -> tuple[Path, str]:
     return dest, f"{spec} ({sha[:8]})"
 
 
+def _is_link(path: Path) -> bool:
+    """A symlink or, on Windows, a junction (any reparse point)."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0)
+                                             & FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def check_writable(copy: Path) -> None:
+    """Refuse a copy whose written paths are links, so no write escapes into another tree.
+
+    The bench writes the root's ``index.md`` (index upkeep), everything under
+    ``.smriti/`` (index, metrics, the wake script) and ``bench/``. A link there,
+    kept as a link by the copy, would write through to wherever it points.
+    """
+    bad = [p for p in (copy, copy / "index.md") if _is_link(p)]
+    for base in (copy / ".smriti", copy / "bench"):
+        stack = [base]
+        while stack:
+            path = stack.pop()
+            if not os.path.lexists(path):
+                continue
+            if _is_link(path):
+                bad.append(path)
+            elif path.is_dir():
+                stack.extend(path.iterdir())
+    if bad:
+        raise SystemExit(f"bench: {copy} would be written through links: "
+                         f"{', '.join(str(b) for b in bad[:3])}; copy a tree without them")
+
+
 def copy_tree(src: Path, dst: Path) -> None:
     """A copy of ``src`` at ``dst`` (a new directory), without .git, links kept as links."""
     if sys.platform == "win32":
@@ -268,9 +306,16 @@ class Mcp:
                 return ms_since(t0), data
 
     def tool(self, name: str, arguments: dict[str, Any]) -> tuple[float, str]:
+        """The tool's text; raises when the call failed, so no failure is timed as a result."""
         ms, data = self.call("tools/call", {"name": name, "arguments": arguments})
-        content = (data.get("result") or {}).get("content") or [{"text": json.dumps(data)}]
-        return ms, str(content[0].get("text", ""))
+        if "error" in data:
+            raise RuntimeError(f"{name}: JSON-RPC error {json.dumps(data['error'])[:300]}")
+        result = data.get("result") or {}
+        content = result.get("content") or []
+        text = str(content[0].get("text", "")) if content else ""
+        if result.get("isError") or not content:
+            raise RuntimeError(f"{name} failed: {(text or json.dumps(data))[:300]}")
+        return ms, text
 
     def close(self) -> None:
         assert self.proc.stdin is not None
@@ -468,6 +513,7 @@ def warm_up(side: Side, wake_cwd: Path) -> None:
 def prepare(side: Side, source: Path, wake_cwd: Path) -> None:
     log(f"copying {source} for {side.name}")
     copy_tree(source, side.tree)
+    check_writable(side.tree)
     side.runtime.mkdir(parents=True, exist_ok=True)
     _, done = run(side, ["-c", "import smriti; print(smriti.__file__)"])
     where = Path(done.stdout.strip() or ".").resolve()

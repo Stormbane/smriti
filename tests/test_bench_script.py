@@ -116,3 +116,61 @@ def test_means_skip_rounds_without_the_measure(bench: ModuleType) -> None:
     assert bench.mean_of(rounds, "wake_ms") == 700.0
     assert bench.mean_of(rounds, "status_ms") is None
     assert bench.cell(1530.0, "ms") == "1.53 s" and bench.cell(81.4, "ms") == "81 ms"
+
+
+def test_a_source_with_spaces_is_read_whole(bench: ModuleType) -> None:
+    # Two different files must not look like the same result (Codex review of H12.0).
+    text = ("[1] notes/storage design.md :: Why (score: 0.91, depth: 2)\nbody\n\n"
+            "[2] notes/storage migration.md (score: 0.50, depth: 1)\n")
+    assert [s for _, s in bench.RESULT_RE.findall(text)] == [
+        "notes/storage design.md", "notes/storage migration.md"]
+
+
+class _Answers:
+    """Stands in for Mcp.call, answering each tools/call with a canned response."""
+
+    def __init__(self, data: dict[str, Any]) -> None:
+        self.data = data
+
+    def __call__(self, method: str, params: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+        return 1.0, self.data
+
+
+@pytest.mark.parametrize("data", [
+    {"jsonrpc": "2.0", "id": 1, "error": {"code": -32603, "message": "Internal error"}},
+    {"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": "Error: no"}],
+                                           "isError": True}},
+    {"jsonrpc": "2.0", "id": 1, "result": {}},
+])
+def test_a_failed_tool_call_is_never_timed_as_a_result(bench: ModuleType,
+                                                       data: dict[str, Any]) -> None:
+    mcp = object.__new__(bench.Mcp)
+    mcp.call = _Answers(data)  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError):
+        mcp.tool("smriti_read", {"query": "q"})
+
+
+def test_a_tree_written_through_a_link_is_refused(bench: ModuleType, tmp_path: Path) -> None:
+    # A link kept by the copy would send the bench's writes into another tree.
+    import os
+
+    outside, copy = tmp_path / "outside", tmp_path / "copy"
+    (outside / ".smriti").mkdir(parents=True)
+    copy.mkdir()
+    try:
+        os.symlink(outside / ".smriti", copy / ".smriti", target_is_directory=True)
+    except OSError:
+        if sys.platform != "win32":
+            pytest.skip("this account can't create symlinks")
+        import _winapi  # a junction needs no privilege, and the copies hold junctions
+
+        _winapi.CreateJunction(str(outside / ".smriti"), str(copy / ".smriti"))
+    with pytest.raises(SystemExit, match="written through links"):
+        bench.check_writable(copy)
+    if sys.platform == "win32":
+        os.rmdir(copy / ".smriti")  # removes the junction, not its target
+    else:
+        os.unlink(copy / ".smriti")
+    assert (outside / ".smriti").is_dir()  # removing the link left its target alone
+    (copy / ".smriti").mkdir()
+    bench.check_writable(copy)  # a plain directory is fine
