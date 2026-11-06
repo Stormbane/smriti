@@ -400,6 +400,91 @@ directly; Opus B, Codex C on that run, which is outside the trend):
   than the maintainer on Linux or macOS with native scheduling, green for
   weeks. That last one is evidence code can't supply.
 
+### H12.0 design
+
+- **Keep-alive** (`smriti.embed`). The service's hello advertises
+  `"keepalive_s": 10`. After a reply it reads the next request on the same
+  authenticated connection, one at a time, until the client closes it,
+  nothing arrives within `keepalive_s`, or it stops or drains (a waiting
+  connection looks every 0.1 s, so a drain never waits one out). The
+  connection keeps its slot; the cap of 32, the handshake, the 4 KB pre-auth
+  frames and every read's deadline are unchanged, and only a peer with the
+  key gets past the hello. The client keeps one connection per
+  `ServiceEmbedding`, keyed on the discovery file, instance and port, and
+  taken out under a lock, so concurrent calls open their own. It reuses it
+  while the hello advertised keep-alive and it has been idle for less than
+  `keepalive_s` minus 1 s. A kept connection whose end is already readable is
+  dropped unused. One that fails on send, or closes before the first reply
+  byte, is retried once on a fresh connection, for `embed` and `status`
+  only; `stop` always goes on its own and is sent once. An old client closes
+  after one request, and its EOF frees the slot. A new client finds no field
+  in an old service's hello and connects per request. The protocol number
+  stays 1. While the kept connection goes to the instance in the discovery
+  record, the client doesn't probe that pid: with psutil on Windows the
+  probe read the process table, about 4 ms of every request. A service that
+  has died since is found when the connection is used, and replaced as before.
+- **Profile cache** (`smriti.profiles`). The scan reads only the existing
+  `sys.path` entries, less `''`, the current directory and the running
+  script's directory, with `importlib.metadata.distributions(path=...)`,
+  keeping the first distribution of each normalised name as `entry_points()`
+  does. Its result is cached in the runtime directory as
+  `profiles-<crc32>-<n>.json`, one file per list of entries, holding the
+  fingerprint (each entry and its `st_mtime_ns`) and the entries (name,
+  value, group, dist, version), written atomically. It isn't written while an
+  entry changed in the last 2 s, since a second change in the same timestamp
+  tick wouldn't show. A missing, corrupt or stale cache means a scan and a
+  rewrite. A name not found is still scanned for again before "none", which
+  now also refreshes the cache. With a warm cache, `load_profile("reference")`
+  takes about 8 ms in a fresh process: 4 for the lookup, 4 for the profile's
+  own import.
+- **Where it differs from the brief, and why:**
+  - The running script's directory is left out too. The wake hook runs
+    `<root>/.smriti/wake.py`, so that directory is first on its path; it
+    changes with every index write (the cache would rarely match), and a
+    profile must never come from the memory tree.
+  - A cached entry is loaded by an equivalent of `EntryPoint.load`, not by
+    rebuilding an `EntryPoint`: importing `importlib.metadata` costs about
+    50 ms (it brings the email package), more than the 20 ms target.
+  - Entries are told apart by `os.stat` (device and inode), and the
+    fingerprint keeps each entry's absolute path: resolving each path cost
+    3-7 ms for 19 entries. The file name is a CRC, since importing hashlib
+    costs 8 ms and the file holds the full fingerprint anyway.
+  - The runtime-directory logic moved to `smriti.core.rundir` and is
+    re-exported from `smriti.embed.runtime`, so the lookup doesn't import the
+    embedding protocol (socket, sqlite3, hmac).
+  - The benchmark found two more measures slower than at `13ac56a`, and they
+    are fixed here too. `smriti status` went from 300 to 650 ms: the read-only
+    open loaded sqlite-vec, whose package imports numpy, and the store
+    package's `__init__` imported the indexer. The MCP server's first
+    `tools/list` took 41 ms, importing the day-log writer to read daylog.json.
+    Status now opens without vectors, and `index_tree` and `append_turns` are
+    resolved on first use. The embedding client imports `socket`,
+    `subprocess`, `secrets`, `hmac` and `base64` where it uses them, so
+    status, with no service running, reads the discovery file without them.
+  - The wake imported every installer helper with `wake_runner`'s package,
+    and since `736a6b2` the agent-doc helper brought the file locks too. The
+    package resolves its re-exports on first use, and `managed_doc` imports
+    `write_atomic` when it writes. The reference profile still imports
+    `smriti.mcp.tool` to build its tools: `Profile.tools` is a tuple of them,
+    and deferring that would change the contract.
+  - Each request also re-resolved the memory root (0.6 ms on Windows) and
+    ran `mkdir` on the runtime directory; the client now computes its
+    service files once per runtime directory, and `runtime_dir()` creates
+    the directory only when it is missing.
+  - A retried call kept its last failure as an exception, which held the
+    client in a reference cycle, and with it the kept connection, a service
+    slot, until the collector ran. The flood test caught it once in eight
+    runs. The reason is now kept as text.
+- **`scripts/bench.py`** runs the comparison: two checkouts or refs, fresh
+  copies of a tree, an unmeasured warm-up per side, alternating rounds, a
+  table with B/A, and a top-5 parity check per query. Five benchmark runs
+  went into H12.0; the last is below.
+
+Result (`scripts/bench.py`, 2026-11-06; a copy of the reference tree, 10
+queries, two alternating rounds each; A is `13ac56a`, B is this branch):
+
+BENCH-TABLE
+
 Not doing:
 - **Masking stays pattern-based** (Sonnet 2): it catches credential shapes and
   says so. A PII framework is out of scope.
@@ -468,6 +553,9 @@ a recheck.
 - **H11**: done. H11.8: outside review #5 at `bcec9a2`; its
   findings are H12.
 - **H12**: planned, awaiting approval.
+- **H12.0 implemented** (2026-11-06, `hardening/h12a`; not yet reviewed or
+  merged): keep-alive, the profile cache, `scripts/bench.py`, and the two
+  import fixes the benchmark found. The result is under "H12.0 design".
 - **H11.1, H11.5, H11.10 done** (2026-11-06, merged at `498ce0e` after a Codex diff
   review; its two findings, the capture override and the metrics scrub, fixed). Capture is off unless `daylog.json` says
   `"capture": true` (the default sources; the installer's `--capture` writes it) or

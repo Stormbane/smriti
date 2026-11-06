@@ -72,7 +72,12 @@ security backport series or guaranteed response time.
   found through the `smriti.profiles` entry-point group of the Python
   environment smriti runs in; nothing is loaded from the memory tree, so the
   config can only choose among packages the operator installed. smriti's own
-  wheel carries no profile.
+  wheel carries no profile. The current directory and the running script's
+  directory (for the wake hook, the tree's `.smriti/`) are not searched. What
+  the lookup finds is cached in the private runtime directory
+  (`profiles-*.json`, where other users can't write), keyed on the import
+  path's entries and their modification times; a missing, corrupt or stale
+  cache means a fresh scan.
 - `daylog/scrub.py` masks recognised credential patterns before captured turns
   are persisted. This is pattern-based, not comprehensive secret or personal-data
   detection. Unrecognised secrets and ordinary personal information remain; direct
@@ -107,8 +112,12 @@ root and embeds text for the user's other smriti processes: the MCP servers,
   embedding. Messages are length-prefixed JSON (never pickle), at most 4 MB, and at
   most 4 KB before authentication.
 - **Bounds.** At most 32 connections at once (more are closed on accept), a 1 s
-  handshake, 64 queued requests, and a deadline on every read and write, so
-  another local user can tie up the port for a while, which degrades search to
+  handshake, 64 queued requests, and a deadline on every read and write. An
+  authenticated connection may carry further requests, one at a time, and is
+  closed 10 s after its last reply (`keepalive_s`, advertised in the hello) or
+  as soon as the service drains; it holds its slot while it lives, and only a
+  peer with the key gets that far. With
+  these bounds another local user can tie up the port for a while, which degrades search to
   keywords and leaves new writes' vectors pending, but can't exhaust memory or
   threads, or make a client hang.
 - **The trust boundary is the user.** Any process running as the same user can

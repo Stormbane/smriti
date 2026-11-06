@@ -303,7 +303,11 @@ no profile sections, and the morning message has no persona.
 
 A profile is an installed package, not part of smriti: smriti finds it
 through the `smriti.profiles` entry-point group of the Python environment
-it runs in, and never loads code from the memory tree. A profile that
+it runs in, and never loads code from the memory tree, the current
+directory or the running script's directory. The lookup is cached in the
+runtime directory and follows installs and removals (the import path's
+directories and their modification times key it), so a new process
+doesn't read every installed package's metadata again. A profile that
 fails to load costs only its own tools and sections (the MCP server and
 the wake say so); the morning refuses to send rather than drop a persona.
 

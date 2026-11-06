@@ -48,7 +48,7 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 - **CLI:** 15 `smriti` subcommands: `backup`, `doctor`, `embed`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `recall`, `status`, `tasks`, `witness`, `write`. Nested: `embed` has `serve`, `status`, `stop`; `recall` has `query`, `status`, `stats`, `index`, `daemon`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 711 test functions in 58 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 745 test functions in 60 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 Regenerate with `python scripts/doc_facts.py --write`; `tests/test_doc_facts.py` fails when this block drifts from the code.
@@ -71,7 +71,7 @@ src/smriti/
   private/               encrypted private store
   eval/                  search evaluation: cases, runner, synthetic fixture
   _vendored/memsearch/   vendored MIT code (see NOTICE.md)
-scripts/                 install.py, setup_project.py, doc_facts.py
+scripts/                 install.py, setup_project.py, doc_facts.py, bench.py
 memory_template/         skeleton for a new memory root
 narada/                  wake.py, backup.py, narada-p.sh, copied into <root>/.smriti/ by the installer
 project_template/        skeleton for a project that uses smriti
@@ -88,6 +88,7 @@ python -m pytest -q --ignore=tests/test_perf.py tests profiles/reference/tests  
 ruff check <files>                                # line length 100, bugbear, blind excepts
 mypy <files>                                      # strict
 python scripts/doc_facts.py --write               # refresh the generated counts in README.md, CLAUDE.md, AGENTS.md
+python scripts/bench.py <base> <branch> --tree <copy-of-a-tree>   # speed against a baseline (H12)
 smriti status                                     # index and day-log health for $SMRITI_ROOT
 ```
 

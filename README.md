@@ -171,7 +171,7 @@ The witness step needs `pip install -e ".[witness]"` and a memory root that is a
 
 `<root>/.smriti/daylog.json` is optional; every key has a default. `user_name` and `agent_name` (default `"User"` and `"Agent"`) are the names the day render, the nightly and morning prompts and the core tools use for the two speaker roles. `profile` enables an optional profile: an installed package that registers a `smriti.profiles.Profile` under that name in the `smriti.profiles` entry-point group, and adds one installation's own tools, wake sections and morning persona. With none set, smriti runs its generic core; smriti's own package carries no profile. The repo's one profile, `reference` in [`profiles/reference/`](profiles/reference/), is the maintainer's installation and its own distribution, `smriti-reference` (`pip install -e profiles/reference`), which sets `{"profile": "reference", "user_name": "Suti", "agent_name": "Narada", "morning_web_search": true}`. It is not a template. [`docs/INSTALL.md`](docs/INSTALL.md#configuration-rootsmritidaylogjson) lists every key.
 
-The embedding service reads three environment variables: `SMRITI_EMBED_SERVICE=0` turns it off; `SMRITI_EMBED_IDLE_S` sets its idle exit (default 900 seconds); `SMRITI_RUNTIME_DIR` moves its runtime directory (default `%LOCALAPPDATA%\smriti\run` on Windows, `$XDG_RUNTIME_DIR/smriti` or `~/.cache/smriti/run` elsewhere), which holds its key, lock, discovery file and log and is never inside the memory root. smriti's other locks (file edits, the day-log writer) live there too, in `locks/`; while processes of an earlier release may still run, each is also taken on its old file in the shared temp directory, and `SMRITI_LEGACY_LOCKS=0` stops that once none can.
+The embedding service reads three environment variables: `SMRITI_EMBED_SERVICE=0` turns it off; `SMRITI_EMBED_IDLE_S` sets its idle exit (default 900 seconds); `SMRITI_RUNTIME_DIR` moves its runtime directory (default `%LOCALAPPDATA%\smriti\run` on Windows, `$XDG_RUNTIME_DIR/smriti` or `~/.cache/smriti/run` elsewhere), which holds its key, lock, discovery file and log (and the profile lookup's cache) and is never inside the memory root. smriti's other locks (file edits, the day-log writer) live there too, in `locks/`; while processes of an earlier release may still run, each is also taken on its old file in the shared temp directory, and `SMRITI_LEGACY_LOCKS=0` stops that once none can.
 
 ## Interfaces
 
@@ -179,7 +179,7 @@ The embedding service reads three environment variables: `SMRITI_EMBED_SERVICE=0
 - **CLI:** 15 `smriti` subcommands: `backup`, `doctor`, `embed`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `recall`, `status`, `tasks`, `witness`, `write`. Nested: `embed` has `serve`, `status`, `stop`; `recall` has `query`, `status`, `stats`, `index`, `daemon`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 711 test functions in 58 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 745 test functions in 60 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 **CLI.** `smriti --help` lists the commands; each takes `--help`.
