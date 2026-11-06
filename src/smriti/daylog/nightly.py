@@ -21,6 +21,7 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from smriti.core.files import write_atomic
 from smriti.core.oslock import BUSY, UNAVAILABLE, LockKey, lock_path, try_lock
 from smriti.daylog.config import DaylogConfig, load_config
 from smriti.daylog.digest import digest_day
@@ -282,7 +283,6 @@ def _clear_dirty(cfg: DaylogConfig, dirty: set[str], digest_errors: dict[str, st
 
 
 def _write_status(path: Path, status: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f".tmp{int(time.time())}")
-    tmp.write_text(json.dumps(status, indent=1, default=str), encoding="utf-8")
-    tmp.replace(path)
+    # A temp name of its own (pid and thread): the name used to be the second,
+    # which two writers in the same second shared.
+    write_atomic(path, json.dumps(status, indent=1, default=str))

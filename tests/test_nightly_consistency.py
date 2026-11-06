@@ -159,6 +159,77 @@ def test_a_run_lock_that_cannot_be_opened_does_not_stop_the_night(
     assert json.loads(cfg.nightly_status_path.read_text(encoding="utf-8"))["ok"] is True
 
 
+def _in_threads(n: int, work: object) -> list[BaseException]:
+    """Run ``work()`` in *n* threads released together; the exceptions they raised."""
+    barrier = threading.Barrier(n)
+    errors: list[BaseException] = []
+
+    def one() -> None:
+        barrier.wait()
+        try:
+            work()  # type: ignore[operator]
+        except BaseException as exc:  # noqa: BLE001 — collected for the assertion
+            errors.append(exc)
+
+    threads = [threading.Thread(target=one) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    return errors
+
+
+def _leftovers(directory: Path) -> list[str]:
+    return sorted(p.name for p in directory.iterdir() if "tmp" in p.name)
+
+
+# ---------------------------------------------------------------- unique temp names
+
+
+def test_concurrent_status_writes_never_share_a_temp_file(tmp_path: Path) -> None:
+    """The temp name was the current second, so two writers in one second collided."""
+    path = tmp_path / "log" / ".nightly-status.json"
+    errors = _in_threads(8, lambda: nightly._write_status(path, {"ok": True, "n": 1}))
+    assert errors == []
+    assert json.loads(path.read_text(encoding="utf-8")) == {"ok": True, "n": 1}
+    assert _leftovers(path.parent) == []
+
+
+def test_concurrent_renders_digests_and_rollups_each_use_their_own_temp_file(
+        tmp_path: Path, fake_llm: FakeProvider) -> None:
+    from datetime import date
+
+    from smriti.daylog.render import render_day
+    from smriti.daylog.rollup import build_rollup, enumerate_stale_periods
+
+    cfg = _cfg(tmp_path)
+    for day in ("2026-09-01", "2026-09-02"):
+        _seed(cfg, day)
+    month = cfg.day_md("2026-09-01").parent
+    assert _in_threads(6, lambda: render_day(cfg, "2026-09-01")) == []
+    assert _in_threads(6, lambda: render_day(cfg, "2026-09-02")) == []
+    assert _in_threads(6, lambda: digest_mod.digest_day(cfg, "2026-09-01", [])) == []
+    digest_mod.digest_day(cfg, "2026-09-02", [])
+    [week] = [p for p in enumerate_stale_periods(cfg, date(2026, 9, 20)) if p.kind == "week"]
+    assert _in_threads(6, lambda: build_rollup(week, [], cfg)) == []
+    assert _leftovers(month) == []
+    assert "test digest" in (month / "week1.md").read_text(encoding="utf-8")
+
+
+def test_concurrent_witness_proofs_each_use_their_own_temp_file(tmp_path: Path) -> None:
+    pytest.importorskip("opentimestamps")
+    from smriti import witness
+
+    class Proof:
+        def serialize(self, ctx: object) -> None:
+            ctx.write_bytes(b"proof bytes")  # type: ignore[attr-defined]
+
+    path = tmp_path / "2026-09-04.txt.ots"
+    assert _in_threads(8, lambda: witness._save(Proof(), path)) == []
+    assert path.read_bytes() == b"proof bytes"
+    assert _leftovers(tmp_path) == []
+
+
 def test_the_cli_reports_a_skipped_run_as_success(
         monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     import argparse

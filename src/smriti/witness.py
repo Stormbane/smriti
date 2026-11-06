@@ -19,6 +19,7 @@ it the nightly step fails visibly rather than skipping quietly.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import os
@@ -175,10 +176,13 @@ def _save(detached: Any, path: Path) -> None:
         StreamSerializationContext,
     )
 
-    tmp = path.with_name(path.name + ".tmp")
-    with tmp.open("wb") as fh:
-        detached.serialize(StreamSerializationContext(fh))
-    tmp.replace(path)
+    from smriti.core.files import write_atomic
+
+    # Through a temp file of its own (write_atomic), so a `smriti witness stamp`
+    # beside the nightly's never writes into the other's half-written proof.
+    buf = io.BytesIO()
+    detached.serialize(StreamSerializationContext(buf))
+    write_atomic(path, buf.getvalue())
 
 
 def _load(path: Path) -> Any:
