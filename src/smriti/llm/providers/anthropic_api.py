@@ -58,6 +58,8 @@ class AnthropicApiProvider:
                 "Either set the env var or switch SMRITI_LLM_PROVIDER."
             )
 
+        import anthropic  # imported with the client (_get_client)
+
         t0 = time.monotonic()
         try:
             response = client.messages.create(
@@ -76,9 +78,12 @@ class AnthropicApiProvider:
                     for m in request.turns()
                 ],
             )
-        except Exception as exc:
-            # Anthropic SDK raises typed errors; surface rate-limits as
-            # RateLimitExceeded so the dispatcher can stop the loop.
+        except (anthropic.AnthropicError, ValueError) as exc:
+            # What a failed call raises: the SDK's errors (its transport's are
+            # wrapped as APIConnectionError), and ValueError, for a reply body
+            # that isn't JSON or a non-streaming call too long for the SDK's
+            # timeout. Anything else is a bug, and is raised as it is. Rate
+            # limits become RateLimitExceeded so a caller can stop the loop.
             cls = exc.__class__.__name__.lower()
             msg = str(exc).lower()
             if "ratelimit" in cls or "rate limit" in msg or "quota" in msg:

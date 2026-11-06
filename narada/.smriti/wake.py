@@ -35,6 +35,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — never breaks SessionStart; reported on stderr
         sys.stderr.write(f"[wake] error: {exc}\n")
         sys.exit(0)

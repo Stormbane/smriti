@@ -77,10 +77,15 @@ class OpenAIApiProvider:
         if request.response_format == "json":
             kwargs["response_format"] = {"type": "json_object"}
 
+        import openai  # imported with the client (_get_client)
+
         t0 = time.monotonic()
         try:
             response = client.chat.completions.create(**kwargs)
-        except Exception as exc:
+        except (openai.OpenAIError, ValueError) as exc:
+            # What a failed call raises: the SDK's errors (its transport's are
+            # wrapped as APIConnectionError), and ValueError, for a reply body
+            # that isn't JSON. Anything else is a bug, and is raised as it is.
             cls = exc.__class__.__name__.lower()
             msg = str(exc).lower()
             if "ratelimit" in cls or "rate limit" in msg or "quota" in msg:

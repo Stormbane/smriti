@@ -124,7 +124,7 @@ class PrivateStore:
             try:
                 with os.fdopen(fd, "w", encoding="ascii") as f:
                     f.write(key + "\n")
-            except BaseException:
+            except BaseException:  # noqa: BLE001 — no half-written key survives; re-raised
                 key_path.unlink(missing_ok=True)
                 raise
 
@@ -219,7 +219,7 @@ class PrivateStore:
                     return path
                 except FileExistsError:
                     counter += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — audited, then re-raised
             self.audit.log_failure(
                 operation="write",
                 path=path,
@@ -265,8 +265,8 @@ class PrivateStore:
             ciphertext = path.read_bytes()
             plaintext = fernet.decrypt(ciphertext)
             return plaintext.decode("utf-8")
-        except Exception as e:  # pragma: no cover
-            # Catches InvalidToken, FileNotFoundError and anything else.
+        except Exception as e:  # noqa: BLE001 — audited, then re-raised  # pragma: no cover
+            # InvalidToken, FileNotFoundError or anything else: each is audited.
             self.audit.log_failure(
                 operation="read",
                 path=path,

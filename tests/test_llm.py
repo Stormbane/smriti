@@ -362,3 +362,72 @@ def test_the_tool_flags_carry_their_values_attached():
         assert args[0] == "--strict-mcp-config"
         assert all(arg.startswith("--") for arg in args), args
         assert "--disable-slash-commands" in args
+
+
+# --- The API providers' failures (H12.7) ---------------------------------
+#
+# Each catches what its SDK raises for a failed call (and ValueError, for a
+# body that isn't JSON), not everything: a bug in the call is raised as it is.
+
+
+class _Raises:
+    """A client whose one call raises ``exc``: ``client.messages.create`` and
+    ``client.chat.completions.create`` alike."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self.exc = exc
+        self.messages = self.completions = self
+        self.chat = self
+
+    def create(self, **_kwargs: object) -> None:
+        raise self.exc
+
+
+def _sdk_errors(sdk):
+    import httpx
+
+    request = httpx.Request("POST", "https://api.example.invalid/v1")
+    return {
+        "connection": sdk.APIConnectionError(request=request),
+        "status": sdk.InternalServerError(
+            "server error", response=httpx.Response(500, request=request), body=None),
+        "rate limit": sdk.RateLimitError(
+            "rate limited", response=httpx.Response(429, request=request), body=None),
+    }
+
+
+@pytest.mark.parametrize("sdk_name,provider_name", [("anthropic", "anthropic_api"),
+                                                   ("openai", "openai_api")])
+def test_an_api_call_that_fails_is_an_llm_error(sdk_name, provider_name):
+    from smriti.llm.types import LLMError, RateLimitExceeded
+
+    sdk = pytest.importorskip(sdk_name)
+    provider = get_provider(provider_name)
+    errors = _sdk_errors(sdk)
+    for kind in ("connection", "status"):
+        provider._client = _Raises(errors[kind])
+        with pytest.raises(LLMError) as caught:
+            provider.call(LLMRequest(system="S", user="u"))
+        assert not isinstance(caught.value, RateLimitExceeded)
+        assert caught.value.__cause__ is errors[kind]
+    provider._client = _Raises(errors["rate limit"])
+    with pytest.raises(RateLimitExceeded):
+        provider.call(LLMRequest(system="S", user="u"))
+    import json
+
+    provider._client = _Raises(json.JSONDecodeError("Expecting value", "<html>", 0))
+    with pytest.raises(LLMError):
+        provider.call(LLMRequest(system="S", user="u"))
+
+
+@pytest.mark.parametrize("sdk_name,provider_name", [("anthropic", "anthropic_api"),
+                                                   ("openai", "openai_api")])
+def test_a_bug_in_an_api_call_is_not_taken_for_a_failed_call(sdk_name, provider_name):
+    from smriti.llm.types import LLMError
+
+    pytest.importorskip(sdk_name)
+    provider = get_provider(provider_name)
+    provider._client = _Raises(AttributeError("a bug"))
+    with pytest.raises(AttributeError, match="a bug") as caught:
+        provider.call(LLMRequest(system="S", user="u"))
+    assert not isinstance(caught.value, LLMError)

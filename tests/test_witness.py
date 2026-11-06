@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import http.client
 import os
 import subprocess
 import time
+import urllib.error
 from pathlib import Path
 from typing import Any
 
@@ -153,3 +155,64 @@ def test_line_endings_do_not_break_a_proof(repo: Path, calendars: list[str]) -> 
     manifest.write_bytes(manifest.read_bytes().replace(b"\n", b"\r\n"))
     [check] = witness.verify(repo, offline=True)
     assert check.digest_ok
+
+
+class _Reply:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    def __enter__(self) -> "_Reply":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.body
+
+
+def _explorers(monkeypatch: pytest.MonkeyPatch, answers: dict[str, Any]) -> list[str]:
+    """``urlopen`` answering each explorer's requests from ``answers``: an exception
+    to raise, or a block's body; returns the URLs asked, in order."""
+    asked: list[str] = []
+
+    def urlopen(url: str, timeout: float) -> _Reply:
+        asked.append(url)
+        base = next(b for b in witness._EXPLORERS if url.startswith(b))
+        answer = answers[base]
+        if isinstance(answer, BaseException):
+            raise answer
+        return _Reply(b"00000000abc" if "/block-height/" in url else answer)
+
+    monkeypatch.setattr(witness.urllib.request, "urlopen", urlopen)
+    return asked
+
+
+@pytest.mark.parametrize("failure", [
+    OSError("connection refused"),
+    TimeoutError("timed out"),
+    urllib.error.URLError("no route"),
+    http.client.IncompleteRead(b""),
+    b"<html>rate limited</html>",          # not JSON
+    b'{"timestamp": 1}',                    # no merkle root
+    b'["merkle_root"]',                     # not an object
+])
+def test_an_explorer_that_fails_hands_over_to_the_next(
+        monkeypatch: pytest.MonkeyPatch, failure: Any) -> None:
+    """H12.7: the handler is narrowed to what a request and its JSON can raise."""
+    first, second = witness._EXPLORERS
+    asked = _explorers(monkeypatch, {
+        first: failure, second: b'{"merkle_root": "ff00", "timestamp": 1700000000}'})
+    assert witness._block(800_000) == ("ff00", 1_700_000_000)
+    assert asked[-1].startswith(second)
+
+
+def test_no_explorer_answering_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    _explorers(monkeypatch, {base: OSError("down") for base in witness._EXPLORERS})
+    assert witness._block(800_000) is None
+
+
+def test_a_bug_is_not_taken_for_an_explorer_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    _explorers(monkeypatch, {base: RuntimeError("a bug") for base in witness._EXPLORERS})
+    with pytest.raises(RuntimeError, match="a bug"):
+        witness._block(800_000)

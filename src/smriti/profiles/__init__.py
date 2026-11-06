@@ -385,7 +385,7 @@ def load_profile(name: str) -> Profile:
     entry = found[0]
     try:
         profile = entry.load()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — third-party code; raised again as a ProfileError
         # Whatever the profile's own code raised: it costs only the profile.
         raise ProfileError(f"profile {name!r} ({entry.value}, from {entry.provider}) "
                            f"failed to load: {type(exc).__name__}: {exc}") from exc

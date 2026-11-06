@@ -64,7 +64,7 @@ def call_tool(tool: Tool, arguments: object) -> dict[str, Any]:
         return _text(tool.handler(arguments))
     except (ToolError, UnsafeName) as exc:
         return _text(f"Error: {exc}", is_error=True)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — a tool's failure is logged and becomes its isError
         log.exception("tool %s failed", tool.name)
         return _text(f"Error: {exc}", is_error=True)
 
@@ -139,7 +139,7 @@ def main() -> None:
             continue
         try:
             response = handle_message(msg)
-        except Exception:
+        except Exception:  # noqa: BLE001 — logged and answered; the session's server lives on
             # One malformed message must never end the server for the session.
             log.exception("could not handle %.200r", msg)
             id = msg.get("id")

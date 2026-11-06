@@ -19,6 +19,7 @@ it the nightly step fails visibly rather than skipping quietly.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import io
 import json
 import logging
@@ -331,7 +332,9 @@ def _block(height: int) -> tuple[str, int] | None:
                                         timeout=_TIMEOUT_S) as resp:
                 data = json.loads(resp.read())
             return str(data["merkle_root"]), int(data["timestamp"])
-        except Exception as exc:  # noqa: BLE001 — logged; the next explorer is tried
+        except (OSError, http.client.HTTPException, ValueError, KeyError, TypeError) as exc:
+            # Unreachable or refusing (urllib's errors are OSErrors), a broken HTTP
+            # reply, or a body that isn't a block's JSON: the next explorer is tried.
             log.warning("explorer %s: %s", base, exc)
     return None
 

@@ -327,7 +327,7 @@ def run_morning(
     try:
         message = compose_message(
             cfg, f"Yesterday's digest ({yesterday}):\n\n{digest_text[:20_000]}", attempts)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — any failure frees the day and is recorded; re-raised
         _release(claim)  # nothing was sent: the day is open for a retry
         result["sent"] = False
         result["phase"] = "compose"

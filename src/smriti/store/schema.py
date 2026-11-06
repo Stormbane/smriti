@@ -164,7 +164,7 @@ def ensure_schema(
         _set_wal(conn, busy_ms)
         conn.execute("PRAGMA foreign_keys=ON")
         return _ensure_schema_inner(conn, dimension)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 — rolled back and closed on any exit; re-raised
         # Leak-proofing (2026-08-28 lock cascade): a throw mid-schema
         # left this connection's implicit write transaction OPEN in a
         # long-lived process, wedging every other writer — and their
