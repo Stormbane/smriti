@@ -29,6 +29,7 @@ import smriti.embed.client as client_mod
 import smriti.store.indexer as indexer
 from smriti._vendored.memsearch.embeddings.stub import StubEmbedding
 from smriti.core.tree import tree_root
+from smriti.embed import provider as embedding
 from smriti.embed.client import ServiceEmbedding, service_state, stop_service
 from smriti.embed.identity import EmbeddingUnavailable
 from smriti.embed.runtime import read_discovery, runtime_dir, service_paths
@@ -156,7 +157,7 @@ def test_a_hold_does_not_keep_a_draining_service_and_follows_the_next(
         root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
     (root / "a.md").write_text("# A\n\nSome text.\n", encoding="utf-8")
     db = root / ".smriti" / "index.db"
-    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: StubEmbedding())
+    monkeypatch.setattr(embedding, "embedder", lambda: StubEmbedding())
     indexer.index_tree(root=root, db=db)
     first = services.start(root, idle_s=IDLE, keepalive_s=0, identity_check_s=0.05)
     client = ServiceEmbedding(root, hold=True)
@@ -171,7 +172,7 @@ def test_a_hold_does_not_keep_a_draining_service_and_follows_the_next(
     assert _wait(lambda: first.stats.held >= 2, 3)
 
     # The index moves to another model: the service drains, holds or not.
-    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: Tiny())
+    monkeypatch.setattr(embedding, "embedder", lambda: Tiny())
     indexer.index_tree(full=True, root=root, db=db)
     assert _gone(services, first, 5)
     assert "index now records" in services.reasons[first.instance]

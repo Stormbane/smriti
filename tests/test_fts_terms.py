@@ -91,15 +91,16 @@ def test_without_fts5vocab_falls_back_to_the_first_terms() -> None:
 
 def test_search_can_skip_the_vector_leg(monkeypatch: pytest.MonkeyPatch) -> None:
     """use_vectors=False never loads an embedding model (hooks can't afford it)."""
-    import smriti.store.indexer as indexer
     import importlib
+
+    from smriti.embed import provider as embedding
 
     search_mod = importlib.import_module("smriti.store.search")
 
     def boom():  # noqa: ANN202
         raise AssertionError("embedding provider loaded")
 
-    monkeypatch.setattr(indexer, "_get_embedding_provider", boom)
+    monkeypatch.setattr(embedding, "embedder", boom)
 
     class Conn:
         has_vec, has_fts = True, False

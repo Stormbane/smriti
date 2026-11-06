@@ -279,12 +279,12 @@ def _vector_leg(conn: IndexDB, query: str, candidate_k: int,
     A mismatch is stale work (the model loaded here, or the service, came
     before a migration): it is tried once more on a fresh embedding.
     """
+    from smriti.embed import provider as embedding
     from smriti.embed.identity import recorded_identity, vec_table_dimension
-    from smriti.store.indexer import _embed, _forget_provider, _get_embedding_provider
 
     mismatch = ""
     for _attempt in range(2):
-        embedded = _embed(_get_embedding_provider(), [query], "query")
+        embedded = embedding.embed(embedding.embedder(), [query], "query")
         with _snapshot(conn):
             recorded = recorded_identity(conn)
             if recorded is not None and not recorded.compatible(embedded.identity):
@@ -307,7 +307,7 @@ def _vector_leg(conn: IndexDB, query: str, candidate_k: int,
                     if cand is not None:
                         candidates[rowid] = cand
                 return ""
-        _forget_provider()
+        embedding.forget_provider()
     return f"embedding identity mismatch: {mismatch}"
 
 
@@ -366,7 +366,7 @@ def search_with_status(
 
     pending = 0
     if has_vec:
-        from smriti.store.indexer import _reason
+        from smriti.embed.provider import failure_reason
         from smriti.store.schema import pending_vectors
 
         pending = pending_vectors(conn)
@@ -374,7 +374,7 @@ def search_with_status(
             keyword_only = _vector_leg(conn, query, candidate_k, vec_scores, candidates)
         except Exception as exc:  # noqa: BLE001 — logged and reported; falls back to keywords
             log.warning("Vector search failed; searching by keyword only: %s", exc)
-            keyword_only = _reason(exc)
+            keyword_only = failure_reason(exc)
         if keyword_only:
             # Fall back to exactly a keyword-only search: without this the
             # vector weight stayed in the sum with nothing behind it, and

@@ -556,21 +556,14 @@ class EmbedService:
 
 
 def _load_provider(db: Path) -> _Provider:
-    """The index's recorded provider, else ``SMRITI_EMBED_PROVIDER``, else the auto order."""
-    from smriti._vendored.memsearch.embeddings import get_provider
-    from smriti.store.indexer import _PROVIDER_AUTO_ORDER, _InProcess, _recorded_provider_key
+    """The model this service serves ``db`` with, by the one rule (``provider_keys``):
+    the index's recorded provider, else ``SMRITI_EMBED_PROVIDER``, else the auto order.
 
-    recorded = _recorded_provider_key(db)
-    override = os.environ.get("SMRITI_EMBED_PROVIDER", "").strip().lower()
-    keys = (recorded,) if recorded else (override,) if override else _PROVIDER_AUTO_ORDER
-    last: Exception | None = None
-    for key in keys:
-        try:
-            return _InProcess(get_provider(key))
-        except Exception as exc:  # noqa: BLE001 — logged; the next provider is tried
-            last = exc
-            log.warning("embedding provider %r unavailable: %s", key, exc)
-    raise RuntimeError(f"no embedding provider could load (tried {', '.join(keys)}): {last}")
+    Never a rebuild: a service serves the index as it is.
+    """
+    from smriti.embed.provider import load_provider, provider_keys
+
+    return load_provider(provider_keys(db))
 
 
 def idle_seconds() -> float:

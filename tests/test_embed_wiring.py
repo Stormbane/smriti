@@ -25,6 +25,7 @@ import pytest
 import smriti.store.indexer as indexer
 from smriti._vendored.memsearch.embeddings.stub import StubEmbedding
 from smriti.core.tree import tree_root
+from smriti.embed import provider as embedding
 from smriti.embed.client import ServiceEmbedding, spawn_service, stop_service
 from smriti.embed.runtime import (
     Discovery,
@@ -50,8 +51,8 @@ def services() -> Iterator[Services]:
 @pytest.fixture()
 def stub_in_process(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """The in-process model is the stub, whatever the run's provider (and the cache) hold."""
-    provider = indexer._InProcess(StubEmbedding())
-    monkeypatch.setattr(indexer, "_local_provider", functools.cache(lambda: provider))
+    provider = embedding.InProcess(StubEmbedding())
+    monkeypatch.setattr(embedding, "local_provider", functools.cache(lambda: provider))
     yield
 
 
@@ -103,9 +104,9 @@ def _has_vec() -> bool:
 def test_long_lived_processes_ask_the_service_and_index_runs_do_not(
         tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SMRITI_EMBED_SERVICE", "1")
-    assert isinstance(indexer._get_embedding_provider(), ServiceEmbedding)
-    with indexer.in_process_embeddings():
-        assert not isinstance(indexer._get_embedding_provider(), ServiceEmbedding)
+    assert isinstance(embedding.embedder(), ServiceEmbedding)
+    with embedding.in_process_embeddings():
+        assert not isinstance(embedding.embedder(), ServiceEmbedding)
 
     def no_service(*a: object, **k: object) -> object:
         raise AssertionError("index_tree asked the service")
@@ -115,7 +116,7 @@ def test_long_lived_processes_ask_the_service_and_index_runs_do_not(
                                               encoding="utf-8")
     assert indexer.index_tree(root=tree)["indexed"] == 1
     monkeypatch.setenv("SMRITI_EMBED_SERVICE", "0")
-    assert not isinstance(indexer._get_embedding_provider(), ServiceEmbedding)
+    assert not isinstance(embedding.embedder(), ServiceEmbedding)
 
 
 def test_the_eval_sandbox_embeds_in_process(
@@ -307,19 +308,19 @@ def test_with_the_real_model_vectors_match_and_a_warm_first_search_is_fast(
                        ("kitchen.md", "# Kitchen\n\nBread rises slowly in the cold.\n")):
         (root / name).write_text(text, encoding="utf-8")
     monkeypatch.setenv("SMRITI_EMBED_PROVIDER", "local")  # the reference install's model
-    indexer._forget_provider()
+    embedding.forget_provider()
     service_pid = 0
     try:
         indexer.index_tree(root=root)  # in-process, as the nightly does
-        with indexer.in_process_embeddings():
-            local = indexer._get_embedding_provider()
+        with embedding.in_process_embeddings():
+            local = embedding.embedder()
             db = open_readonly(root / ".smriti" / "index.db")
             try:
                 in_process = search_with_status(db, "flowers near the water", use_reranker=False)
             finally:
                 db.close()
         texts = ["flowers near the water", "a light kept burning", "baking in winter"]
-        expected = indexer._embed(local, texts, "query")
+        expected = embedding.embed(local, texts, "query")
 
         paths = service_paths(runtime_dir(), root)
         monkeypatch.setenv("SMRITI_EMBED_SERVICE", "1")
@@ -367,4 +368,4 @@ def test_with_the_real_model_vectors_match_and_a_warm_first_search_is_fast(
             subprocess.run(["taskkill", "/F", "/PID", str(service_pid)]
                            if sys.platform == "win32" else ["kill", "-9", str(service_pid)],
                            capture_output=True)
-        indexer._forget_provider()  # later tests load their own model again
+        embedding.forget_provider()  # later tests load their own model again

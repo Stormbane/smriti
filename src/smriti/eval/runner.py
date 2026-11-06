@@ -29,7 +29,8 @@ def eval_sandbox() -> Iterator[Path]:
     disposable copy.
     """
     import smriti.metrics as metrics
-    from smriti.store.indexer import in_process_embeddings, index_tree
+    from smriti.embed.provider import in_process_embeddings
+    from smriti.store.indexer import index_tree
 
     global _active_root
     with TemporaryDirectory(prefix="smriti-eval-") as directory, in_process_embeddings():

@@ -3,6 +3,9 @@
 - :mod:`smriti.embed.identity`: the embedding identity an index is built
   with, recorded in its ``meta`` table with the first vectors and checked
   wherever vectors are written or compared.
+- :mod:`smriti.embed.provider`: which model a process embeds with (the one
+  provider rule) and the embedding call, shared by the indexer, search and
+  the service.
 - :mod:`smriti.embed.service`: ``smriti embed serve``, one process per
   memory root that holds the model and answers embedding requests over
   loopback TCP; :mod:`smriti.embed.client` asks it, starting it when needed.

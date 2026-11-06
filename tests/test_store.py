@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from smriti.core.tree import trunk_distance
+from smriti.embed import provider as embedding
 from smriti.store.indexer import index_tree
 from smriti.store.schema import ensure_schema
 from smriti.store.search import search
@@ -239,46 +240,43 @@ def test_index_file_single_upsert(mini_tree: Path) -> None:
 
 
 class TestProviderPreference:
-    """Selection policy for the embedding provider (indexer)."""
+    """Selection policy for the embedding provider (smriti.embed.provider.provider_keys)."""
 
-    def test_env_override_wins(self, monkeypatch):
-        from smriti.store import indexer
-
+    def test_env_override_wins_only_for_a_rebuild(self, monkeypatch):
         monkeypatch.setenv("SMRITI_EMBED_PROVIDER", "onnx")
-        monkeypatch.setattr(indexer, "_recorded_provider_key", lambda db=None: "local")
-        assert indexer._provider_preference() == ("onnx",)
+        monkeypatch.setattr(embedding, "recorded_provider", lambda db=None: "local")
+        assert embedding.provider_keys(rebuild=True) == ("onnx",)
+        assert embedding.provider_keys() == ("local",)
 
     def test_recorded_provider_pins_selection(self, monkeypatch):
         # A process embedding against an existing index must load the
         # provider that index was built with — never try others first
         # (the onnx-then-torch sequence mixed OpenMP runtimes and
         # aborted the MCP server mid-load, 2026-09-06).
-        from smriti.store import indexer
-
         monkeypatch.delenv("SMRITI_EMBED_PROVIDER", raising=False)
-        monkeypatch.setattr(indexer, "_recorded_provider_key", lambda db=None: "local")
-        assert indexer._provider_preference() == ("local",)
+        monkeypatch.setattr(embedding, "recorded_provider", lambda db=None: "local")
+        assert embedding.provider_keys() == ("local",)
+        assert embedding.provider_keys(rebuild=True) == ("local",)
+
+    def test_env_override_for_an_index_that_records_nothing(self, monkeypatch):
+        monkeypatch.setenv("SMRITI_EMBED_PROVIDER", "stub")
+        monkeypatch.setattr(embedding, "recorded_provider", lambda db=None: None)
+        assert embedding.provider_keys() == ("stub",)
 
     def test_auto_order_when_nothing_recorded(self, monkeypatch):
-        from smriti.store import indexer
-
         monkeypatch.delenv("SMRITI_EMBED_PROVIDER", raising=False)
-        monkeypatch.setattr(indexer, "_recorded_provider_key", lambda db=None: None)
-        assert indexer._provider_preference() == indexer._PROVIDER_AUTO_ORDER
+        monkeypatch.setattr(embedding, "recorded_provider", lambda db=None: None)
+        assert embedding.provider_keys() == embedding.AUTO_ORDER
 
     def test_recorded_key_read_from_meta(self, mini_tree: Path):
-        from smriti.store import indexer
-
         db_path = mini_tree / ".smriti" / "index.db"
         index_tree(root=mini_tree, db=db_path)
-        key = indexer._recorded_provider_key(db_path)
+        key = embedding.recorded_provider(db_path)
         # index_tree records whichever provider it used.
         assert key in ("onnx", "local", "stub")
 
     def test_recorded_key_none_for_missing_db(self, tmp_path: Path):
-        from smriti.store import indexer
-
-        assert indexer._recorded_provider_key(tmp_path / "nope.db") is None
+        assert embedding.recorded_provider(tmp_path / "nope.db") is None
 
 
 # ---------------------------------------------------------------- index policy
@@ -420,12 +418,11 @@ def test_an_index_from_before_source_records_is_adopted_not_reembedded(
 
 def test_a_full_reindex_that_fails_leaves_the_old_index(
         mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import smriti.store.indexer as indexer_mod
 
     db_path = mini_tree / ".smriti" / "index.db"
     index_tree(root=mini_tree, db=db_path)
     before = _sources(db_path)
-    real = indexer_mod._get_embedding_provider()
+    real = embedding.embedder()
 
     class DiesMidEmbed:
         model_name, dimension = real.model_name, real.dimension
@@ -433,7 +430,7 @@ def test_a_full_reindex_that_fails_leaves_the_old_index(
         async def embed(self, texts: list[str]) -> list[list[float]]:
             raise RuntimeError("embedder died")
 
-    monkeypatch.setattr(indexer_mod, "_get_embedding_provider", DiesMidEmbed)
+    monkeypatch.setattr(embedding, "embedder", DiesMidEmbed)
     with pytest.raises(RuntimeError, match="embedder died"):
         index_tree(full=True, root=mini_tree, db=db_path)
     assert _sources(db_path) == before
@@ -451,7 +448,7 @@ def test_a_run_keeps_what_another_writer_indexed_while_it_embedded(
 
     db_path = mini_tree / ".smriti" / "index.db"
     index_tree(root=mini_tree, db=db_path)
-    real = indexer_mod._get_embedding_provider()
+    real = embedding.embedder()
     new = mini_tree / "threads" / "written-mid-run.md"
     mind = mini_tree / "mind.md"
     mind.write_text("# Mind\n\nThe edit this run reads.\n", encoding="utf-8")
@@ -475,7 +472,7 @@ def test_a_run_keeps_what_another_writer_indexed_while_it_embedded(
                 writer.join()
             return await real.embed(texts)
 
-    monkeypatch.setattr(indexer_mod, "_get_embedding_provider", OthersWriteMidEmbed)
+    monkeypatch.setattr(embedding, "embedder", OthersWriteMidEmbed)
     index_tree(full=full, root=mini_tree, db=db_path)
 
     assert "threads/written-mid-run.md" in _sources(db_path)
@@ -499,7 +496,7 @@ def test_an_older_read_that_commits_first_does_not_win(
 
     db_path = mini_tree / ".smriti" / "index.db"
     index_tree(root=mini_tree, db=db_path)
-    real = indexer_mod._get_embedding_provider()
+    real = embedding.embedder()
     mind = mini_tree / "mind.md"
     current = "# Mind\n\nThe current text, which this run reads.\n"
     mind.write_text(current, encoding="utf-8")
@@ -524,7 +521,7 @@ def test_an_older_read_that_commits_first_does_not_win(
                 writer.join()
             return await real.embed(texts)
 
-    monkeypatch.setattr(indexer_mod, "_get_embedding_provider", OlderCommitsMidEmbed)
+    monkeypatch.setattr(embedding, "embedder", OlderCommitsMidEmbed)
     index_tree(full=full, root=mini_tree, db=db_path)
 
     conn = sqlite3.connect(str(db_path))
@@ -548,7 +545,7 @@ def test_when_the_file_moves_on_again_the_newer_index_stays(
 
     db_path = mini_tree / ".smriti" / "index.db"
     index_tree(root=mini_tree, db=db_path)
-    real = indexer_mod._get_embedding_provider()
+    real = embedding.embedder()
     mind = mini_tree / "mind.md"
     mind.write_text("# Mind\n\nVersion A, which this run reads.\n", encoding="utf-8")
 
@@ -577,7 +574,7 @@ def test_when_the_file_moves_on_again_the_newer_index_stays(
         conn.close()
         return text
 
-    monkeypatch.setattr(indexer_mod, "_get_embedding_provider", ThreeVersions)
+    monkeypatch.setattr(embedding, "embedder", ThreeVersions)
     index_tree(full=full, root=mini_tree, db=db_path)
     assert "Version B" in indexed_text()
     monkeypatch.undo()
@@ -596,7 +593,7 @@ def test_two_writes_indexed_out_of_order_keep_the_newer(
 
     db_path = mini_tree / ".smriti" / "index.db"
     index_tree(root=mini_tree, db=db_path)
-    real = indexer_mod._get_embedding_provider()
+    real = embedding.embedder()
     note = mini_tree / "threads" / "shared-day.md"
     note.write_text("# Day\n\nThe first session's entry.\n", encoding="utf-8")
 
@@ -617,7 +614,7 @@ def test_two_writes_indexed_out_of_order_keep_the_newer(
                 second.join()
             return await real.embed(texts)
 
-    monkeypatch.setattr(indexer_mod, "_get_embedding_provider", SecondFinishesFirst)
+    monkeypatch.setattr(embedding, "embedder", SecondFinishesFirst)
     assert indexer_mod.index_file(note, root=mini_tree, db=db_path) == 0
     conn = sqlite3.connect(str(db_path))
     text = " ".join(r[0] for r in conn.execute(
@@ -630,7 +627,6 @@ def test_only_a_full_reindex_changes_the_vector_dimension(
         mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import sqlite3
 
-    import smriti.store.indexer as indexer_mod
 
     db_path = mini_tree / ".smriti" / "index.db"
     index_tree(root=mini_tree, db=db_path)
@@ -641,7 +637,7 @@ def test_only_a_full_reindex_changes_the_vector_dimension(
         async def embed(self, texts: list[str]) -> list[list[float]]:
             return [[1.0] + [0.0] * 7 for _ in texts]
 
-    monkeypatch.setattr(indexer_mod, "_get_embedding_provider", Tiny)
+    monkeypatch.setattr(embedding, "embedder", Tiny)
     with pytest.raises(RuntimeError, match="--full"):
         index_tree(root=mini_tree, db=db_path)
     assert index_tree(full=True, root=mini_tree, db=db_path)["indexed"] == 4
@@ -710,7 +706,6 @@ def test_a_failed_vector_leg_scores_like_keyword_only(
     """Outside review #3: when embedding the query raised, the vector weight
     stayed in the sum, so every score lost half its range and missed callers'
     thresholds."""
-    import smriti.store.indexer as indexer_mod
     from smriti.store.schema import open_readonly
 
     db_path = mini_tree / ".smriti" / "index.db"
@@ -725,7 +720,7 @@ def test_a_failed_vector_leg_scores_like_keyword_only(
             async def embed(self, texts: list[str]) -> list[list[float]]:
                 raise RuntimeError("embedder unavailable")
 
-        monkeypatch.setattr(indexer_mod, "_get_embedding_provider", EmbedderDown)
+        monkeypatch.setattr(embedding, "embedder", EmbedderDown)
         degraded = search(db, "Viveka discrimination", use_reranker=False)
     finally:
         db.close()

@@ -42,9 +42,7 @@ class LocalEmbedding:
 
 @pytest.fixture(autouse=True)
 def offline_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
-    from smriti.store import indexer
-
-    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: LocalEmbedding())
+    monkeypatch.setattr("smriti.embed.provider.embedder", lambda: LocalEmbedding())
 
 
 def snapshot(root: Path) -> dict[str, bytes]:

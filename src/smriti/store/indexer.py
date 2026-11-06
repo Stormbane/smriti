@@ -8,33 +8,28 @@ re-processed.
 
 from __future__ import annotations
 
-import asyncio
-import functools
 import logging
 import os
 import sqlite3
 import struct
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any
 
 from smriti._vendored.memsearch.chunker import chunk_markdown, compute_chunk_id
 from smriti._vendored.memsearch.scanner import scan_paths
 from smriti.core.tree import smriti_db_path, tree_root, trunk_distance
+from smriti.embed import provider as embedding
 from smriti.embed.identity import (
     Embedded,
     EmbeddingIdentity,
-    EmbeddingUnavailable,
     StaleEmbedding,
     bind_identity,
     check_vectors,
     identity_of,
     mismatched_identity,
-    provider_for_model,
     provider_key,
     recorded_identity,
     vec_table_dimension,
@@ -48,200 +43,14 @@ log = logging.getLogger(__name__)
 __all__ = ["FileIndexed", "fill_pending_vectors", "index_file", "index_file_result",
            "index_tree", "provider_key"]
 
-_provider_for_model = provider_for_model  # the older name
+# Embedding goes through smriti.embed.provider (the embedder, the provider
+# rule, the identity of each batch of vectors), which search and the
+# embedding service share.
 
 
 def _serialize_f32(vec: list[float]) -> bytes:
     """Pack a float list into a little-endian f32 blob for sqlite-vec."""
     return struct.pack(f"<{len(vec)}f", *vec)
-
-
-# Registry keys tried when nothing pins the choice, best-first.
-_PROVIDER_AUTO_ORDER = ("onnx", "local")
-
-
-def _recorded_provider_key(db: Path | None = None) -> str | None:
-    """The provider the existing index was built with, from its meta table.
-
-    Every process embedding against an existing index must load the SAME
-    provider — a different one at best mismatches the vector dimension
-    (vec search silently degrades to FTS) and at worst mixes native
-    runtimes: trying onnxruntime first and then importing torch into the
-    same process aborted intermittently with 0xC0000409 mid-model-load,
-    which the harness surfaced as "Connection closed" (2026-09-06).
-    """
-    if db is None:
-        db = smriti_db_path()
-    if not db.exists():
-        return None
-    try:
-        from smriti.store.schema import open_readonly
-
-        conn = open_readonly(db)
-        try:
-            row = conn.execute(
-                "SELECT value FROM meta WHERE key = 'embedding_provider'"
-            ).fetchone()
-            if row:
-                return cast(str | None, row[0])
-            # Indexes built before the provider was recorded (< e8d98c2)
-            # still name their model: infer the provider from it rather
-            # than let the auto order pick a different one and strand
-            # the vectors behind the dimension guard (review).
-            row = conn.execute("SELECT value FROM meta WHERE key = 'model'").fetchone()
-            return _provider_for_model(row[0]) if row and row[0] else None
-        finally:
-            conn.close()
-    except (sqlite3.Error, OSError) as exc:
-        log.warning("could not read the index's embedding provider from %s: %s", db, exc)
-        return None
-
-
-def _provider_preference() -> tuple[str, ...]:
-    """Ordered provider keys to try.
-
-    1. ``SMRITI_EMBED_PROVIDER`` env — explicit override, used for
-       deliberate migrations (with ``smriti index --full``).
-    2. The provider recorded in the index's meta table — self-consistency
-       with the data being searched/updated.
-    3. Auto order (onnx first: lighter, offline-first).
-    """
-    import os
-
-    override = os.environ.get("SMRITI_EMBED_PROVIDER", "").strip().lower()
-    if override:
-        return (override,)
-    recorded = _recorded_provider_key()
-    if recorded:
-        return (recorded,)
-    return _PROVIDER_AUTO_ORDER
-
-
-class _EmbeddingProvider(Protocol):
-    """The embedding interface used here, across the untyped vendor boundary."""
-
-    @property
-    def model_name(self) -> str: ...
-
-    @property
-    def dimension(self) -> int: ...
-
-    async def embed(self, texts: list[str]) -> list[list[float]]: ...
-
-
-class _InProcess:
-    """A provider loaded in this process, with its identity worked out once, at load."""
-
-    def __init__(self, inner: _EmbeddingProvider) -> None:
-        self._inner = inner
-        self.identity = identity_of(inner)
-
-    @property
-    def model_name(self) -> str:
-        return self._inner.model_name
-
-    @property
-    def dimension(self) -> int:
-        return self._inner.dimension
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        return await self._inner.embed(texts)
-
-
-_IN_PROCESS: ContextVar[bool] = ContextVar("smriti_in_process_embeddings", default=False)
-
-
-@contextmanager
-def in_process_embeddings() -> Iterator[None]:
-    """Embed with a model loaded in this process for the block, not through the service.
-
-    ``index_tree`` runs this way: it embeds thousands of chunks in one
-    short-lived process, where loading the model once costs less than
-    shipping every chunk to the service.
-    """
-    token = _IN_PROCESS.set(True)
-    try:
-        yield
-    finally:
-        _IN_PROCESS.reset(token)
-
-
-def _get_embedding_provider() -> _EmbeddingProvider:
-    """The embedder for this process's searches and writes.
-
-    In a long-lived process (the MCP server, ``smriti read``, hooks) that
-    is the memory root's shared embedding service, so no process but the
-    service loads a model (``smriti.embed``). ``SMRITI_EMBED_SERVICE=0``,
-    or :func:`in_process_embeddings`, loads one here instead.
-    """
-    if not _IN_PROCESS.get():
-        from smriti.embed.client import service_enabled, service_provider
-
-        if service_enabled():
-            return service_provider(tree_root())
-    return _local_provider()
-
-
-@functools.cache
-def _local_provider() -> _EmbeddingProvider:
-    """Load the embedding provider for this index in this process (cached).
-
-    Building the provider costs 5-18s (model load); embedding a chunk
-    costs ~0.02s warm. Without the cache every write paid the build
-    cost again — the bulk of smriti_write latency in long-lived MCP
-    servers. See ``_provider_preference`` for the selection rules.
-    """
-    from smriti._vendored.memsearch.embeddings import get_provider
-
-    keys = _provider_preference()
-    last_error: Exception | None = None
-    for key in keys:
-        try:
-            return _InProcess(cast(_EmbeddingProvider, get_provider(key)))
-        except Exception as exc:  # noqa: BLE001 — logged; the next provider is tried
-            last_error = exc
-            log.warning("embedding provider %r unavailable: %s", key, exc)
-    raise RuntimeError(
-        f"No embedding provider available (tried {', '.join(keys)}; "
-        f"last error: {last_error}). The default ONNX provider needs "
-        "onnxruntime, tokenizers and huggingface_hub, all in "
-        "pip install 'smriti[read]'; the local provider needs sentence-transformers."
-    )
-
-
-def _forget_provider() -> None:
-    """Drop the cached model, so the next embedding loads what the index records now.
-
-    A model cached in a long-lived process can outlive a migration of the
-    index to another one; its vectors are then stale (see ``_embed``).
-    """
-    _local_provider.cache_clear()
-
-
-def _embed(provider: _EmbeddingProvider, texts: list[str], kind: str = "write") -> Embedded:
-    """Embed ``texts``, with the identity that made the vectors.
-
-    A provider that knows the identity of each result (the embedding
-    service's client) reports it per call; an in-process one has one
-    identity for its life. ``kind`` ("query" or "write") sets the deadline
-    a remote embedder works to.
-    """
-    per_call = getattr(provider, "embed_with_identity", None)
-    if callable(per_call):
-        embedded = per_call(texts, kind=kind)
-        if not isinstance(embedded, Embedded):
-            raise EmbeddingUnavailable("the embedder returned no identity with its vectors")
-    else:
-        vectors = asyncio.run(provider.embed(texts)) if texts else []
-        embedded = Embedded(vectors, identity_of(provider))
-    return check_vectors(embedded, len(texts))
-
-
-def _reason(exc: BaseException) -> str:
-    """A failure, as the user reads it in a degraded status."""
-    if isinstance(exc, (EmbeddingUnavailable, StaleEmbedding)):
-        return str(exc)
-    return f"{type(exc).__name__}: {exc}"
 
 
 def _indexed_files(conn: IndexDB) -> dict[str, str]:
@@ -381,9 +190,10 @@ def index_tree(
 
     # ── Get embedding provider and dimension ─────────────────────────
     # A model in this process, not the service: a run embeds thousands of
-    # chunks at once (see in_process_embeddings).
-    with in_process_embeddings():
-        provider = _get_embedding_provider()
+    # chunks at once (see in_process_embeddings). A full run rebuilds the
+    # index, so SMRITI_EMBED_PROVIDER may choose its model (provider_keys).
+    with embedding.in_process_embeddings(db=db, rebuild=full):
+        provider = embedding.embedder()
     ours = identity_of(provider)
     dim = provider.dimension
     log.info("Embedding provider: %s (dimension=%d)", provider.model_name, dim)
@@ -497,7 +307,7 @@ def index_tree(
         texts = [c.content for _, c, _, _ in all_chunks]
         if texts:
             log.info("Embedding %d chunks...", len(texts))
-        embeddings = _embed(provider, texts).vectors if texts else []
+        embeddings = embedding.embed(provider, texts).vectors if texts else []
 
         # ── Write, in one transaction ────────────────────────────────────
         # Searches keep seeing the old index until this commits, and a run
@@ -684,7 +494,7 @@ def index_file_result(path: Path, *, root: Path | None = None,
         # The vectors are of a model the index no longer records (or never
         # did): stale work. Embed once more, with a freshly loaded model.
         log.info("index_file %s: %s; embedding again", rel_source, exc)
-        _forget_provider()
+        embedding.forget_provider()
         embedded, reason = _try_embed(texts)
         try:
             result = _commit_file(db, path, root, rel_source, st, chunks, embedded, reason)
@@ -694,19 +504,9 @@ def index_file_result(path: Path, *, root: Path | None = None,
             result = _commit_file(db, path, root, rel_source, st, chunks, None,
                                   f"the embedder doesn't match the index: {again}")
     if (result.others_pending and embedded is not None and not result.vectors_pending
-            and not _service_repairs()):
+            and not embedding.embeds_through_service()):
         _fill_some_pending(db)
     return result
-
-
-def _service_repairs() -> bool:
-    """Whether this process embeds through the service (the choice
-    :func:`_get_embedding_provider` makes), whose own loop fills pending vectors."""
-    if _IN_PROCESS.get():
-        return False
-    from smriti.embed.client import service_enabled
-
-    return service_enabled()
 
 
 def _try_embed(texts: list[str]) -> tuple[Embedded | None, str]:
@@ -714,10 +514,10 @@ def _try_embed(texts: list[str]) -> tuple[Embedded | None, str]:
     if not texts:
         return None, ""
     try:
-        return _embed(_get_embedding_provider(), texts, "write"), ""
+        return embedding.embed(embedding.embedder(), texts, "write"), ""
     except Exception as exc:  # noqa: BLE001 — logged; the write is indexed for keywords meanwhile
         log.warning("embedding failed; the write's vectors are pending: %s", exc)
-        return None, _reason(exc)
+        return None, embedding.failure_reason(exc)
 
 
 def _commit_file(db: Path, path: Path, root: Path, rel_source: str, st: os.stat_result,
@@ -862,7 +662,7 @@ def fill_pending_vectors(*, db: Path | None = None,
         texts = [t for _, _, _, contents in picked for t in contents]
         embedded: Embedded | None = None
         if texts:
-            embedded = (embed or (lambda ts: _embed(_get_embedding_provider(), ts)))(texts)
+            embedded = (embed or (lambda ts: embedding.embed(embedding.embedder(), ts)))(texts)
             check_vectors(embedded, len(texts))
         conn.execute("BEGIN IMMEDIATE")
         if embedded is not None:

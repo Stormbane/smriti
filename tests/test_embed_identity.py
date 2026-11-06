@@ -20,6 +20,7 @@ import pytest
 
 import smriti.store.indexer as indexer
 from smriti._vendored.memsearch.embeddings.stub import StubEmbedding
+from smriti.embed import provider as embedding
 from smriti.embed.identity import (
     EmbeddingIdentity,
     identity_of,
@@ -69,7 +70,7 @@ class Down:
 
 
 class Providers:
-    """What ``_get_embedding_provider`` returns, switchable mid-test."""
+    """What ``embedding.embedder`` returns, switchable mid-test."""
 
     def __init__(self) -> None:
         self.current: Any = StubEmbedding()
@@ -83,7 +84,7 @@ class Providers:
 @pytest.fixture()
 def providers(monkeypatch: pytest.MonkeyPatch) -> Providers:
     p = Providers()
-    monkeypatch.setattr(indexer, "_get_embedding_provider", p)
+    monkeypatch.setattr(embedding, "embedder", p)
     return p
 
 
@@ -329,7 +330,7 @@ def test_racing_first_writes_with_different_models_never_mix(
         f.write_text(f"# {name}\n\nEntry {name}.\n", encoding="utf-8")
         files.append(f)
     mine = threading.local()
-    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: mine.provider)
+    monkeypatch.setattr(embedding, "embedder", lambda: mine.provider)
     start = threading.Barrier(2)
     results: list[Any] = [None, None]
     errors: list[BaseException] = []

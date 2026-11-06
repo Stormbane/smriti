@@ -888,7 +888,7 @@ def test_a_stop_finishes_the_work_in_flight(root: Path, services: Services) -> N
 def test_a_drain_follows_an_index_identity_change(
         root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
     (root / "a.md").write_text("# A\n\nSome text.\n", encoding="utf-8")
-    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: StubEmbedding())
+    monkeypatch.setattr("smriti.embed.provider.embedder", lambda: StubEmbedding())
     indexer.index_tree(root=root, db=root / ".smriti" / "index.db")
     svc = services.start(root, identity_check_s=0.05)
     client = ServiceEmbedding(root, spawn=False)
@@ -900,7 +900,7 @@ def test_a_drain_follows_an_index_identity_change(
         async def embed(self, texts: list[str]) -> list[list[float]]:
             return [[1.0] + [0.0] * 7 for _ in texts]
 
-    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: Tiny())
+    monkeypatch.setattr("smriti.embed.provider.embedder", lambda: Tiny())
     indexer.index_tree(full=True, root=root, db=root / ".smriti" / "index.db")
 
     assert _wait(lambda: svc.instance in services.reasons, 5)
@@ -1005,13 +1005,13 @@ def test_a_timed_out_write_followed_only_by_reads_ends_with_nothing_pending(
     from smriti.store.search import search_with_status
 
     (root / "a.md").write_text("# A\n\nSome text.\n", encoding="utf-8")
-    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: StubEmbedding())
+    monkeypatch.setattr("smriti.embed.provider.embedder", lambda: StubEmbedding())
     db = root / ".smriti" / "index.db"
     indexer.index_tree(root=root, db=db)
     gated = Gated()  # the write's embedding takes longer than the write waits
     services.start(root, gated, pending_poll_s=0.05)
     client = ServiceEmbedding(root, spawn=False, write_s=0.3)
-    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: client)
+    monkeypatch.setattr("smriti.embed.provider.embedder", lambda: client)
     note = root / "lantern.md"
     note.write_text("# Lantern\n\nAri hung a brass lantern by the door.\n", encoding="utf-8")
 
@@ -1059,10 +1059,10 @@ def test_a_starting_service_fills_pending_vectors_unasked(
             raise RuntimeError("no embedder")
 
     db = root / ".smriti" / "index.db"
-    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: StubEmbedding())
+    monkeypatch.setattr("smriti.embed.provider.embedder", lambda: StubEmbedding())
     (root / "a.md").write_text("# A\n\nSome text.\n", encoding="utf-8")
     indexer.index_tree(root=root, db=db)
-    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: Down())
+    monkeypatch.setattr("smriti.embed.provider.embedder", lambda: Down())
     for name in ("b", "c"):
         (root / f"{name}.md").write_text(f"# {name}\n\nWritten while down.\n", encoding="utf-8")
         assert indexer.index_file_result(root / f"{name}.md", root=root, db=db).vectors_pending
@@ -1102,7 +1102,7 @@ def test_without_sqlite_vec_the_repair_loop_waits_and_fills_once_it_loads(
         pytest.skip("sqlite-vec can't load here")
     real_load = schema._load_sqlite_vec
     monkeypatch.setattr(schema, "_load_sqlite_vec", lambda conn: False)
-    monkeypatch.setattr(indexer, "_get_embedding_provider", lambda: StubEmbedding())
+    monkeypatch.setattr("smriti.embed.provider.embedder", lambda: StubEmbedding())
     db = root / ".smriti" / "index.db"
     (root / "a.md").write_text("# A\n\nWritten on the base install.\n", encoding="utf-8")
     assert indexer.index_file_result(root / "a.md", root=root, db=db).vectors_pending
