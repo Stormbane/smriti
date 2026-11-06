@@ -33,30 +33,55 @@ the old state or the new one, never a mix. The saved offsets never run
 ahead of the day-log, so replay plus dedup by turn id recovers every
 turn. A state file that can't be read counts as a fresh one: everything
 is read again from the start, and dedup absorbs it.
+
+A record longer than one read (``_MAX_CHUNK``; a pasted image is one
+base64 line) is skipped (H12.6). A whole read without a newline makes
+the pass look for the record's end, ``_SCAN_CHUNK`` at a time, holding
+no more than that in memory; at its newline the offset moves past it,
+and the skip counts as a parse error, is logged, and is recorded in the
+file's state. Until that newline is written the record is waited for,
+as a partial line is, and the file's state says so
+(``FileState.waiting``); a later pass looks only at the bytes that came
+since. Before, a pass read the same 8 MiB again forever, and every later
+turn in the file was lost without an error.
 """
 
 from __future__ import annotations
 
 import glob as globmod
+import logging
 import time
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-from smriti.daylog.adapters import get_adapter
-from smriti.daylog.config import DaylogConfig
+from smriti.daylog.adapters import Adapter, get_adapter
+from smriti.daylog.config import DaylogConfig, SourceSpec
 from smriti.daylog.lock import writer_lock
-from smriti.daylog.state import DaylogState, fingerprint_head
+from smriti.daylog.state import MAX_SKIPS_KEPT, DaylogState, FileState, fingerprint_head
 from smriti.daylog.writer import AppendPass, append_turns_unlocked
+
+log = logging.getLogger(__name__)
 
 # Read at most this much new data from one file per pass; huge backlogs
 # drain over successive passes instead of ballooning memory.
 _MAX_CHUNK = 8 * 1024 * 1024
+# How much of a record longer than that a pass reads at a time, looking for its end.
+_SCAN_CHUNK = 1024 * 1024
 
 # Transcript namespaces produced by smriti's OWN internal LLM
 # subprocesses (see smriti.llm.workdir) — never captured, or derived
 # text would feed back into future digests.
 _EXCLUDE_SUBSTRINGS = ("llm-workdir",)
+
+
+@dataclass
+class Skipped:
+    """A record skipped as longer than one read."""
+
+    path: str
+    offset: int
+    size: int
 
 
 @dataclass
@@ -66,6 +91,7 @@ class CollectReport:
     files_scanned: int = 0
     parse_errors: int = 0
     repaired_days: list[str] = field(default_factory=list)  # day-files whose torn line was closed
+    skipped: list[Skipped] = field(default_factory=list)
 
 
 def collect_once(cfg: DaylogConfig, *, lock_timeout_s: float = 60.0) -> CollectReport:
@@ -114,29 +140,94 @@ def _collect_locked(cfg: DaylogConfig, state: DaylogState, batch: AppendPass) ->
             if size < fstate.offset or (
                 fstate.fingerprint and fingerprint and fingerprint != fstate.fingerprint
             ):
-                fstate.offset = 0  # truncated or recreated: re-read, dedup absorbs
+                # truncated or recreated: re-read, dedup absorbs
+                fstate.offset = fstate.waiting = 0
             fstate.size = size
             fstate.fingerprint = fingerprint
-            if size <= fstate.offset:
-                continue
-            try:
-                with path.open("rb") as f:
-                    f.seek(fstate.offset)
-                    blob = f.read(_MAX_CHUNK)
-            except OSError:
-                continue
-            result = adapter.extract(path, blob)
-            if result.consumed <= 0 and not result.errors:
-                continue
-            appended, changed = append_turns_unlocked(cfg, result.turns, batch)
-            report.appended += appended
-            report.changed_days |= changed
-            fstate.offset += result.consumed
-            fstate.parse_errors += result.errors
-            state.source(spec.name).parse_errors += result.errors
-            report.parse_errors += result.errors
-            if result.turns:
-                now = time.time()
-                fstate.last_turn = now
-                state.source(spec.name).last_turn = now
+            _read_new(cfg, state, spec, adapter, path, fstate, report, batch)
     return report
+
+
+def _read_new(cfg: DaylogConfig, state: DaylogState, spec: SourceSpec, adapter: Adapter,
+              path: Path, fstate: FileState, report: CollectReport, batch: AppendPass) -> None:
+    """Capture what is new in one file: one read of complete lines, after at most one skip."""
+    skipped = False
+    while fstate.size > fstate.offset:
+        if fstate.waiting:  # a record longer than one read starts at the offset
+            if skipped or fstate.size <= fstate.waiting:
+                return  # nothing new since the last look: its end is still to come
+            if not _skip_record(state, spec, path, fstate, report):
+                return
+            skipped = True
+            continue
+        try:
+            with path.open("rb") as f:
+                f.seek(fstate.offset)
+                blob = f.read(_MAX_CHUNK)
+        except OSError:
+            return
+        if len(blob) >= _MAX_CHUNK and b"\n" not in blob:
+            fstate.waiting = fstate.offset + len(blob)
+            blob = b""  # held no longer than the look: memory stays one read
+            continue
+        result = adapter.extract(path, blob)
+        if result.consumed <= 0 and not result.errors:
+            return  # a partial last line, left for the next pass
+        appended, changed = append_turns_unlocked(cfg, result.turns, batch)
+        report.appended += appended
+        report.changed_days |= changed
+        fstate.offset += result.consumed
+        _count_errors(state, spec, fstate, report, result.errors)
+        if result.turns:
+            now = time.time()
+            fstate.last_turn = now
+            state.source(spec.name).last_turn = now
+        return
+
+
+def _skip_record(state: DaylogState, spec: SourceSpec, path: Path, fstate: FileState,
+                 report: CollectReport) -> bool:
+    """Skip the over-long record at the offset if its end has been written; True if it was.
+
+    Looks only at the bytes after ``waiting``, which earlier looks found
+    no newline in; when there is none yet, ``waiting`` moves to the end.
+    """
+    try:
+        end = _next_line_start(path, max(fstate.waiting, fstate.offset), fstate.size)
+    except OSError:
+        return False
+    if end is None:
+        fstate.waiting = fstate.size
+        return False
+    skip = Skipped(str(path), fstate.offset, end - fstate.offset)
+    log.warning("capture: skipped a %.1f MiB record at byte %d of %s; it is longer than "
+                "one read (%d MiB)", skip.size / 2**20, skip.offset, path, _MAX_CHUNK // 2**20)
+    fstate.skipped = [*fstate.skipped, [skip.offset, skip.size, int(time.time())]]
+    del fstate.skipped[:-MAX_SKIPS_KEPT]
+    fstate.offset, fstate.waiting = end, 0
+    report.skipped.append(skip)
+    _count_errors(state, spec, fstate, report, 1)
+    return True
+
+
+def _next_line_start(path: Path, start: int, stop: int) -> int | None:
+    """Where the line after the first newline in ``[start, stop)`` begins; None without one."""
+    with path.open("rb") as f:
+        f.seek(start)
+        pos = start
+        while pos < stop:
+            chunk = f.read(min(_SCAN_CHUNK, stop - pos))
+            if not chunk:
+                return None
+            newline = chunk.find(b"\n")
+            if newline >= 0:
+                return pos + newline + 1
+            pos += len(chunk)
+    return None
+
+
+def _count_errors(state: DaylogState, spec: SourceSpec, fstate: FileState,
+                  report: CollectReport, errors: int) -> None:
+    fstate.parse_errors += errors
+    state.source(spec.name).parse_errors += errors
+    report.parse_errors += errors

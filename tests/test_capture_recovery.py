@@ -247,3 +247,77 @@ def test_status_says_how_many_corrupt_lines_the_day_log_holds(
     assert main(["status"]) == 0
     out = capsys.readouterr().out
     assert f"day-log files: 1 corrupt line ({DAY}: 1); 1 torn last line closed" in out
+
+
+# ------------------------------------------------------------ over-long records
+
+MIB = 1024 * 1024
+
+
+def _huge(minute: int, size: int, end: bool = True) -> str:
+    """A user record of about *size* bytes: a pasted image is one base64 line."""
+    line = _claude(minute, "look at this: " + "iVBORw0KGgo" * (size // 11))
+    return line if end else line[:-1]
+
+
+def _passes(cfg: DaylogConfig, n: int) -> list[object]:
+    return [collect_once(cfg) for _ in range(n)]
+
+
+def test_a_record_longer_than_one_read_is_skipped_and_the_turns_after_it_captured(
+        tmp_path: Path) -> None:
+    cfg, transcript = _source(tmp_path)
+    _say(transcript, _claude(0, "before the image"), _huge(1, 9 * MIB),
+         _claude(2, "after the image"), _claude(3, "and later still", who="assistant"))
+    reports = _passes(cfg, 3)
+    texts = [t.text for t in read_day_turns(cfg.day_jsonl(DAY))]
+    assert texts == ["before the image", "after the image", "and later still"]
+    skips = [s for r in reports for s in r.skipped]  # type: ignore[attr-defined]
+    assert len(skips) == 1 and skips[0].path == str(transcript)
+    start = len(_claude(0, "before the image").encode())
+    assert skips[0].offset == start and skips[0].size == len(_huge(1, 9 * MIB).encode())
+    fstate = DaylogState.load(cfg.state_path).sources["claude"].files[str(transcript)]
+    assert fstate.offset == transcript.stat().st_size and fstate.waiting == 0
+    assert fstate.parse_errors == 1 and [s[:2] for s in fstate.skipped] == [[start, skips[0].size]]
+    assert DaylogState.load(cfg.state_path).sources["claude"].parse_errors == 1
+
+
+def test_a_long_record_still_being_written_is_waited_for_not_skipped(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import smriti.daylog.collect as collect
+
+    cfg, transcript = _source(tmp_path)
+    _say(transcript, _claude(0, "before the image"), _huge(1, 9 * MIB, end=False))
+    _passes(cfg, 2)
+    start = len(_claude(0, "before the image").encode())
+    fstate = DaylogState.load(cfg.state_path).sources["claude"].files[str(transcript)]
+    assert fstate.offset == start and fstate.waiting == transcript.stat().st_size
+    assert fstate.parse_errors == 0 and fstate.skipped == []
+
+    looked: list[int] = []
+    real = collect._next_line_start
+    monkeypatch.setattr(collect, "_next_line_start",
+                        lambda path, a, b: looked.append(a) or real(path, a, b))
+    collect_once(cfg)
+    assert looked == []  # nothing new: the bytes already looked at aren't read again
+    _say(transcript, "\n", _claude(2, "after the image"))
+    report = collect_once(cfg)
+    assert looked == [fstate.waiting]  # only what came since
+    assert len(report.skipped) == 1 and report.appended == 1
+    assert [t.text for t in read_day_turns(cfg.day_jsonl(DAY))][-1] == "after the image"
+
+
+def test_skipping_a_long_record_reads_it_a_step_at_a_time(tmp_path: Path) -> None:
+    import tracemalloc
+
+    cfg, transcript = _source(tmp_path)
+    _say(transcript, _huge(1, 40 * MIB), _claude(2, "after"))
+    tracemalloc.start()
+    try:  # one read finds no newline; the pass looks for the end, skips, and reads on
+        report = collect_once(cfg)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert len(report.skipped) == 1 and report.skipped[0].size > 40 * MIB
+    assert peak < 12 * MIB, f"peak {peak / MIB:.1f} MiB"  # one read and one step, not 40 MiB
+    assert [t.text for t in read_day_turns(cfg.day_jsonl(DAY))] == ["after"]

@@ -32,6 +32,9 @@ from typing import Any
 
 _FINGERPRINT_BYTES = 256
 
+# How many skipped records a file's state remembers (the newest).
+MAX_SKIPS_KEPT = 10
+
 
 @dataclass
 class FileState:
@@ -41,6 +44,15 @@ class FileState:
     last_scan: float = 0.0
     last_turn: float = 0.0
     parse_errors: int = 0
+    # Above the offset: a record longer than one read starts at the offset,
+    # and the bytes up to here hold no newline, so its end is still to come.
+    waiting: int = 0
+    # The records skipped as longer than one read: [offset, bytes, unix time].
+    skipped: list[list[int]] = field(default_factory=list)
+
+
+# Saved only when set, so the state of a file that never needed them looks as it did.
+_OPTIONAL = {"waiting": 0, "skipped": []}
 
 
 @dataclass
@@ -60,7 +72,19 @@ def _file_state(raw: dict[str, Any]) -> FileState:
         last_scan=float(raw.get("last_scan", 0.0)),
         last_turn=float(raw.get("last_turn", 0.0)),
         parse_errors=int(raw.get("parse_errors", 0)),
+        waiting=int(raw.get("waiting", 0)),
+        skipped=[[int(x) for x in entry] for entry in raw.get("skipped", [])][-MAX_SKIPS_KEPT:],
     )
+
+
+def _file_json(fstate: FileState) -> dict[str, Any]:
+    return {k: v for k, v in asdict(fstate).items() if _OPTIONAL.get(k, ...) != v}
+
+
+def _source_json(source: SourceState) -> dict[str, Any]:
+    return {"files": {p: _file_json(f) for p, f in source.files.items()},
+            "last_scan": source.last_scan, "last_turn": source.last_turn,
+            "parse_errors": source.parse_errors}
 
 
 def fingerprint_head(path: Path) -> str:
@@ -153,7 +177,7 @@ class DaylogState:
 
     def save(self) -> None:
         payload: dict[str, object] = {
-            "sources": {n: asdict(s) for n, s in self.sources.items()},
+            "sources": {n: _source_json(s) for n, s in self.sources.items()},
             "dirty_days": sorted(self.dirty_days),
         }
         if self.corrupt_lines:
