@@ -368,6 +368,7 @@ def measure_mcp(side: Side, queries: Sequence[str], out: dict[str, Any]) -> None
             if not text.startswith("Written"):
                 out.setdefault("problems", []).append(f"smriti_write: {text[:200]}")
         out["write_p50_ms"], out["write_max_ms"] = statistics.median(writes), max(writes)
+        out["writes_ms"] = writes
         out["mcp_rss_mb"] = rss_mb(mcp.proc.pid)
         running = services(side)
         out["service_rss_mb"] = rss_mb(int(running[0]["pid"])) if running else None
