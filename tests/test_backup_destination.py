@@ -431,3 +431,110 @@ def test_the_remedy_when_origin_is_the_destination(tmp_path: Path) -> None:
     assert f'git -C "{repo}" remote remove origin' in steps
     assert "remote remove mirror" not in steps and "unset-upstream" not in steps
     assert "git-crypt init" in steps
+
+
+# ── A remote defined only in the global config ─────────────────────
+#
+# `git remote get-url` knows only the repository's own remotes (git's
+# remote_is_configured with in_repo), while `git push` and `git remote` use
+# one from any config scope; the installer then named no destination for a
+# remote that the backup pushes to (found in H12.13's review).
+
+# Each shape is config entries; "R" is the remote's name. url.* rewrites go to
+# the global config in both variants, so only where the remote is defined differs.
+GLOBAL_SHAPES: dict[str, list[tuple[str, str]]] = {
+    "a url": [("remote.R.url", ORIGIN)],
+    "two urls": [("remote.R.url", ORIGIN), ("remote.R.url", MIRROR)],
+    "a push url": [("remote.R.url", ORIGIN), ("remote.R.pushurl", MIRROR)],
+    "two push urls": [("remote.R.url", ORIGIN), ("remote.R.pushurl", MIRROR),
+                      ("remote.R.pushurl", PRIVATE)],
+    "pushInsteadOf": [("remote.R.url", PRIVATE),
+                      ("url.https://example.com/public/.pushInsteadOf",
+                       "https://example.com/private/")],
+    "insteadOf": [("remote.R.url", PRIVATE),
+                  ("url.https://example.com/public/.insteadOf", "https://example.com/private/")],
+    # A push URL is rewritten by insteadOf, never by pushInsteadOf.
+    "a push url and both rewrites": [
+        ("remote.R.url", ORIGIN), ("remote.R.pushurl", PRIVATE),
+        ("url.https://example.com/public/.insteadOf", "https://example.com/private/"),
+        ("url.https://push.example.com/.pushInsteadOf", "https://example.com/")],
+    # Of two URLs, only the one a pushInsteadOf rewrites is pushed to.
+    "one of two urls pushInsteadOf'd": [
+        ("remote.R.url", ORIGIN), ("remote.R.url", PRIVATE),
+        ("url.https://example.com/public/.pushInsteadOf", "https://example.com/private/")],
+}
+
+
+def _global_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str) -> Path:
+    path = tmp_path / f"{name}.gitconfig"
+    path.write_text("", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(path))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    return path
+
+
+def _push_urls_with_the_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str,
+                               remote: str, where: str) -> tuple[str, ...]:
+    """What the installer names, with the remote in the repository's or the global config."""
+    base = tmp_path / where
+    base.mkdir()
+    glob = _global_config(base, monkeypatch, where)
+    repo = _repo(base, commit=False)
+    for key, value in GLOBAL_SHAPES[shape]:
+        key = key.replace("remote.R.", f"remote.{remote}.")
+        if key.startswith("url.") or where == "global":
+            _git(base, "config", "--file", str(glob), "--add", key, value)
+        else:
+            _git(repo, "config", "--add", key, value)
+    if remote != "origin":
+        _track(repo, remote)
+    if where == "global":
+        assert "[remote" not in (repo / ".git" / "config").read_text(encoding="utf-8")
+    state = privacy.inspect_git(repo)
+    assert state.remote == remote and not state.error
+    return state.remote_urls
+
+
+@pytest.mark.parametrize("remote", ["origin", "team/ari.backup"])
+@pytest.mark.parametrize("shape", list(GLOBAL_SHAPES), ids=list(GLOBAL_SHAPES))
+def test_a_remote_only_in_the_global_config_has_its_push_urls(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str, remote: str) -> None:
+    """The same URLs as git's own `get-url --push --all` gives for the remote defined in
+    the repository: before, none, so the privacy question named no destination."""
+    in_repo = _push_urls_with_the_remote(tmp_path, monkeypatch, shape, remote, "local")
+    assert in_repo
+    assert _push_urls_with_the_remote(tmp_path, monkeypatch, shape, remote, "global") == in_repo
+
+
+def test_the_backup_pushes_where_the_installer_says_with_a_global_remote(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real push: origin, defined only in a global config, fetches from one bare
+    repository and pushes to another. The installer names the second and asks about it."""
+    repo = _repo(tmp_path)
+    fetch, push = _bare(tmp_path, "fetch"), _bare(tmp_path, "push")
+    glob = _global_config(tmp_path, monkeypatch, "global")
+    glob.write_text(f'[remote "origin"]\n\turl = {Path(fetch).as_posix()}\n'
+                    f'\tpushurl = {Path(push).as_posix()}\n', encoding="utf-8")
+    assert _git(repo, "remote") == "origin"
+    state = privacy.inspect_git(repo)
+    said = {os.path.normcase(str(Path(u).resolve())) for u in state.remote_urls}
+    assert said == {os.path.normcase(str(Path(push).resolve()))}
+
+    asked: list[str] = []
+
+    def read(prompt: str) -> str:
+        asked.append(prompt)
+        return "n"
+
+    _decide(repo, interactive=True, read=read)
+    assert asked == [f"{privacy.REMOTE_QUESTION.format(url=state.remote_urls[0])} [y/n] "]
+
+    (repo / "note.md").write_text("hello\n", encoding="utf-8")
+    env = {**os.environ, "SMRITI_ROOT": str(repo)}
+    env.pop("SMRITI_INTERNAL", None)
+    subprocess.run([sys.executable, str(_SCRIPT), "--tag", "t", "--foreground", "--push"],
+                   env=env, check=True, timeout=120)
+    head = _git(repo, "rev-parse", "HEAD")
+    received = {os.path.normcase(str(Path(u).resolve())) for u in (fetch, push)
+                if head in _git(Path(u), "for-each-ref", "--format=%(objectname)")}
+    assert received == said

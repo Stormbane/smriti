@@ -529,7 +529,8 @@ def _direct_push_url(root: Path, url: str) -> str:
     git-config(1)): a matching pushInsteadOf rewrites the URL as given and
     wins; otherwise a matching insteadOf does; within each, the longest
     matching prefix. A named remote needs none of this: ``git remote get-url
-    --push`` applies the same rules itself.
+    --push`` applies the same rules to the repository's own, and
+    :func:`_configured_push_urls` to one from the global or system config.
     """
     fetch, push = _url_rewrites(root)
     for rewrites in (push, fetch):
@@ -537,6 +538,35 @@ def _direct_push_url(root: Path, url: str) -> str:
         if rewritten is not None:
             return rewritten
     return url
+
+
+def _configured_push_urls(root: Path, remote: str) -> list[str]:
+    """The push URLs of the configured remote *remote*, read from git's effective config.
+
+    For a remote that ``git remote get-url`` doesn't know though ``git push``
+    uses it: one defined only in the global or system config. As git works
+    them out (``alias_all_urls`` in its remote.c): the remote's ``pushurl``
+    values, each rewritten by ``insteadOf``; without any, each ``url`` that a
+    ``pushInsteadOf`` rewrites, so rewritten; without those, each ``url``
+    rewritten by ``insteadOf``. Raises SubprocessError when git can't say.
+    """
+    done = _git(root, "config", "-z", "--get-regexp", r"^remote\..*\.(url|pushurl)$")
+    if done.returncode not in (0, 1):  # 1: none set
+        raise subprocess.SubprocessError(done.stderr.strip() or "git config failed")
+    urls: list[str] = []
+    pushurls: list[str] = []
+    for entry in done.stdout.split("\0"):
+        key, newline, value = entry.partition("\n")  # -z: key, newline, value
+        if not newline:
+            continue  # no value: git refuses such a URL
+        name, _, var = key[len("remote."):].rpartition(".")  # a name may hold dots
+        if name == remote:
+            (pushurls if var == "pushurl" else urls).append(value)
+    fetch, push = _url_rewrites(root)
+    if pushurls:
+        return [_rewrite(u, fetch) or u for u in pushurls]
+    aliased = [rewritten for u in urls if (rewritten := _rewrite(u, push)) is not None]
+    return aliased or [_rewrite(u, fetch) or u for u in urls]
 
 
 def backup_remote(root: Path) -> tuple[str | None, str]:
@@ -574,6 +604,10 @@ def _push_urls(root: Path, remote: str) -> list[str]:
         lines = url.stdout.splitlines()
     elif "no such remote" not in url.stderr.lower():
         raise subprocess.SubprocessError(url.stderr.strip() or f"git exited {url.returncode}")
+    elif remote in configured_remotes(root):
+        # A remote from the global or system config: `git push` uses it, but
+        # get-url knows only the repository's own remotes.
+        lines = _configured_push_urls(root, remote)
     elif _names_a_location(remote):
         # An upstream that names a URL or path directly: git pushes there, rewritten.
         lines = [_direct_push_url(root, remote)]
