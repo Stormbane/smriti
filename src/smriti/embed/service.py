@@ -22,7 +22,16 @@ embedding requests over loopback TCP (see :mod:`smriti.embed.protocol`).
   loaded; when the index records another (a migration), it drains: stops
   accepting, finishes in-flight work and exits, and the next client starts
   a fresh one. Clients of other versions use whatever service is running.
-- **Idle exit** after 15 minutes without a request (``SMRITI_EMBED_IDLE_S``)
+- **Holds keep it loaded while sessions are open.** A ``hold`` is an
+  authenticated request that does no work: it only resets the idle timer,
+  and answers with the instance and ``idle_s``. A long-lived client (the
+  MCP server) sends one every ``idle_s / 3`` from its first embedding on
+  (:mod:`smriti.embed.client`). It is advertised in the hello (``"hold":
+  true``); a service from before it answers "unknown op", and the client
+  stops holding that instance. A hold never undoes a drain: the drain is
+  decided before it, and a draining service accepts nothing new.
+- **Idle exit** after 15 minutes without a request or a hold
+  (``SMRITI_EMBED_IDLE_S``), so once no session has held it for that long,
   returns the model's memory to the operating system, and lets new code in.
 """
 
@@ -121,6 +130,7 @@ class Stats:
     auth_failures: int = 0
     repaired: int = 0  # sources whose pending vectors the repair loop filled
     authenticated: int = 0  # connections that passed the handshake
+    held: int = 0  # holds answered: requests that only reset the idle timer
 
 
 class _Interrupted(Exception):
@@ -133,7 +143,7 @@ class EmbedService:
     def __init__(self, *, provider: _Provider, key: bytes, db: Path | None,
                  identity: EmbeddingIdentity | None = None, idle_s: float = IDLE_S,
                  handshake_s: float = HANDSHAKE_S, request_read_s: float = REQUEST_READ_S,
-                 keepalive_s: float = KEEPALIVE_S,
+                 keepalive_s: float = KEEPALIVE_S, hold: bool = True,
                  max_connections: int = MAX_CONNECTIONS, queue_max: int = QUEUE_MAX,
                  identity_check_s: float = 1.0, pending_poll_s: float = 2.0,
                  novec_poll_s: float = 60.0,
@@ -148,6 +158,7 @@ class EmbedService:
         self.handshake_s = handshake_s
         self.request_read_s = request_read_s
         self.keepalive_s = keepalive_s  # 0: one request per connection, as before keep-alive
+        self.hold = hold  # False: no "hold" op, as before it (an older service, in tests)
         self.identity_check_s = identity_check_s
         self.pending_poll_s = pending_poll_s
         self.novec_poll_s = novec_poll_s  # how often to look again while sqlite-vec won't load
@@ -357,6 +368,8 @@ class EmbedService:
                          "proof": server_proof(self.key, nonce_c, nonce_s, self.instance)}
         if self.keepalive_s > 0:
             answer["keepalive_s"] = self.keepalive_s
+        if self.hold:
+            answer["hold"] = True  # a constant: nothing new is read before authentication
         send_frame(conn, answer, deadline)
         auth = recv_frame(conn, deadline, PREAUTH_MAX)
         if auth.get("op") != "auth" or not proofs_match(
@@ -372,17 +385,33 @@ class EmbedService:
             return self._handle_embed(request)
         if op == "status":
             return {"ok": True, **self.status()}
+        if op == "hold" and self.hold:
+            return self._handle_hold()
         if op == "stop":
             self.stop("stopped on request")
             return {"ok": True, "instance": self.instance}
         return {"ok": False, "code": "op", "error": f"unknown op {op!r}"}
+
+    def _handle_hold(self) -> Frame:
+        """Reset the idle timer, and nothing else: a session is open that will search again.
+
+        A draining service is past its idle check (``run`` decides a drain
+        once), so a hold that reaches it changes nothing; its answer says
+        "draining", and the client follows the discovery file to the next.
+        """
+        if not self._draining.is_set():
+            self._last_request = time.monotonic()
+        with self._active_lock:
+            self.stats.held += 1
+        return {"ok": True, "instance": self.instance, "state": self.state,
+                "idle_s": self.idle_s}
 
     def status(self) -> dict[str, Any]:
         now = time.monotonic()
         return {"instance": self.instance, "pid": os.getpid(), "state": self.state,
                 "identity": asdict(self.identity), "uptime_s": round(now - self._started, 1),
                 "idle_for_s": round(now - self._last_request, 1), "idle_s": self.idle_s,
-                "keepalive_s": self.keepalive_s,
+                "keepalive_s": self.keepalive_s, "hold": self.hold,
                 "queued": self._queue.qsize(), "active": self._active,
                 "pending": self.pending, "can_store_vectors": self.can_store_vectors,
                 "stats": asdict(self.stats)}

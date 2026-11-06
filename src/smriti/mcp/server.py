@@ -100,6 +100,11 @@ def handle_message(msg: Message) -> Message | None:
 
 def main() -> None:
     """Run the MCP server over stdio."""
+    from smriti.embed import hold_while_running
+
+    # A session's server lives as long as the session: once it has embedded,
+    # it keeps the embedding service loaded until it exits (smriti.embed.client).
+    hold_while_running()
     # UTF-8 for Windows
     if hasattr(sys.stdin, "reconfigure"):
         sys.stdin.reconfigure(encoding="utf-8")

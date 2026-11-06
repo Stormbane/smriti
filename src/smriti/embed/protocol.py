@@ -8,9 +8,10 @@ long.
 A connection goes::
 
     client -> {"op": "hello", "proto": 1, "nonce": Nc, "client": version}
-    server -> {"proto": 1, "instance": I, "nonce": Ns, "proof": S, "keepalive_s": K}
+    server -> {"proto": 1, "instance": I, "nonce": Ns, "proof": S, "keepalive_s": K,
+               "hold": true}
     client -> {"op": "auth", "proof": C}
-    client -> {"op": "embed" | "status" | "stop", ...}
+    client -> {"op": "embed" | "status" | "hold" | "stop", ...}
     server -> {"ok": true, ...} | {"ok": false, "code": ..., "error": ...}
     (more requests and replies, one at a time, while the service keeps it)
 
@@ -29,6 +30,12 @@ while it has been idle for less than ``K`` minus a margin, and sends a
 ``stop`` on a fresh one. Without the field (an older service) a connection
 carries one request, and a client that doesn't know the field closes after
 one, so every pairing of versions works; the protocol number is unchanged.
+
+**Hold.** ``{"op": "hold"}`` does no work: it resets the service's idle
+timer, and the answer carries ``instance``, ``state`` and ``idle_s``. A
+service that knows it says ``"hold": true`` in its hello; an older one
+answers ``{"ok": false, "code": "op"}``, which a client takes as "this
+instance can't be held". Again the protocol number is unchanged.
 """
 
 from __future__ import annotations

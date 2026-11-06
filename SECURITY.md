@@ -120,6 +120,17 @@ root and embeds text for the user's other smriti processes: the MCP servers,
   these bounds another local user can tie up the port for a while, which degrades search to
   keywords and leaves new writes' vectors pending, but can't exhaust memory or
   threads, or make a client hang.
+- **Holds.** While an MCP server runs, from its first search or write on, it
+  sends a `hold` every `idle_s / 3` (5 minutes by default), each on a connection
+  of its own, so the model stays loaded while sessions are open; the service
+  exits `idle_s` after the last request or hold. A hold is a request like any
+  other: sent only after authentication, under the same bounds, and it does no
+  work but reset the idle timer (its answer is the instance, its state and
+  `idle_s`). Before authentication the hello gains only a constant `"hold": true`;
+  nothing new is read. A peer with the key can keep the model in memory for as
+  long as it likes, as it could by sending requests. Holds never stop a drain:
+  `smriti embed stop` and an index migration still end the service, and a
+  holding server then starts the next one.
 - **The trust boundary is the user.** Any process running as the same user can
   read the key and use the service, and could equally read the memory tree
   itself; the service adds no access the user's own processes lack. The traffic

@@ -16,3 +16,24 @@ one, through the vendored providers).
 """
 
 from __future__ import annotations
+
+_holding = False
+
+
+def hold_while_running() -> None:
+    """Keep the memory root's embedding service loaded while this process runs.
+
+    For a long-lived client, the MCP server: from its first embedding on,
+    its client holds the service (:class:`smriti.embed.client.ServiceEmbedding`),
+    so a search after a long pause still finds the model loaded. Short-lived
+    processes (``smriti read``, hooks, the nightly) don't call it, so they
+    never keep the model in memory. It imports nothing: the server calls it
+    at startup.
+    """
+    global _holding
+    _holding = True
+
+
+def holding() -> bool:
+    """Whether this process holds the service (see :func:`hold_while_running`)."""
+    return _holding

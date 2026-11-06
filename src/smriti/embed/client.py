@@ -18,6 +18,18 @@ handshake are paid once rather than per request (the connect alone takes
 14-21 ms on Windows). It is reused only for ``embed`` and ``status``, which
 are idempotent: when the service had closed it first, the request goes
 once more on a fresh connection. A ``stop`` always goes on its own.
+
+A long-lived process (the MCP server, through
+:func:`smriti.embed.hold_while_running`) also *holds* the service, so the
+model stays loaded while its session is open, as it did when each server
+loaded its own: from the client's first successful embedding on, a daemon
+thread sends a ``hold`` at once and then every ``idle_s / 3`` (the service's
+own idle exit, from its answer), each on a connection of its own, so a hold
+never takes the one kept for requests. When a hold is due and the service
+is gone or draining, the thread starts the next one (throttled like any
+start), so the model is warm again before the next search. A service from
+before holds answers "unknown op": that instance isn't held again, and the
+next one is. ``smriti read``, hooks and the nightly don't hold.
 """
 
 from __future__ import annotations
@@ -30,6 +42,7 @@ import sys
 import threading
 import time
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any
@@ -40,6 +53,7 @@ if TYPE_CHECKING:
     import socket
     import subprocess
 
+from smriti.embed import holding
 from smriti.embed.identity import Embedded, EmbeddingIdentity, EmbeddingUnavailable
 from smriti.embed.protocol import (
     MAX_FRAME,
@@ -76,6 +90,9 @@ SPAWN_BACKOFF_S = 10.0  # one start per root in this long, whoever asks
 CONNECT_S = 0.5  # a loopback connect that takes longer finds nobody listening
 FAILED_BACKOFF_S = 30.0  # after a failed start, report it this long before trying again
 KEEPALIVE_MARGIN_S = 1.0  # a kept connection is reused only this long before the service's close
+HOLD_EVERY_S = 300.0  # between holds until the service says its idle_s (the default 900 s / 3)
+HOLD_MIN_S = 0.05  # the shortest interval between holds, whatever the service says
+HOLD_DEADLINE_S = 2.0  # for one hold, from connecting to its answer
 _REUSABLE = frozenset({"embed", "status"})  # idempotent: safe to send again on a fresh connection
 _BATCH_BYTES = MAX_FRAME - 64 * 1024  # room for the frame's other fields
 
@@ -84,6 +101,14 @@ def service_enabled() -> bool:
     """``SMRITI_EMBED_SERVICE=0`` (or false/no/off) turns the service off."""
     value = os.environ.get("SMRITI_EMBED_SERVICE", "1").strip().lower()
     return value not in ("0", "false", "no", "off")
+
+
+class ServiceRefused(EmbeddingUnavailable):
+    """The service answered, and refused: ``code`` says why ("op" for an op it doesn't know)."""
+
+    def __init__(self, message: str, code: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class _Gone(Exception):
@@ -176,7 +201,10 @@ class ServiceEmbedding:
 
     def __init__(self, root: Path, *, query_s: float = QUERY_DEADLINE_S,
                  write_s: float = WRITE_DEADLINE_S, spawn: bool = True,
-                 protocol: int = PROTOCOL, version: str | None = None) -> None:
+                 protocol: int = PROTOCOL, version: str | None = None,
+                 hold: bool | None = None) -> None:
+        """``hold``: whether this client holds the service from its first embedding on;
+        None (the default) follows the process (:func:`smriti.embed.hold_while_running`)."""
         from smriti import __version__
 
         self.root = root
@@ -192,9 +220,17 @@ class ServiceEmbedding:
         self._kept: _Conn | None = None  # the connection kept for the next request
         self._kept_lock = threading.Lock()
         self._service_paths: dict[str, ServicePaths] = {}  # by runtime directory
+        self._children_lock = threading.Lock()  # the hold thread starts and reaps services too
+        self.hold = hold
+        self._holder: threading.Thread | None = None
+        self._hold_stop = threading.Event()
+        self._hold_lock = threading.Lock()
+        self._hold_every = HOLD_EVERY_S
+        self._unheld = ""  # the instance that answered it can't be held: not asked again
 
     def close(self) -> None:
-        """Close the connection kept for the next request, if there is one."""
+        """Stop holding the service, and close the connection kept for the next request."""
+        self.stop_holding()
         with self._kept_lock:
             conn, self._kept = self._kept, None
         if conn is not None:
@@ -233,10 +269,11 @@ class ServiceEmbedding:
         is known to be dead even where the pid is later reused.
         """
         now = time.time()
-        for child in list(self._children):
-            if child.poll() is not None:
-                self._children.remove(child)
-                self._exited[child.pid] = now
+        with self._children_lock:
+            for child in list(self._children):
+                if child.poll() is not None:
+                    self._children.remove(child)
+                    self._exited[child.pid] = now
 
     def _kept_reaches(self, paths: ServicePaths, found: Discovery) -> bool:
         """Whether the kept connection, still within its keep-alive, is to ``found``.
@@ -296,7 +333,85 @@ class ServiceEmbedding:
             vectors += got.vectors
         assert identity is not None
         self.last_identity = identity
+        if self._holder is None and (self.hold if self.hold is not None else holding()):
+            self._start_holding()
         return Embedded(vectors, identity)
+
+    # ── Holding the service while this process runs ────────────────
+
+    def _start_holding(self) -> None:
+        """Start the hold thread, unless it runs. It keeps only a weak reference to the
+        client: a client dropped unclosed stops it, and is never kept alive by it."""
+        with self._hold_lock:
+            if self._holder is not None:
+                return
+            stop = self._hold_stop = threading.Event()
+            self._holder = threading.Thread(target=_hold_loop, args=(weakref.ref(self), stop),
+                                            name="smriti-embed-hold", daemon=True)
+            weakref.finalize(self, stop.set)
+            self._holder.start()
+
+    def stop_holding(self) -> None:
+        """Stop the hold thread, if one runs; a later embedding starts it again."""
+        with self._hold_lock:
+            holder, self._holder = self._holder, None
+            self._hold_stop.set()
+        if holder is not None and holder is not threading.current_thread():
+            holder.join(HOLD_DEADLINE_S + CONNECT_S + 1.0)
+
+    @property
+    def is_holding(self) -> bool:
+        """Whether the hold thread runs."""
+        holder = self._holder
+        return holder is not None and holder.is_alive()
+
+    def hold_once(self) -> str:
+        """One hold: reset the service's idle timer, or start it if it is gone; what happened.
+
+        It follows the discovery file as a request does: a service that has
+        drained or died is replaced, with one start at most, throttled like
+        any other, so the model is loaded again before the next search needs
+        it. A service still starting is left to load. One that failed to
+        start is left to the next search or write, which retries it after
+        its backoff and says why: a hold mustn't retry a broken model load
+        every few minutes in the background.
+        """
+        runtime, paths = self._paths()
+        self._reap()
+        found = read_discovery(paths)
+        if found is not None and found.state == "failed":
+            return "failed to start; left to the next request"
+        alive = found is not None and (self._kept_reaches(paths, found) or self._alive(found))
+        if found is None or not alive or found.state == "draining":
+            if self.spawn and self.start_service(paths):
+                return "gone; started another"
+            return "gone"
+        if found.state != "ready" or not found.port:
+            return found.state
+        if found.instance == self._unheld:
+            return "this instance can't be held"
+        try:
+            reply = self._call(found, load_key(runtime), paths,
+                               time.monotonic() + HOLD_DEADLINE_S, {"op": "hold"})
+        except _Unreachable as exc:
+            self._recover(paths, found)
+            return f"took no connection: {exc}"
+        except _Gone as exc:
+            return f"went away: {exc}"
+        except ServiceRefused as exc:
+            if exc.code == "op":
+                # An older service. Not an error: it idles out as it always did.
+                self._unheld = found.instance
+                log.debug("the embedding service %s can't be held (%s); not holding it",
+                          found.instance, exc)
+            return f"refused: {exc}"
+        except (EmbeddingUnavailable, OSError) as exc:
+            return f"unavailable: {exc}"
+        idle = reply.get("idle_s")
+        if isinstance(idle, (int, float)) and not isinstance(idle, bool) and math.isfinite(idle):
+            # Idle exit off (0): nothing to hold off, but a gone service is still restarted.
+            self._hold_every = max(HOLD_MIN_S, idle / 3) if idle > 0 else HOLD_EVERY_S
+        return "held"
 
     # ── One request ──────────────────────────────────────────────────
 
@@ -405,7 +520,7 @@ class ServiceEmbedding:
             conn.close()
         if not reply.get("ok"):
             code, error = reply.get("code"), reply.get("error")
-            raise EmbeddingUnavailable(f"the embedding service refused ({code}): {error}")
+            raise ServiceRefused(f"the embedding service refused ({code}): {error}", str(code))
         return reply
 
     def _connect(self, found: Discovery, key: bytes, paths: ServicePaths, deadline: float,
@@ -541,8 +656,26 @@ class ServiceEmbedding:
             paths.spawn.write_text(str(os.getpid()), encoding="ascii")
         except OSError as exc:
             log.warning("could not write %s: %s", paths.spawn, exc)
-        self._children.append(spawn_service(paths))
+        child = spawn_service(paths)
+        with self._children_lock:
+            self._children.append(child)
         return True
+
+
+def _hold_loop(ref: Callable[[], ServiceEmbedding | None], stop: threading.Event) -> None:
+    """The hold thread: a hold at once (its answer gives the interval), then one every
+    ``idle_s / 3``, until it is stopped or its client is gone."""
+    wait = 0.0
+    while not stop.wait(wait):
+        client = ref()
+        if client is None:
+            return
+        try:
+            client.hold_once()
+        except Exception as exc:  # noqa: BLE001 — a hold is best effort; logged, the next one tries
+            log.warning("holding the embedding service failed: %s: %s", type(exc).__name__, exc)
+        wait = client._hold_every
+        del client  # not kept between holds: the reference is weak
 
 
 def spawn_service(paths: ServicePaths) -> subprocess.Popen[bytes]:
@@ -635,7 +768,7 @@ def service_state(root: Path, *, timeout_s: float = 0.5) -> ServiceState:
         return ServiceState("not running", found)
     if found.state != "ready" or not found.port:
         return ServiceState(found.state, found)
-    client = ServiceEmbedding(root, spawn=False)
+    client = ServiceEmbedding(root, spawn=False, hold=False)
     try:
         key = load_key(runtime, create=False)
         live = client._call(found, key, paths, time.monotonic() + timeout_s, {"op": "status"})
@@ -659,7 +792,7 @@ def stop_service(root: Path, *, wait_s: float = 60.0) -> str:
     if first is None or not pid_alive(first.pid) or first.state == "failed":
         return "not running"
     pid, instance = first.pid, first.instance
-    client = ServiceEmbedding(root, spawn=False)
+    client = ServiceEmbedding(root, spawn=False, hold=False)
     sent = False
     trouble = ""
     deadline = time.monotonic() + wait_s
