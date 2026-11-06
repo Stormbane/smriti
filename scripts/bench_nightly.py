@@ -35,7 +35,8 @@ What a round times, in that process:
 one copy per side with a stub model, capture off (each side starts from the
 same day-log) and the default caps, and prints what each night digested and
 rolled up, which must agree between sides: hardening H12.12 must schedule no
-digest and no rollup that the code before it wouldn't.
+digest and no rollup that the code before it wouldn't. ``--late DAY`` first
+appends one synthetic turn to that day, so its digest and rollups come due.
 """
 
 from __future__ import annotations
@@ -175,8 +176,13 @@ def child_time(root: Path) -> dict[str, Any]:
     return out
 
 
-def child_schedule(root: Path, nights: int) -> dict[str, Any]:
-    """What each night digests and rolls up with a stub model and capture off."""
+def child_schedule(root: Path, nights: int, late: str = "") -> dict[str, Any]:
+    """What each night digests and rolls up with a stub model and capture off.
+
+    With *late* (a day, YYYY-MM-DD), one synthetic turn is appended to that day
+    first, as capture appends a late arrival: its digest, week and month are
+    then due by the rules each side has.
+    """
     from smriti.daylog import collect, nightly
     from smriti.daylog import digest as digest_mod
     from smriti.daylog.collect import CollectReport
@@ -214,6 +220,14 @@ def child_schedule(root: Path, nights: int) -> dict[str, Any]:
     nightly.enumerate_stale_periods = scan
 
     cfg = load_config(root)
+    if late:
+        from smriti.daylog.model import Turn, parse_ts
+        from smriti.daylog.writer import append_turns
+
+        ts = parse_ts(f"{late}T02:00:00Z")
+        assert ts is not None
+        append_turns(cfg, [Turn(ts=ts, channel="voice", who="user", session="bench-late",
+                                text="a late turn the benchmark appended")])
     first = datetime.now(tz=day_tz(root)).replace(hour=3, minute=5, second=0, microsecond=0)
     out: list[dict[str, Any]] = []
     for n in range(nights):
@@ -239,7 +253,7 @@ def child_schedule(root: Path, nights: int) -> dict[str, Any]:
 
 def child(args: argparse.Namespace) -> int:
     root = Path(os.environ["SMRITI_ROOT"])
-    result = child_schedule(root, args.nights) if args.schedule else child_time(root)
+    result = child_schedule(root, args.nights, args.late) if args.schedule else child_time(root)
     print(json.dumps(result))
     return 0
 
@@ -300,7 +314,8 @@ def measure(checkout: Path, tree: Path, args: argparse.Namespace, work: Path) ->
                NARADA_ROOT=str(root), SMRITI_RUNTIME_DIR=str(root.with_name(root.name + "-run")),
                SMRITI_EMBED_SERVICE="0", PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8")
     cmd = [sys.executable, "-B", str(Path(__file__).resolve()), "--child",
-           "--nights", str(args.nights)] + (["--schedule"] if args.schedule else [])
+           "--nights", str(args.nights), "--late", args.late]
+    cmd += ["--schedule"] if args.schedule else []
     try:
         done = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=3600,
                               encoding="utf-8", errors="replace")
@@ -329,6 +344,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--schedule", action="store_true",
                         help="print what each side's nights digest and roll up, instead")
     parser.add_argument("--nights", type=int, default=3)
+    parser.add_argument("--late", default="",
+                        help="with --schedule: a day (YYYY-MM-DD) to append one late turn to")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.child:
