@@ -10,9 +10,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
 import subprocess
 import sys
-from importlib.metadata import entry_points
+import time
+import types
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -213,24 +217,244 @@ def test_an_installed_profile_adds_its_wake_sections_and_morning_prompt(
         "You are Ari, writing Sam one line to start the day.")
 
 
+def _count_scans(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """Each read of installed package metadata, as it happens."""
+    import importlib.metadata as metadata
+
+    scans: list[object] = []
+    real = metadata.distributions
+
+    def counted(**kwargs: Any) -> Any:
+        scans.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(metadata, "distributions", counted)
+    return scans
+
+
+def _caches() -> list[Path]:
+    return sorted(Path(os.environ["SMRITI_RUNTIME_DIR"]).glob("profiles-*.json"))
+
+
+def _settle(directory: Path) -> None:
+    """Date *directory* a minute back: an install long finished, past the racy window."""
+    past = time.time() - 60
+    os.utime(directory, (past, past))
+
+
+@pytest.fixture()
+def no_racy_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cache every lookup, however recently a directory on the path changed.
+
+    And write no bytecode: the first import of the synthetic profile would
+    create ``__pycache__`` in its site directory, moving that directory's
+    mtime as a real site directory's first ``__pycache__`` does, once.
+    """
+    import smriti.profiles as profiles
+
+    monkeypatch.setattr(profiles, "RACY_S", 0.0)
+    monkeypatch.setattr(sys, "dont_write_bytecode", True)
+
+
 def test_installed_profiles_are_read_once_per_process(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Reading entry points opens every installed package's metadata, and the
     # MCP server resolves its profile on each request.
+    install_profile(tmp_path / "site", monkeypatch)
+    scans = _count_scans(monkeypatch)
+    for _ in range(3):
+        assert load_profile("sample").name == "sample"
+    assert len(scans) == 1
+
+
+@pytest.mark.usefixtures("no_racy_window")
+def test_a_new_process_finds_its_profile_in_the_cache_without_reading_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H12.0: every hook and MCP server is a new process, and the scan took
+    150-200 ms of each in an environment of 683 packages."""
     import smriti.profiles as profiles
 
     install_profile(tmp_path / "site", monkeypatch)
-    reads: list[str] = []
+    scans = _count_scans(monkeypatch)
+    assert load_profile("sample").name == "sample"
+    assert len(scans) == 1 and len(_caches()) == 1
 
-    def counted(**kwargs: str) -> object:
-        reads.append(kwargs["group"])
-        return entry_points(**kwargs)
+    profiles._installed.cache_clear()  # what a new process starts with
+    assert load_profile("sample").name == "sample"
+    assert len(scans) == 1  # read from the cache
 
-    monkeypatch.setattr(profiles, "entry_points", counted)
-    for _ in range(3):
-        assert load_profile("sample").name == "sample"
-    assert reads == ["smriti.profiles"]
+
+@pytest.mark.usefixtures("no_racy_window")
+def test_an_ambiguity_read_from_the_cache_still_names_both_providers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import smriti.profiles as profiles
+
+    install_profile(tmp_path / "site", monkeypatch)
+    install_profile(tmp_path / "site", monkeypatch, module="other_profile", dist="other-profile")
+    with pytest.raises(ProfileError, match="ambiguous"):
+        load_profile("sample")
+    profiles._installed.cache_clear()
+    scans = _count_scans(monkeypatch)
+    with pytest.raises(ProfileError, match="'sample' is ambiguous") as raised:
+        load_profile("sample")
+    assert scans == []
+    assert "other-profile 0" in str(raised.value) and "sample_profile 0" in str(raised.value)
+
+
+@pytest.mark.usefixtures("no_racy_window")
+def test_installing_a_profile_changes_the_fingerprint_and_the_profile_is_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import smriti.profiles as profiles
+
+    site = tmp_path / "site"
+    site.mkdir()
+    _settle(site)
+    monkeypatch.syspath_prepend(str(site))
+    with pytest.raises(ProfileError, match="no installed package provides"):
+        load_profile("sample")  # cached: no profile on this path
+    before = profiles._search_path()
+
+    install_profile(site, monkeypatch)  # pip install: a new dist-info in the site directory
+    assert profiles._search_path() != before
+    profiles._installed.cache_clear()  # a new process
+    scans = _count_scans(monkeypatch)
+    assert load_profile("sample").name == "sample"
+    assert len(scans) == 1  # the stale cache's scan found it; no miss, no second scan
+
+
+@pytest.mark.usefixtures("no_racy_window")
+def test_removing_a_profile_package_is_seen_through_the_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import smriti.profiles as profiles
+
+    site = install_profile(tmp_path / "site", monkeypatch)
+    _settle(site)
+    assert load_profile("sample").name == "sample"
+    profiles._installed.cache_clear()
+    shutil.rmtree(site / "sample_profile-0.dist-info")  # pip uninstall
+    with pytest.raises(ProfileError, match="no installed package provides"):
+        load_profile("sample")
+
+
+def test_a_lookup_just_after_an_install_is_not_cached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A second change within the same timestamp tick wouldn't move the
+    # directory's mtime, so a cache keyed on it could miss that change.
+    import smriti.profiles as profiles
+
+    monkeypatch.setattr(sys, "dont_write_bytecode", True)
+    site = install_profile(tmp_path / "site", monkeypatch)
+    assert load_profile("sample").name == "sample"
+    assert _caches() == []
+    _settle(site)
+    profiles._installed.cache_clear()
+    assert load_profile("sample").name == "sample"
+    assert len(_caches()) == 1
+
+
+def _drop_entries(data: dict[str, Any]) -> object:
+    return {**data, "entries": "none"}
+
+
+def _bad_field(data: dict[str, Any]) -> object:
+    return {**data, "entries": [{**data["entries"][0], "value": 7}]}
+
+
+def _other_group(data: dict[str, Any]) -> object:
+    return {**data, "entries": [{**data["entries"][0], "group": "console_scripts"}]}
+
+
+@pytest.mark.usefixtures("no_racy_window")
+@pytest.mark.parametrize("corrupt", [
+    lambda data: "{not json",
+    lambda data: [],
+    lambda data: {**data, "version": 0},
+    _drop_entries, _bad_field, _other_group,
+], ids=["not-json", "a-list", "another-version", "no-entries", "bad-field", "other-group"])
+def test_a_corrupt_cache_is_ignored_and_rewritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    corrupt: Callable[[dict[str, Any]], object],
+) -> None:
+    import smriti.profiles as profiles
+
+    install_profile(tmp_path / "site", monkeypatch)
+    assert load_profile("sample").name == "sample"
+    [cache] = _caches()
+    bad = corrupt(json.loads(cache.read_text(encoding="utf-8")))
+    cache.write_text(bad if isinstance(bad, str) else json.dumps(bad), encoding="utf-8")
+    profiles._installed.cache_clear()
+
+    assert load_profile("sample").name == "sample"
+    rewritten = json.loads(cache.read_text(encoding="utf-8"))
+    assert "sample_profile:PROFILE" in [e["value"] for e in rewritten["entries"]]
+
+
+def test_an_unusable_runtime_directory_costs_only_the_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import smriti.core.rundir as rundir
+
+    def refuse(*, create: bool = True) -> Path:
+        raise rundir.RuntimeDirError("refusing the runtime directory: other users can write")
+
+    monkeypatch.setattr(rundir, "runtime_dir", refuse)
+    install_profile(tmp_path / "site", monkeypatch)
+    assert load_profile("sample").name == "sample"
+
+
+def test_the_current_directory_is_not_searched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dist-info wherever a command was started (`python -m` puts the current
+    directory first on the path, `python -c` puts '') is no installed package."""
+    import smriti.profiles as profiles
+
+    here = write_profile_package(tmp_path / "here")
+    monkeypatch.chdir(here)
+    before = profiles._search_path()
+    monkeypatch.syspath_prepend(str(here))
+    monkeypatch.syspath_prepend("")
+
+    assert profiles._search_path() == before
+    with pytest.raises(ProfileError, match="no installed package provides"):
+        load_profile("sample")
+
+
+def test_the_running_scripts_directory_is_not_searched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`python <root>/.smriti/wake.py` puts the memory tree's .smriti first on the
+    path: a profile must never come from there, and its mtime moves with every
+    index write."""
+    import smriti.profiles as profiles
+
+    before = profiles._search_path()
+    scripts = write_profile_package(tmp_path / "tree" / ".smriti")
+    main = types.ModuleType("__main__")
+    main.__file__ = str(scripts / "wake.py")
+    main.__spec__ = None
+    monkeypatch.setitem(sys.modules, "__main__", main)
+    monkeypatch.syspath_prepend(str(scripts))
+
+    assert profiles._search_path() == before
+    with pytest.raises(ProfileError, match="no installed package provides"):
+        load_profile("sample")
+
+
+@pytest.mark.parametrize("value", ["json", "os.path:join", "os:path.join", "json:dumps [extra]"])
+def test_a_cached_entry_loads_what_the_entry_point_would(value: str) -> None:
+    from importlib.metadata import EntryPoint
+
+    from smriti.profiles import _Entry
+
+    assert _Entry("x", value, "smriti.profiles").load() is EntryPoint(
+        "x", value, "smriti.profiles").load()
 
 
 def test_a_profile_installed_after_a_miss_is_found_without_a_restart(

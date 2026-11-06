@@ -21,7 +21,12 @@ MCP server lists only its own tools, the wake briefing has no profile
 sections, and the morning message uses the generic prompt.
 
 A profile is code from the Python environment smriti runs in, found the
-way any installed plugin is; nothing is ever loaded from the memory tree.
+way any installed plugin is, on the import path less the current directory
+and the running script's: nothing is ever loaded from the memory tree (the
+wake hook's script lives there) or from wherever a command was started.
+Reading every installed package's metadata takes 150-200 ms in a large
+environment, and every hook and MCP server is a new process, so what the
+lookup found is cached in the runtime directory (:func:`_lookup`).
 A profile that can't be loaded raises :class:`ProfileError`, so it costs
 only what it adds: the MCP server serves the core's tools, and the wake
 shows one line in place of its sections. The morning fails instead, since
@@ -40,19 +45,34 @@ Every hook is optional:
 from __future__ import annotations
 
 import functools
+import importlib
+import json
+import logging
+import os
 import re
+import sys
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
-from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from smriti.daylog.config import DaylogConfig
     from smriti.mcp.tool import Tool
 
+log = logging.getLogger(__name__)
+
 ENTRY_POINT_GROUP = "smriti.profiles"
+CACHE_VERSION = 1
+# A cache isn't written while a directory it is keyed on changed this recently:
+# a second change within the same timestamp tick wouldn't show in its mtime.
+RACY_S = 2.0
+# What importlib.metadata.EntryPoint accepts as a value: module[:attr.path] [extras].
+_VALUE_RE = re.compile(r"(?P<module>[\w.]+)\s*(:\s*(?P<attr>[\w.]+)\s*)?"
+                       r"((?P<extras>\[.*\])\s*)?$")
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -105,36 +125,238 @@ class Profile:
     morning_prompt: Callable[[DaylogConfig], str] | None = None
 
 
-def _provider(entry: EntryPoint) -> str:
-    """The distribution an entry point comes from, for error messages."""
-    dist = entry.dist
-    return f"{dist.name} {dist.version}" if dist is not None else entry.value
+@dataclass(frozen=True)
+class _Entry:
+    """One entry point in the group, and the distribution that provides it."""
+
+    name: str
+    value: str
+    group: str
+    dist: str = ""
+    version: str = ""
+
+    @property
+    def provider(self) -> str:
+        """The distribution, for error messages."""
+        return f"{self.dist} {self.version}" if self.dist else self.value
+
+    def load(self) -> object:
+        """What the entry point names, imported as ``EntryPoint.load`` does.
+
+        Not through ``importlib.metadata``, whose import alone (it brings the
+        email package) costs more than the whole lookup from the cache.
+        """
+        match = _VALUE_RE.match(self.value)
+        if match is None:
+            raise ValueError(f"{self.value!r} is not a module[:attribute] reference")
+        target: object = importlib.import_module(match.group("module"))
+        for attr in filter(None, (match.group("attr") or "").split(".")):
+            target = getattr(target, attr)
+        return target
+
+
+def _identity(path: str, st: os.stat_result) -> object:
+    """What tells two path entries apart: the directory itself, however it is spelt."""
+    return (st.st_dev, st.st_ino) if st.st_ino else os.path.normcase(path)
+
+
+def _here() -> set[object]:
+    """The current directory and the running script's: never searched."""
+    places: list[str] = []
+    try:
+        places.append(os.getcwd())
+    except OSError:
+        pass  # a current directory that was removed
+    main = sys.modules.get("__main__")
+    script = getattr(main, "__file__", None)
+    if getattr(main, "__spec__", None) is None and isinstance(script, str):
+        # `python script.py` puts the script's directory first on the path;
+        # with `-m` the first entry is the current directory, already here.
+        places.append(os.path.dirname(os.path.abspath(script)))
+    found: set[object] = set()
+    for path in places:
+        try:
+            found.add(_identity(path, os.stat(path)))
+        except OSError:
+            pass  # gone: nothing on the path can be it
+    return found
+
+
+def _search_path() -> list[tuple[str, int]]:
+    """Where a profile can come from: the import path, each entry with its mtime.
+
+    Each ``sys.path`` entry that is an existing directory or file, once, in
+    order, except ``''``, the current directory and the running script's
+    directory. Those depend on where a process was started, not on what is
+    installed; and the wake hook's script directory is the tree's
+    ``.smriti``, which changes with every index write. Installing or
+    removing a distribution changes its site directory's mtime (an editable
+    install writes its dist-info there too), so the list keys the cache.
+    Entries are told apart by what ``os.stat`` says they are, not by
+    resolving each path, which costs more than the rest of the lookup.
+    """
+    skip = _here()
+    found: list[tuple[str, int]] = []
+    seen: set[object] = set()
+    for entry in sys.path:
+        if not isinstance(entry, str) or not entry:
+            continue
+        try:
+            path = os.path.abspath(entry)
+            st = os.stat(path)
+        except (OSError, ValueError):
+            continue  # not there (or not a path): nothing can be found on it
+        ident = _identity(path, st)
+        if ident in skip or ident in seen:
+            continue
+        seen.add(ident)
+        found.append((path, st.st_mtime_ns))
+    return found
+
+
+def _normalized(dist: object) -> str:
+    """A distribution's name as ``importlib.metadata`` compares them, cheaply when it can.
+
+    From the dist-info directory's name where the standard library offers
+    it (as ``entry_points()`` does), so a scan opens no package's METADATA
+    except those that provide a profile.
+    """
+    name = getattr(dist, "_normalized_name", None)
+    if isinstance(name, str) and name:
+        return name
+    raw = getattr(dist, "name", None)
+    return re.sub(r"[-_.]+", "_", raw if isinstance(raw, str) else "").lower()
+
+
+def _scan(paths: list[str]) -> list[_Entry]:
+    """The group's entry points in the distributions on *paths*.
+
+    As ``importlib.metadata.entry_points()`` reads them: the first
+    distribution of each name, in path order.
+    """
+    from importlib.metadata import distributions
+
+    entries: list[_Entry] = []
+    seen: set[str] = set()
+    for dist in distributions(path=paths):
+        name = _normalized(dist)
+        if name in seen:
+            continue
+        seen.add(name)
+        text = dist.read_text("entry_points.txt")
+        if not text or ENTRY_POINT_GROUP not in text:
+            continue
+        for ep in dist.entry_points.select(group=ENTRY_POINT_GROUP):
+            entries.append(_Entry(ep.name, ep.value, ep.group, str(dist.name or ""),
+                                  str(dist.version or "")))
+    return entries
+
+
+def _cache_file(paths: list[str]) -> Path:
+    """The cache for this list of path entries, one file per list.
+
+    Processes started differently (another interpreter, another
+    PYTHONPATH) keep their own files, instead of replacing each other's.
+    The name is a CRC, not a hash: the file holds the full fingerprint, so
+    two lists that shared a name would only take turns, and hashlib's import
+    alone costs more than the rest of the lookup.
+    """
+    import zlib
+
+    from smriti.core.rundir import runtime_dir
+
+    key = "\0".join(paths).encode("utf-8", "surrogatepass")
+    return runtime_dir() / f"profiles-{zlib.crc32(key):08x}-{len(paths)}.json"
+
+
+def _read_cache(file: Path, fingerprint: list[list[object]]) -> list[_Entry] | None:
+    """The entries cached for *fingerprint*; None when the file is missing, stale or bad."""
+    try:
+        data = json.loads(file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if (not isinstance(data, dict) or data.get("version") != CACHE_VERSION
+            or data.get("fingerprint") != fingerprint
+            or not isinstance(data.get("entries"), list)):
+        return None
+    entries: list[_Entry] = []
+    for item in data["entries"]:
+        if not isinstance(item, dict):
+            return None
+        fields = [item.get(k) for k in ("name", "value", "group", "dist", "version")]
+        strings = [f for f in fields if isinstance(f, str)]
+        if len(strings) != 5 or strings[2] != ENTRY_POINT_GROUP:
+            return None
+        entries.append(_Entry(*strings))
+    return entries
+
+
+def _write_cache(file: Path, fingerprint: list[list[object]], entries: list[_Entry]) -> None:
+    from smriti.core.files import write_atomic
+
+    write_atomic(file, json.dumps({
+        "version": CACHE_VERSION, "fingerprint": fingerprint,
+        "entries": [{"name": e.name, "value": e.value, "group": e.group, "dist": e.dist,
+                     "version": e.version} for e in entries]}, indent=1))
+
+
+def _lookup(*, fresh: bool = False) -> list[_Entry]:
+    """The group's entry points: from the cache when it matches the import path, else a scan.
+
+    The cache lives in the private runtime directory, keyed on
+    :func:`_search_path`. Unless *fresh*, a cache whose fingerprint (each
+    entry and its mtime) matches is used as it is; a missing, unreadable or
+    stale one means a scan, written back for the next process. The
+    fingerprint is taken before the scan, so a change during the scan shows
+    as stale next time. The cache never makes a lookup fail: without a
+    usable runtime directory, every lookup scans.
+    """
+    found = _search_path()
+    paths = [path for path, _ in found]
+    fingerprint: list[list[object]] = [[path, mtime] for path, mtime in found]
+    try:
+        file: Path | None = _cache_file(paths)
+    except OSError as exc:  # no usable runtime directory: no cache
+        log.debug("profile lookup without a cache: %s", exc)
+        file = None
+    if file is not None and not fresh:
+        cached = _read_cache(file, fingerprint)
+        if cached is not None:
+            return cached
+    entries = _scan(paths)
+    now = time.time_ns()
+    if file is not None and all(abs(now - mtime) >= RACY_S * 1e9 for _, mtime in found):
+        try:
+            _write_cache(file, fingerprint, entries)
+        except OSError as exc:
+            log.debug("could not write the profile cache %s: %s", file, exc)
+    return entries
 
 
 @functools.lru_cache(maxsize=1)
-def _installed() -> dict[str, tuple[EntryPoint, ...]]:
-    """Every entry point in the group, by name: read once per process.
+def _installed(fresh: bool = False) -> dict[str, tuple[_Entry, ...]]:
+    """Every entry point in the group, by name: looked up once per process.
 
-    Reading them opens every installed distribution's metadata (about
-    150 ms in an environment of 700 packages), and the MCP server resolves
-    its profile on each request.
+    The MCP server resolves its profile on each request; :func:`_lookup`
+    makes the first lookup in each new process cheap too.
     """
-    found: dict[str, list[EntryPoint]] = {}
-    for entry in entry_points(group=ENTRY_POINT_GROUP):
+    found: dict[str, list[_Entry]] = {}
+    for entry in _lookup(fresh=fresh):
         found.setdefault(entry.name, []).append(entry)
     return {name: tuple(entries) for name, entries in found.items()}
 
 
-def _entries(name: str) -> tuple[EntryPoint, ...]:
-    """The entry points called *name*; read again before answering none.
+def _entries(name: str) -> tuple[_Entry, ...]:
+    """The entry points called *name*; scanned afresh before answering none.
 
     A package installed after the first read (a server started before
-    ``pip install``) is then found on the next call, not at a restart.
+    ``pip install``) is then found on the next call, not at a restart, and
+    the scan refreshes the cache.
     """
     found = _installed().get(name, ())
     if not found:
         _installed.cache_clear()
-        found = _installed().get(name, ())
+        found = _installed(True).get(name, ())
     return found
 
 
@@ -157,7 +379,7 @@ def load_profile(name: str) -> Profile:
         raise ProfileError(f"no installed package provides profile {name!r} "
                            f"(entry point group {ENTRY_POINT_GROUP!r})")
     if len(found) > 1:
-        providers = ", ".join(sorted(_provider(entry) for entry in found))
+        providers = ", ".join(sorted(entry.provider for entry in found))
         raise ProfileError(f"profile {name!r} is ambiguous: {len(found)} installed packages "
                            f"provide it ({providers})")
     entry = found[0]
@@ -165,7 +387,7 @@ def load_profile(name: str) -> Profile:
         profile = entry.load()
     except Exception as exc:
         # Whatever the profile's own code raised: it costs only the profile.
-        raise ProfileError(f"profile {name!r} ({entry.value}, from {_provider(entry)}) "
+        raise ProfileError(f"profile {name!r} ({entry.value}, from {entry.provider}) "
                            f"failed to load: {type(exc).__name__}: {exc}") from exc
     if not isinstance(profile, Profile):
         raise ProfileError(f"profile {name!r} ({entry.value}) is {type(profile).__name__}, "
