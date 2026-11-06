@@ -462,6 +462,12 @@ GLOBAL_SHAPES: dict[str, list[tuple[str, str]]] = {
     "one of two urls pushInsteadOf'd": [
         ("remote.R.url", ORIGIN), ("remote.R.url", PRIVATE),
         ("url.https://example.com/public/.pushInsteadOf", "https://example.com/private/")],
+    # An empty value clears the values of its kind before it (Codex review): the
+    # cleared pushurl leaves git pushing to the url, not to the private address.
+    "a pushurl cleared": [
+        ("remote.R.url", ORIGIN), ("remote.R.pushurl", PRIVATE), ("remote.R.pushurl", "")],
+    "a url cleared and set again": [
+        ("remote.R.url", PRIVATE), ("remote.R.url", ""), ("remote.R.url", ORIGIN)],
 }
 
 

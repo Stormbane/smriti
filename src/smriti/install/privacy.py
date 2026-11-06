@@ -548,7 +548,8 @@ def _configured_push_urls(root: Path, remote: str) -> list[str]:
     them out (``alias_all_urls`` in its remote.c): the remote's ``pushurl``
     values, each rewritten by ``insteadOf``; without any, each ``url`` that a
     ``pushInsteadOf`` rewrites, so rewritten; without those, each ``url``
-    rewritten by ``insteadOf``. Raises SubprocessError when git can't say.
+    rewritten by ``insteadOf``. An empty value clears the values of its kind
+    before it, as in git. Raises SubprocessError when git can't say.
     """
     done = _git(root, "config", "-z", "--get-regexp", r"^remote\..*\.(url|pushurl)$")
     if done.returncode not in (0, 1):  # 1: none set
@@ -561,7 +562,11 @@ def _configured_push_urls(root: Path, remote: str) -> list[str]:
             continue  # no value: git refuses such a URL
         name, _, var = key[len("remote."):].rpartition(".")  # a name may hold dots
         if name == remote:
-            (pushurls if var == "pushurl" else urls).append(value)
+            values = pushurls if var == "pushurl" else urls
+            if value:
+                values.append(value)
+            else:  # git: an empty value clears what came before it
+                values.clear()
     fetch, push = _url_rewrites(root)
     if pushurls:
         return [_rewrite(u, fetch) or u for u in pushurls]
