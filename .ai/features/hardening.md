@@ -606,6 +606,49 @@ a recheck.
   fixes the benchmark found. The three slower measures are back at the
   baseline (warm read 166 ms against 165, write 61 against 57, wake 720
   against 697); the result is under "H12.0 design".
+- **H12.0b implemented** (2026-11-06, `hardening/h12b`; not yet reviewed or
+  merged). The service gains `hold`: authenticated and workless (it resets the
+  idle timer and answers with the instance, state and `idle_s`), advertised in
+  the hello as `"hold": true`; the protocol stays 1. A running MCP server marks
+  itself at its first tool call (`smriti.embed.hold_while_running()`), and from
+  its client's first successful embedding a daemon thread holds at once, then
+  every `idle_s / 3`: the service exits `idle_s` after the last request or
+  hold. A gone or draining service is started again by the next hold (the
+  usual throttled spawn); an older service's "unknown op" stops holds to that
+  instance (one debug line) until the instance changes. `smriti read`, hooks
+  and the nightly don't hold. Where it differs from the brief: each hold goes
+  on a connection of its own, so it never takes the one kept for requests
+  (about 20 ms of background work every 5 minutes); the first hold goes at
+  once, which tells the client the service's `idle_s` and whether it can be
+  held; a service that *failed* to start is left to the next search or write,
+  so a broken model load isn't retried in the background every 5 minutes; the
+  client acts on the "unknown op" answer, not on the hello's flag, which
+  covers every pairing in one round trip per instance; and the server is
+  marked at its first tool call, not at startup, so starting imports exactly
+  what it did (a test checks it).
+- **H12.0c implemented** (same branch). Through the service, a write no longer
+  fills other sources' pending vectors (the service's loop and the nightly's
+  index do); in-process, it fills only the sources that fit in what is left of
+  32 chunks (`fill_pending_vectors(strict=True)`), and the rest wait for the
+  nightly. `day_tz` trusts what it read of a root's daylog.json for a second
+  (a monotonic clock), then one stat says whether the file changed; the root
+  is worked out again only then, so a change of `SMRITI_ROOT` is also seen
+  within the second; `SMRITI_DAY_UTC_OFFSET` is parsed once per value. 10,000
+  `day_tz` lookups on this machine: 5.3-7.7 s at master (a root resolve and a
+  stat each), 22-27 ms now, 26-67 ms at `13ac56a`; `local_day` is within noise
+  of `13ac56a` for an offset or an IANA zone (the reference install's), while
+  the system zone's per-instant OS conversion (H9) costs about 5 µs a turn
+  more.
+- **Benchmark** (`scripts/bench.py`, 2026-11-06; the reference tree's copy, 10
+  queries, two alternating rounds; A `663525a`, B `f763543`): no measure
+  slower. MCP initialize 162 against 174 ms (rounds 155/168 against 180/168;
+  ten alternating starts: 217 against 188 ms, the same 125 imports); first
+  query 671/658 ms; until vectors 14.95/14.71 s; warm read p50 171/166 ms, p90
+  187/176; write p50 58/51 ms, max 84/74; wake 733/697 ms; `smriti status`
+  276/281 ms; CLI read 11.68/11.30 s; `smriti index` 15.88/15.86 s unchanged,
+  15.88/16.52 s with five new files (rounds 15.7-16.1 against 16.3-16.8; it
+  runs no code these commits touch); memory 46/46 MB and 1038/1037 MB. Top 5
+  the same for all queries; the wake briefings identical.
 - **H11.1, H11.5, H11.10 done** (2026-11-06, merged at `498ce0e` after a Codex diff
   review; its two findings, the capture override and the metrics scrub, fixed). Capture is off unless `daylog.json` says
   `"capture": true` (the default sources; the installer's `--capture` writes it) or
