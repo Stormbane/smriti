@@ -324,3 +324,41 @@ def test_one_service_however_many_clients_hold_it(
             client.close()
         print(stop_service(root))
         _kill([p for c in clients for p in c._children])
+
+
+class _Waits:
+    """A stop event that records each wait and stops after the last expected one."""
+
+    def __init__(self, stop_after: int) -> None:
+        self.waits: list[float] = []
+        self.stop_after = stop_after
+
+    def wait(self, timeout: float) -> bool:
+        self.waits.append(timeout)
+        return len(self.waits) > self.stop_after
+
+
+class _Outcomes:
+    """Stands in for a client: each hold_once gives the next outcome; "held" teaches 20 s."""
+
+    def __init__(self, outcomes: list[str]) -> None:
+        self.outcomes = outcomes
+        self._hold_every = client_mod.HOLD_EVERY_S
+
+    def hold_once(self) -> str:
+        outcome = self.outcomes.pop(0)
+        if outcome == "held":
+            self._hold_every = 20.0
+        return outcome
+
+
+def test_a_replacement_service_is_held_before_its_shorter_idle_runs_out() -> None:
+    # An older service refuses holds; when it goes, the loop starts a new one
+    # whose idle_s may be shorter than the last interval. Holding it again only
+    # after that interval let it idle out unheld, over and over (Codex review).
+    fake = _Outcomes(["refused: unknown op 'hold'", "gone; started another", "starting",
+                      "took no connection: refused", "held", "held"])
+    stop = _Waits(stop_after=6)
+    client_mod._hold_loop(lambda: fake, stop)  # type: ignore[arg-type, return-value]
+    every = client_mod.HOLD_EVERY_S
+    assert stop.waits == [0.0, every, 2.0, 4.0, 8.0, 20.0, 20.0]

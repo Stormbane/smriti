@@ -93,6 +93,12 @@ KEEPALIVE_MARGIN_S = 1.0  # a kept connection is reused only this long before th
 HOLD_EVERY_S = 300.0  # between holds until the service says its idle_s (the default 900 s / 3)
 HOLD_MIN_S = 0.05  # the shortest interval between holds, whatever the service says
 HOLD_DEADLINE_S = 2.0  # for one hold, from connecting to its answer
+# While a service comes up (started, starting, not yet answering) the next hold
+# comes soon, doubling to the cap, so the new instance is held, and its idle_s
+# learnt, before it can idle out (Codex review of H12.0b).
+HOLD_RETRY_S = 2.0
+HOLD_RETRY_MAX_S = 30.0
+_HOLD_COMING_UP = ("gone", "starting", "took no connection", "went away", "unavailable")
 _REUSABLE = frozenset({"embed", "status"})  # idempotent: safe to send again on a fresh connection
 _BATCH_BYTES = MAX_FRAME - 64 * 1024  # room for the frame's other fields
 
@@ -664,17 +670,27 @@ class ServiceEmbedding:
 
 def _hold_loop(ref: Callable[[], ServiceEmbedding | None], stop: threading.Event) -> None:
     """The hold thread: a hold at once (its answer gives the interval), then one every
-    ``idle_s / 3``, until it is stopped or its client is gone."""
-    wait = 0.0
+    ``idle_s / 3``, until it is stopped or its client is gone.
+
+    While the service is coming up, the next hold comes sooner (from
+    ``HOLD_RETRY_S``, doubling to ``HOLD_RETRY_MAX_S``, never past the
+    interval): a replacement may idle out sooner than the last interval, and
+    only a hold it answers says how soon.
+    """
+    wait, retry = 0.0, HOLD_RETRY_S
     while not stop.wait(wait):
         client = ref()
         if client is None:
             return
         try:
-            client.hold_once()
+            outcome = client.hold_once()
         except Exception as exc:  # noqa: BLE001 — a hold is best effort; logged, the next one tries
             log.warning("holding the embedding service failed: %s: %s", type(exc).__name__, exc)
-        wait = client._hold_every
+            outcome = "unavailable"
+        if outcome.startswith(_HOLD_COMING_UP):
+            wait, retry = min(client._hold_every, retry), min(retry * 2, HOLD_RETRY_MAX_S)
+        else:
+            wait, retry = client._hold_every, HOLD_RETRY_S
         del client  # not kept between holds: the reference is weak
 
 
