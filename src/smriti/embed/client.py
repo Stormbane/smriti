@@ -11,12 +11,20 @@ speaks another protocol), the call raises :class:`EmbeddingUnavailable`
 with the reason, and the caller degrades: search by keyword only, a write
 with its vectors pending. A connection that closes before its answer
 (the service exiting as the request arrived) is retried once, fresh.
+
+The connection is kept for the next request while the service advertises
+keep-alive (see :mod:`smriti.embed.protocol`), so the connect and the
+handshake are paid once rather than per request (the connect alone takes
+14-21 ms on Windows). It is reused only for ``embed`` and ``status``, which
+are idempotent: when the service had closed it first, the request goes
+once more on a fresh connection. A ``stop`` always goes on its own.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import secrets
 import socket
@@ -24,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
@@ -63,6 +72,8 @@ WRITE_DEADLINE_S = 30.0
 SPAWN_BACKOFF_S = 10.0  # one start per root in this long, whoever asks
 CONNECT_S = 0.5  # a loopback connect that takes longer finds nobody listening
 FAILED_BACKOFF_S = 30.0  # after a failed start, report it this long before trying again
+KEEPALIVE_MARGIN_S = 1.0  # a kept connection is reused only this long before the service's close
+_REUSABLE = frozenset({"embed", "status"})  # idempotent: safe to send again on a fresh connection
 _BATCH_BYTES = MAX_FRAME - 64 * 1024  # room for the frame's other fields
 
 
@@ -78,6 +89,62 @@ class _Gone(Exception):
 
 class _Unreachable(_Gone):
     """The endpoint took no connection (refused, or no answer to connect): perhaps dead."""
+
+
+class _Stale(Exception):
+    """A kept connection the service had closed before it read the request: send it afresh."""
+
+
+def _peer_closed(sock: socket.socket) -> bool:
+    """Whether an idle connection has something to read: only its end, since the service
+    sends nothing unasked."""
+    try:
+        sock.settimeout(0.0)  # every later read and write sets its own deadline
+        sock.recv(1, socket.MSG_PEEK)
+    except BlockingIOError:
+        return False  # nothing to read: open and idle
+    except OSError:
+        return True
+    return True  # its end, or bytes nobody asked for: not a connection to reuse
+
+
+def _keepalive(hello: Frame) -> float:
+    """The keep-alive a service's hello advertises, in seconds; 0 for none (an older one)."""
+    value = hello.get("keepalive_s")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value) if math.isfinite(value) and value > 0 else 0.0
+
+
+def _close_quietly(sock: socket.socket) -> None:
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
+class _Conn:
+    """One authenticated connection to one service instance."""
+
+    def __init__(self, sock: socket.socket, where: tuple[str, str, int],
+                 keepalive_s: float) -> None:
+        self.sock = sock
+        self.where = where  # (discovery file, instance, port): the service it reaches
+        self.keepalive_s = keepalive_s  # what the service's hello advertised; 0 for none
+        self.pid = os.getpid()
+        self.idle_since = time.monotonic()
+        # Closes the socket when the connection is dropped unclosed, before the
+        # socket's own finaliser would warn, even inside a reference cycle.
+        self._closer = weakref.finalize(self, _close_quietly, sock)
+
+    def reusable(self, where: tuple[str, str, int]) -> bool:
+        """Whether the next request for the service at ``where`` may go on this connection."""
+        return (self.where == where and self.pid == os.getpid()
+                and time.monotonic() - self.idle_since < self.keepalive_s - KEEPALIVE_MARGIN_S
+                and not _peer_closed(self.sock))
+
+    def close(self) -> None:
+        self._closer()
 
 
 def _batches(texts: list[str]) -> list[list[str]]:
@@ -117,6 +184,39 @@ class ServiceEmbedding:
         self.last_instance = ""
         self._children: list[subprocess.Popen[bytes]] = []
         self._exited: dict[int, float] = {}  # pid of a service this started -> when seen gone
+        self._kept: _Conn | None = None  # the connection kept for the next request
+        self._kept_lock = threading.Lock()
+
+    def close(self) -> None:
+        """Close the connection kept for the next request, if there is one."""
+        with self._kept_lock:
+            conn, self._kept = self._kept, None
+        if conn is not None:
+            conn.close()
+
+    def _take_kept(self, where: tuple[str, str, int]) -> _Conn | None:
+        """The kept connection, when the next request for ``where`` may go on it.
+
+        It is taken out under the lock, so two calls never share one: a call
+        made while another is in flight opens its own.
+        """
+        with self._kept_lock:
+            conn, self._kept = self._kept, None
+        if conn is None or conn.reusable(where):
+            return conn
+        conn.close()
+        return None
+
+    def _keep(self, conn: _Conn) -> None:
+        """Keep ``conn`` for the next request, if its service allows that long enough."""
+        if conn.keepalive_s <= KEEPALIVE_MARGIN_S:
+            conn.close()
+            return
+        conn.idle_since = time.monotonic()
+        with self._kept_lock:
+            old, self._kept = self._kept, conn
+        if old is not None:
+            old.close()
 
     def _reap(self) -> None:
         """Collect the services this process started that have exited.
@@ -244,7 +344,41 @@ class ServiceEmbedding:
 
     def _call(self, found: Discovery, key: bytes, paths: ServicePaths, deadline: float,
               request: Frame) -> Frame:
-        """Authenticate both ways with the service in ``found``; send ``request``; the reply."""
+        """Send ``request`` to the service in ``found``; its reply.
+
+        An ``embed`` or ``status`` goes on the connection kept from the last
+        call when the service allows it, and once more on a fresh connection
+        if the service had closed that one first. Anything else goes on a
+        fresh connection, authenticated both ways, and is sent only once.
+        """
+        where = (str(paths.discovery), found.instance, found.port)
+        reusable = request.get("op") in _REUSABLE
+        kept = self._take_kept(where) if reusable else None
+        if kept is not None:
+            try:
+                return self._answer(kept, self._exchange(kept, request, deadline, kept=True),
+                                    keep=True)
+            except _Stale as exc:
+                log.debug("the embedding service had closed the kept connection (%s); "
+                          "sending again on a fresh one", exc)
+        conn = self._connect(found, key, paths, deadline, where)
+        return self._answer(conn, self._exchange(conn, request, deadline, kept=False),
+                            keep=reusable)
+
+    def _answer(self, conn: _Conn, reply: Frame, *, keep: bool) -> Frame:
+        """``reply``, once ``conn`` is kept for the next request or closed."""
+        if keep:
+            self._keep(conn)
+        else:
+            conn.close()
+        if not reply.get("ok"):
+            code, error = reply.get("code"), reply.get("error")
+            raise EmbeddingUnavailable(f"the embedding service refused ({code}): {error}")
+        return reply
+
+    def _connect(self, found: Discovery, key: bytes, paths: ServicePaths, deadline: float,
+                 where: tuple[str, str, int]) -> _Conn:
+        """A new connection to the service in ``found``, authenticated both ways."""
         # A live service accepts on loopback at once. Nobody listening is refused
         # on POSIX, but on Windows only after about 2 s of retries: a connect that
         # takes this long is as good as refused (_recover then checks the lock).
@@ -255,51 +389,80 @@ class ServiceEmbedding:
             raise _Unreachable(f"no answer to connect in {connect_s:.1f}s") from exc
         except OSError as exc:  # refused: nothing listens there now
             raise _Unreachable(str(exc)) from exc
-        with sock:
-            try:
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                nonce_c = secrets.token_hex(16)
-                send_frame(sock, {"op": "hello", "proto": self.protocol, "nonce": nonce_c,
-                                  "client": self.version}, deadline)
-                hello = recv_frame(sock, deadline, PREAUTH_MAX)
-                if hello.get("proto") != self.protocol:
-                    raise EmbeddingUnavailable(
-                        f"the running embedding service speaks protocol {hello.get('proto')!r} "
-                        f"and this client {self.protocol}; it is left running")
-                nonce_s, instance = hello.get("nonce"), hello.get("instance")
-                if not (is_nonce(nonce_s) and isinstance(instance, str) and proofs_match(
-                        hello.get("proof"), server_proof(key, nonce_c, str(nonce_s), instance))):
-                    # Not the service: something else holds its port, perhaps after it
-                    # died. Start one (throttled; a live service keeps its lock).
-                    if self.spawn:
-                        self.start_service(paths)
-                    raise EmbeddingUnavailable(
-                        f"the endpoint on port {found.port} failed authentication, so it isn't "
-                        "this user's embedding service; nothing was sent to it")
-                assert isinstance(nonce_s, str)
-                send_frame(sock, {"op": "auth", "proof": client_proof(key, nonce_c, nonce_s)},
-                           deadline)
-                if "budget_ms" in request:
-                    # What is left now, after the connect and handshake: a budget
-                    # worked out before them let the service run work for a
-                    # client that had already given up.
-                    request = {**request, "budget_ms": max(
-                        1, int((deadline - time.monotonic()) * 1000))}
-                send_frame(sock, request, deadline)
-                reply = recv_frame(sock, deadline, MAX_FRAME)
-            except TimeoutError as exc:
-                raise EmbeddingUnavailable("the embedding service didn't answer in time") from exc
-            except PeerGone as exc:
-                raise _Gone(str(exc)) from exc
-            except ProtocolError as exc:
-                raise EmbeddingUnavailable(f"a bad frame from the embedding service: {exc}") \
-                    from exc
-            except OSError as exc:  # reset or aborted mid-exchange
-                raise _Gone(str(exc)) from exc
-        if not reply.get("ok"):
-            code, error = reply.get("code"), reply.get("error")
-            raise EmbeddingUnavailable(f"the embedding service refused ({code}): {error}")
-        return reply
+        authenticated = False
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            nonce_c = secrets.token_hex(16)
+            send_frame(sock, {"op": "hello", "proto": self.protocol, "nonce": nonce_c,
+                              "client": self.version}, deadline)
+            hello = recv_frame(sock, deadline, PREAUTH_MAX)
+            if hello.get("proto") != self.protocol:
+                raise EmbeddingUnavailable(
+                    f"the running embedding service speaks protocol {hello.get('proto')!r} "
+                    f"and this client {self.protocol}; it is left running")
+            nonce_s, instance = hello.get("nonce"), hello.get("instance")
+            if not (is_nonce(nonce_s) and isinstance(instance, str) and proofs_match(
+                    hello.get("proof"), server_proof(key, nonce_c, str(nonce_s), instance))):
+                # Not the service: something else holds its port, perhaps after it
+                # died. Start one (throttled; a live service keeps its lock).
+                if self.spawn:
+                    self.start_service(paths)
+                raise EmbeddingUnavailable(
+                    f"the endpoint on port {found.port} failed authentication, so it isn't "
+                    "this user's embedding service; nothing was sent to it")
+            assert isinstance(nonce_s, str)
+            send_frame(sock, {"op": "auth", "proof": client_proof(key, nonce_c, nonce_s)},
+                       deadline)
+            authenticated = True
+            return _Conn(sock, where, _keepalive(hello))
+        except TimeoutError as exc:
+            raise EmbeddingUnavailable("the embedding service didn't answer in time") from exc
+        except PeerGone as exc:
+            raise _Gone(str(exc)) from exc
+        except ProtocolError as exc:
+            raise EmbeddingUnavailable(f"a bad frame from the embedding service: {exc}") \
+                from exc
+        except OSError as exc:  # reset or aborted mid-exchange
+            raise _Gone(str(exc)) from exc
+        finally:
+            if not authenticated:
+                sock.close()
+
+    def _exchange(self, conn: _Conn, request: Frame, deadline: float, *, kept: bool) -> Frame:
+        """Send ``request`` on ``conn`` and read the reply; ``conn`` is closed if that fails.
+
+        On a kept connection, a send that fails, or an end before the first
+        byte of the reply, means the service had closed it: :class:`_Stale`.
+        """
+        if "budget_ms" in request:
+            # What is left now, after any connect and handshake: a budget worked
+            # out before them let the service run work for a client that had
+            # already given up.
+            request = {**request, "budget_ms": max(
+                1, int((deadline - time.monotonic()) * 1000))}
+        sent = answered = False
+        try:
+            send_frame(conn.sock, request, deadline)
+            sent = True
+            reply = recv_frame(conn.sock, deadline, MAX_FRAME)
+            answered = True
+            return reply
+        except TimeoutError as exc:
+            raise EmbeddingUnavailable("the embedding service didn't answer in time") from exc
+        except PeerGone as exc:
+            if kept and not exc.started:
+                raise _Stale(str(exc)) from exc
+            raise _Gone(str(exc)) from exc
+        except ProtocolError as exc:
+            raise EmbeddingUnavailable(f"a bad frame from the embedding service: {exc}") \
+                from exc
+        except OSError as exc:  # reset or aborted mid-exchange
+            if kept and not sent:
+                raise _Stale(str(exc)) from exc
+            raise _Gone(str(exc)) from exc
+        finally:
+            if not answered:
+                conn.close()
 
     # ── Starting one ─────────────────────────────────────────────────
 
@@ -441,6 +604,8 @@ def service_state(root: Path, *, timeout_s: float = 0.5) -> ServiceState:
         live = client._call(found, key, paths, time.monotonic() + timeout_s, {"op": "status"})
     except (EmbeddingUnavailable, _Gone, OSError) as exc:
         return ServiceState("unreachable", found, error=str(exc))
+    finally:
+        client.close()
     return ServiceState(str(live.get("state") or found.state), found, live)
 
 

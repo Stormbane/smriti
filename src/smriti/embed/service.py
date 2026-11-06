@@ -9,6 +9,12 @@ embedding requests over loopback TCP (see :mod:`smriti.embed.protocol`).
   request whose client has given up is dropped unrun. So a peer that floods
   or stalls costs bounded threads, sockets and memory, and clients degrade
   promptly instead of hanging.
+- **An authenticated connection carries many requests.** After a reply the
+  service waits up to 10 s (``keepalive_s``, advertised in its hello) for
+  the next request on it, one at a time, and closes it then, or at once
+  when it drains. It holds its slot while it lives. A client that doesn't
+  know keep-alive closes after one request, as before; only the hello is
+  sent before authentication, as before.
 - **Inference is serialised**, queries ahead of write batches; between
   requests, a repair loop fills the vectors of sources indexed while no
   embedder was available, in small batches, queries first.
@@ -79,6 +85,8 @@ MAX_CONNECTIONS = 32
 QUEUE_MAX = 64
 HANDSHAKE_S = 1.0
 REQUEST_READ_S = 5.0  # after the handshake, for the request frame to arrive
+KEEPALIVE_S = 10.0  # how long an authenticated connection waits for its next request
+_KEEPALIVE_POLL_S = 0.1  # how often a waiting connection looks for a drain
 MAX_BUDGET_S = 60.0  # the longest deadline a request may ask for
 DRAIN_WAIT_S = 45.0  # how long a draining service waits for in-flight connections
 
@@ -112,6 +120,7 @@ class Stats:
     dropped: int = 0  # requests whose client gave up before they ran
     auth_failures: int = 0
     repaired: int = 0  # sources whose pending vectors the repair loop filled
+    authenticated: int = 0  # connections that passed the handshake
 
 
 class _Interrupted(Exception):
@@ -124,6 +133,7 @@ class EmbedService:
     def __init__(self, *, provider: _Provider, key: bytes, db: Path | None,
                  identity: EmbeddingIdentity | None = None, idle_s: float = IDLE_S,
                  handshake_s: float = HANDSHAKE_S, request_read_s: float = REQUEST_READ_S,
+                 keepalive_s: float = KEEPALIVE_S,
                  max_connections: int = MAX_CONNECTIONS, queue_max: int = QUEUE_MAX,
                  identity_check_s: float = 1.0, pending_poll_s: float = 2.0,
                  novec_poll_s: float = 60.0,
@@ -137,6 +147,7 @@ class EmbedService:
         self.idle_s = idle_s
         self.handshake_s = handshake_s
         self.request_read_s = request_read_s
+        self.keepalive_s = keepalive_s  # 0: one request per connection, as before keep-alive
         self.identity_check_s = identity_check_s
         self.pending_poll_s = pending_poll_s
         self.novec_poll_s = novec_poll_s  # how often to look again while sqlite-vec won't load
@@ -290,8 +301,13 @@ class EmbedService:
             conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             if not self._handshake(conn, accepted + self.handshake_s):
                 return
-            request = recv_frame(conn, time.monotonic() + self.request_read_s, MAX_FRAME)
-            send_frame(conn, self._handle(request), time.monotonic() + 5.0)
+            with self._active_lock:
+                self.stats.authenticated += 1
+            while True:
+                request = recv_frame(conn, time.monotonic() + self.request_read_s, MAX_FRAME)
+                send_frame(conn, self._handle(request), time.monotonic() + 5.0)
+                if request.get("op") == "stop" or not self._next_request(conn):
+                    return
         except (TimeoutError, PeerGone, ProtocolError, OSError) as exc:
             log.debug("embedding connection ended: %s", exc)
         finally:
@@ -300,6 +316,30 @@ class EmbedService:
             with self._active_lock:
                 self._active -= 1
             self._slots.release()
+
+    def _next_request(self, conn: socket.socket) -> bool:
+        """Wait for the client's next request on ``conn``: True once it starts to arrive.
+
+        Readable also means closed: the read that follows finds the end. False,
+        and the connection is closed, when keep-alive is off, when nothing
+        arrives within ``keepalive_s``, or when the service stops or drains (a
+        client whose request then finds the connection closed sends it again on
+        a fresh one, and finds the service draining).
+        """
+        if self.keepalive_s <= 0:
+            return False
+        deadline = time.monotonic() + self.keepalive_s
+        while not (self._stop.is_set() or self._draining.is_set()):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            conn.settimeout(min(remaining, _KEEPALIVE_POLL_S))
+            try:
+                conn.recv(1, socket.MSG_PEEK)  # a byte, or b"" at the end: either way, read on
+            except TimeoutError:
+                continue
+            return True
+        return False
 
     def _handshake(self, conn: socket.socket, deadline: float) -> bool:
         hello = recv_frame(conn, deadline, PREAUTH_MAX)
@@ -313,9 +353,11 @@ class EmbedService:
                               "error": f"this service speaks protocol {PROTOCOL}"}, deadline)
             return False
         nonce_s = secrets.token_hex(16)
-        send_frame(conn, {"proto": PROTOCOL, "instance": self.instance, "nonce": nonce_s,
-                          "proof": server_proof(self.key, nonce_c, nonce_s, self.instance)},
-                   deadline)
+        answer: Frame = {"proto": PROTOCOL, "instance": self.instance, "nonce": nonce_s,
+                         "proof": server_proof(self.key, nonce_c, nonce_s, self.instance)}
+        if self.keepalive_s > 0:
+            answer["keepalive_s"] = self.keepalive_s
+        send_frame(conn, answer, deadline)
         auth = recv_frame(conn, deadline, PREAUTH_MAX)
         if auth.get("op") != "auth" or not proofs_match(
                 auth.get("proof"), client_proof(self.key, nonce_c, nonce_s)):
@@ -340,6 +382,7 @@ class EmbedService:
         return {"instance": self.instance, "pid": os.getpid(), "state": self.state,
                 "identity": asdict(self.identity), "uptime_s": round(now - self._started, 1),
                 "idle_for_s": round(now - self._last_request, 1), "idle_s": self.idle_s,
+                "keepalive_s": self.keepalive_s,
                 "queued": self._queue.qsize(), "active": self._active,
                 "pending": self.pending, "can_store_vectors": self.can_store_vectors,
                 "stats": asdict(self.stats)}

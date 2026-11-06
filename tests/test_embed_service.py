@@ -444,6 +444,287 @@ def test_sustained_unauthenticated_connections_stay_bounded_and_clients_degrade_
     assert got.vectors == stub(["after"])
 
 
+# ── Keep-alive (H12.0) ───────────────────────────────────────────────
+#
+# A connection, and its handshake, used to be paid for every request (the
+# connect alone 14-21 ms on Windows). Now one is kept while the service says
+# it may be. Every pairing of old and new client and service must still work.
+
+
+def _hello(port: int) -> dict[str, Any]:
+    """The service's answer to a hello: what it advertises before authentication."""
+    with socket.create_connection(("127.0.0.1", port), timeout=2) as s:
+        send_frame(s, {"op": "hello", "proto": PROTOCOL, "nonce": secrets.token_hex(16)},
+                   time.monotonic() + 2)
+        return recv_frame(s, time.monotonic() + 2, PREAUTH_MAX)
+
+
+def _embed_on(s: socket.socket, text: str) -> dict[str, Any]:
+    send_frame(s, {"op": "embed", "kind": "query", "texts": [text], "budget_ms": 2000},
+               time.monotonic() + 2)
+    return recv_frame(s, time.monotonic() + 2)
+
+
+class Exchanges:
+    """Records, for each request a client sends, whether it went on a kept connection."""
+
+    def __init__(self, client: ServiceEmbedding, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.kept: list[bool] = []
+        real = client._exchange
+
+        def recording(conn: Any, request: Any, deadline: float, *, kept: bool) -> Any:
+            self.kept.append(kept)
+            return real(conn, request, deadline, kept=kept)
+
+        monkeypatch.setattr(client, "_exchange", recording)
+
+
+def test_one_connection_carries_a_clients_requests(root: Path, services: Services) -> None:
+    svc = services.start(root)
+    client = ServiceEmbedding(root, spawn=False)
+    texts = [f"Ari counts lantern {i}" for i in range(5)]
+
+    got = [client.embed_with_identity([t], kind="query").vectors for t in texts]
+
+    assert got == [stub([t]) for t in texts]
+    assert svc.stats.served == 5 and svc.stats.authenticated == 1
+    assert svc.active_connections == 1  # kept for the next request
+    client.close()
+    assert _wait(lambda: svc.active_connections == 0, 2)
+
+
+def test_an_old_client_still_gets_one_request_and_frees_its_slot(
+        root: Path, services: Services) -> None:
+    """A client from before keep-alive sends one request and closes."""
+    svc = services.start(root)
+    assert _hello(svc.port)["keepalive_s"] == 10.0  # advertised in the hello
+    with _raw_authenticated(svc.port, load_key(runtime_dir())) as s:  # as an old client does
+        reply = _embed_on(s, "Sam waters the beans")
+    assert reply["ok"] is True and svc.stats.served == 1
+    t0 = time.monotonic()
+    assert _wait(lambda: svc.active_connections == 0, 2)
+    assert time.monotonic() - t0 < 1.0  # at its close, not after the keep-alive
+
+
+def test_a_new_client_against_an_old_service_connects_for_each_request(
+        root: Path, services: Services) -> None:
+    """A service from before keep-alive advertises none, and closes after one reply."""
+    svc = services.start(root, keepalive_s=0)
+    assert "keepalive_s" not in _hello(svc.port)
+    client = ServiceEmbedding(root, spawn=False)
+    for i in range(3):
+        assert client.embed_with_identity([f"one {i}"]).vectors == stub([f"one {i}"])
+        assert client._kept is None  # nothing kept: an old service would close it
+    assert svc.stats.served == 3 and svc.stats.authenticated == 3
+    assert _wait(lambda: svc.active_connections == 0, 2)
+
+
+def test_the_service_closes_a_connection_idle_past_its_keepalive(
+        root: Path, services: Services) -> None:
+    svc = services.start(root, keepalive_s=0.3)
+    with _raw_authenticated(svc.port, load_key(runtime_dir())) as s:
+        assert _embed_on(s, "first")["ok"] is True
+        t0 = time.monotonic()
+        assert _embed_on(s, "within the keep-alive")["ok"] is True  # the same connection
+        assert _closed_within(s, 3)
+        assert 0.25 <= time.monotonic() - t0 < 2.0
+    assert _wait(lambda: svc.active_connections == 0, 2)
+    assert svc.stats.authenticated == 1 and svc.stats.served == 2
+
+
+def test_a_client_stops_reusing_a_connection_before_the_service_closes_it(
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
+    svc = services.start(root, keepalive_s=1.5)  # reusable for 1.5 - 1.0 s of idleness
+    client = ServiceEmbedding(root, spawn=False)
+    exchanges = Exchanges(client, monkeypatch)
+
+    client.embed_with_identity(["one"])
+    client.embed_with_identity(["two"])  # at once: on the kept connection
+    time.sleep(0.7)  # idle past the margin, though the service still keeps it
+    assert client.embed_with_identity(["three"]).vectors == stub(["three"])
+
+    assert exchanges.kept == [False, True, False]  # never sent on the one near its close
+    assert svc.stats.authenticated == 2 and svc.stats.served == 3
+    client.close()
+
+
+def test_a_request_on_a_connection_the_service_closed_goes_once_more_fresh(
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
+    import smriti.embed.client as client_mod
+
+    monkeypatch.setattr(client_mod, "KEEPALIVE_MARGIN_S", 0.05)
+    svc = services.start(root, keepalive_s=0.3)
+    client = ServiceEmbedding(root, spawn=False)
+    client.embed_with_identity(["before"])
+    assert client._kept is not None
+    client._kept.keepalive_s = 30.0  # the client believes it fresh...
+    assert _wait(lambda: svc.active_connections == 0, 3)  # ...but the service closed it
+    # The close lands after the client's look at the connection, as in a race.
+    monkeypatch.setattr(client_mod, "_peer_closed", lambda sock: False)
+    exchanges = Exchanges(client, monkeypatch)
+
+    got = client.embed_with_identity(["after the close"], kind="query")
+
+    assert got.vectors == stub(["after the close"])
+    assert exchanges.kept == [True, False]  # the closed one, then one fresh retry
+    assert svc.stats.served == 2  # it ran once
+    assert svc.stats.authenticated == 2
+    client.close()
+
+
+def test_a_kept_connection_seen_closed_is_not_sent_on(
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
+    import smriti.embed.client as client_mod
+
+    monkeypatch.setattr(client_mod, "KEEPALIVE_MARGIN_S", 0.05)
+    svc = services.start(root, keepalive_s=0.3)
+    client = ServiceEmbedding(root, spawn=False)
+    client.embed_with_identity(["before"])
+    assert client._kept is not None
+    client._kept.keepalive_s = 30.0
+    assert _wait(lambda: svc.active_connections == 0, 3)
+    exchanges = Exchanges(client, monkeypatch)
+
+    assert client.embed_with_identity(["after"]).vectors == stub(["after"])
+    assert exchanges.kept == [False]  # its end was seen first: straight to a fresh one
+    client.close()
+
+
+def test_a_restarted_service_gets_a_fresh_connection(root: Path, services: Services) -> None:
+    first = services.start(root)
+    client = ServiceEmbedding(root, spawn=False)
+    client.embed_with_identity(["to the first"])
+    assert client._kept is not None and client.last_instance == first.instance
+    first.stop("restarted")
+    assert _wait(lambda: first.instance in services.reasons, 5)
+    second = services.start(root)
+
+    assert client.embed_with_identity(["to the second"]).vectors == stub(["to the second"])
+    assert client.last_instance == second.instance and second.stats.authenticated == 1
+    client.close()
+
+
+def test_a_drain_does_not_wait_out_kept_connections(root: Path, services: Services) -> None:
+    svc = services.start(root)  # the full 10 s keep-alive
+    client = ServiceEmbedding(root, spawn=False)
+    client.embed_with_identity(["kept"])
+    assert svc.active_connections == 1
+    t0 = time.monotonic()
+    svc.stop("stopped while a connection is kept")
+    assert _wait(lambda: svc.instance in services.reasons, 5)
+    assert time.monotonic() - t0 < 2.0
+    client.close()
+
+
+def test_concurrent_calls_on_one_client_never_share_a_connection(
+        root: Path, services: Services) -> None:
+    svc = services.start(root)
+    client = ServiceEmbedding(root, spawn=False)
+    start = threading.Barrier(8)
+    wrong: list[str] = []
+
+    def calls(n: int) -> None:
+        start.wait()
+        for i in range(6):
+            text = f"Ari's thread {n}, call {i}"
+            try:
+                if client.embed_with_identity([text], kind="query").vectors != stub([text]):
+                    wrong.append(text)
+            except EmbeddingUnavailable as exc:
+                wrong.append(f"{text}: {exc}")
+
+    threads = [threading.Thread(target=calls, args=(n,)) for n in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert wrong == []  # every reply was its own request's
+    assert svc.stats.served == 48 and svc.stats.authenticated <= 48
+    assert client._kept is not None  # one kept; the others closed
+    assert _wait(lambda: svc.active_connections == 1, 3)
+    client.close()
+
+
+class _Swallower:
+    """A service that authenticates properly, keeps connections, and answers nothing."""
+
+    def __init__(self, key: bytes) -> None:
+        self.key = key
+        self.requests: list[str] = []
+        self.connections = 0
+        self.listener = socket.socket()
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(8)
+        self.listener.settimeout(0.2)
+        self.port = int(self.listener.getsockname()[1])
+        self.done = threading.Event()
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self) -> None:
+        from smriti.embed.protocol import server_proof
+
+        while not self.done.is_set():
+            try:
+                conn, _ = self.listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            with conn:
+                self.connections += 1
+                try:
+                    hello = recv_frame(conn, time.monotonic() + 2, PREAUTH_MAX)
+                    nonce = secrets.token_hex(16)
+                    send_frame(conn, {"proto": PROTOCOL, "instance": "swallower", "nonce": nonce,
+                                      "proof": server_proof(self.key, hello["nonce"], nonce,
+                                                            "swallower"),
+                                      "keepalive_s": 10.0}, time.monotonic() + 2)
+                    recv_frame(conn, time.monotonic() + 2, PREAUTH_MAX)  # the client's proof
+                    self.requests.append(str(recv_frame(conn, time.monotonic() + 2).get("op")))
+                except (OSError, ValueError):
+                    pass
+
+    def close(self) -> None:
+        self.done.set()
+        self.thread.join(5)
+        self.listener.close()
+
+
+def test_a_stop_goes_on_its_own_connection_and_is_never_sent_twice(
+        root: Path, services: Services) -> None:
+    from smriti.embed.client import _Gone
+
+    paths = service_paths(runtime_dir(), root)
+    key = load_key(runtime_dir())
+    svc = services.start(root)
+    client = ServiceEmbedding(root, spawn=False)
+    client.embed_with_identity(["kept"])
+    found = read_discovery(paths)
+    assert found is not None and client._kept is not None
+
+    client._call(found, key, paths, time.monotonic() + 5, {"op": "stop"})
+    assert svc.stats.authenticated == 2  # not on the kept connection
+    assert _wait(lambda: svc.instance in services.reasons, 5)
+    client.close()
+
+    # A stop whose connection closes before its answer is not sent again,
+    # where an embed (idempotent) is.
+    swallower = _Swallower(key)
+    try:
+        gone = Discovery(os.getpid(), "ready", "swallower", port=swallower.port, identity=STUB)
+        with pytest.raises(_Gone):
+            client._call(gone, key, paths, time.monotonic() + 5, {"op": "stop"})
+        assert swallower.requests == ["stop"] and swallower.connections == 1
+        write_discovery(paths, gone)
+        with pytest.raises(EmbeddingUnavailable, match="closed the connection twice"):
+            client.embed_with_identity(["swallowed"])
+        assert swallower.requests == ["stop", "embed", "embed"]
+    finally:
+        swallower.close()
+        client.close()
+
+
 # ── Lifecycle ────────────────────────────────────────────────────────
 
 
