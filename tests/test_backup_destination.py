@@ -179,6 +179,18 @@ def test_the_installer_and_the_backup_agree_on_the_remote(
     assert privacy.backup_remote(repo)[0] == _script_remote(backup, repo)
 
 
+@pytest.mark.parametrize("setup", list(SETUPS), ids=list(SETUPS))
+def test_the_status_knows_whether_the_backups_remote_has_a_destination(
+        backup: ModuleType, tmp_path: Path, setup: str) -> None:
+    """``smriti.backup`` reports a failed push as "nowhere to push" only when git knows
+    no destination for the remote the script pushed to: here, only without a remote."""
+    repo, _ = SETUPS[setup](tmp_path)
+    remote = _script_remote(backup, repo)
+    if remote is None:
+        return  # the script pushes nothing, and logs why
+    assert privacy.push_has_destination(repo, remote) == (setup != "no remote")
+
+
 @pytest.mark.parametrize("setup", ["upstream on another remote", "no upstream",
                                    "upstream names a URL", "upstream names a rewritten URL",
                                    "detached HEAD"])

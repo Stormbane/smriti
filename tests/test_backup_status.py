@@ -54,11 +54,17 @@ def _log(root: Path, *records: dict[str, object]) -> None:
             f.write(json.dumps(record) + "\n")
 
 
+def _repo(root: Path) -> None:
+    """A git repository at *root* (an existing ``.git`` with the backup log in it is kept)."""
+    root.mkdir(parents=True, exist_ok=True)
+    _git(root, "init", "-q")
+    _git(root, "symbolic-ref", "HEAD", "refs/heads/main")
+
+
 def _config_remote(root: Path, name: str = "origin") -> None:
-    (root / ".git").mkdir(exist_ok=True)
-    (root / ".git" / "config").write_text(
-        f'[core]\n\tbare = false\n[remote "{name}"]\n\turl = /nowhere/{name}.git\n',
-        encoding="utf-8")
+    """A repository with a remote *name*, so git, as the status asks it, knows the remote."""
+    _repo(root)
+    _git(root, "remote", "add", name, f"/nowhere/{name}.git")
 
 
 @pytest.fixture(autouse=True)
@@ -138,6 +144,7 @@ def test_a_tree_with_no_remote_is_not_failing(tmp_path: Path) -> None:
 # ---------------------------------------------------------------- reading the log
 
 
+@needs_git
 def test_since_when_is_the_first_failure_after_the_last_success(tmp_path: Path) -> None:
     root = tmp_path
     _log(root,
@@ -160,6 +167,7 @@ def test_since_when_is_the_first_failure_after_the_last_success(tmp_path: Path) 
     assert status.as_dict()["failing_since"] == "2026-11-05T03:17:05+00:00"
 
 
+@needs_git
 def test_failures_before_a_success_are_not_this_streak(tmp_path: Path) -> None:
     """The scan goes on past the streak for an older commit; it must not extend the
     streak past the success that ended the one before (Codex review, P2)."""
@@ -176,11 +184,71 @@ def test_failures_before_a_success_are_not_this_streak(tmp_path: Path) -> None:
     assert status.commit == backup.Outcome("ok", "2026-11-01T01:17:00+00:00")
 
 
+@needs_git
 def test_a_log_of_failures_only_says_since_its_first(tmp_path: Path) -> None:
     _log(tmp_path, *({"at": f"2026-11-0{d}T01:17:00+00:00", "event": "push", "ok": False,
                       "out": "fatal: no", "to": "origin main"} for d in (3, 4, 5)))
     _config_remote(tmp_path)
     assert backup_status(tmp_path).failing_since == "2026-11-03T01:17:00+00:00"
+
+
+@needs_git
+@pytest.mark.parametrize("where", ["an included file", "the global config",
+                                   "the worktree config"])
+def test_a_remote_defined_outside_the_repositorys_config_file_is_a_real_failure(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str) -> None:
+    """Git's effective configuration decides whether the remote exists; reading only
+    .git/config called these pushes' failures "no remote", and the night ok (Codex
+    review, P2)."""
+    root = tmp_path / "tree"
+    _repo(root)
+    url = (tmp_path / "gone" / "memory.git").as_posix()
+    if where == "an included file":
+        (root / ".git" / "remotes.config").write_text(
+            f'[remote "origin"]\n\turl = {url}\n', encoding="utf-8")
+        _git(root, "config", "include.path", "remotes.config")
+    elif where == "the global config":
+        glob = tmp_path / "global.gitconfig"
+        glob.write_text(f'[remote "origin"]\n\turl = {url}\n', encoding="utf-8")
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(glob))
+    else:
+        _git(root, "config", "extensions.worktreeConfig", "true")
+        _git(root, "config", "--worktree", "remote.origin.url", url)
+    assert "[remote" not in (root / ".git" / "config").read_text(encoding="utf-8")
+    _log(root, {"at": "2026-11-06T01:17:05+00:00", "event": "push", "ok": False,
+                "out": "fatal: Could not read from remote repository.",
+                "to": "origin refs/heads/main:refs/heads/main"})
+    status = backup_status(root)
+    assert status.push is not None and status.push.state == "failed" and not status.ok
+
+
+@needs_git
+def test_a_failed_push_to_a_path_with_a_space_is_a_failure(tmp_path: Path) -> None:
+    """The push line's ``to`` is the remote, then the refspec; a path may hold a space."""
+    _repo(tmp_path)
+    _log(tmp_path, {"at": "2026-11-06T01:17:05+00:00", "event": "push", "ok": False,
+                    "out": "fatal: no", "to": "/srv/my memory.git refs/heads/main:refs/heads/main"})
+    assert backup._push_target({"to": "/srv/my memory.git refs/heads/main:refs/heads/main"}) == (
+        "/srv/my memory.git")
+    assert not backup_status(tmp_path).ok
+
+
+def test_when_git_cannot_say_a_failed_push_stays_a_failure(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess as sp
+
+    from smriti.install import privacy
+
+    def broken(*_args: object, **_kwargs: object) -> object:
+        raise FileNotFoundError("git")
+
+    _log(tmp_path, {"at": "2026-11-06T01:17:05+00:00", "event": "push", "ok": False,
+                    "out": "fatal: no", "to": "origin refs/heads/main:refs/heads/main"})
+    monkeypatch.setattr(privacy.subprocess, "run", broken)
+    assert not backup_status(tmp_path).ok
+    monkeypatch.setattr(privacy.subprocess, "run", lambda *a, **k: sp.CompletedProcess(
+        a[0], 128, stdout="", stderr="fatal: not a git repository"))
+    assert not backup_status(tmp_path).ok
 
 
 def test_a_failed_commit_is_a_failure(tmp_path: Path) -> None:
@@ -193,7 +261,9 @@ def test_a_failed_commit_is_a_failure(tmp_path: Path) -> None:
         "no push recorded")
 
 
+@needs_git
 def test_a_skipped_push_and_a_direct_url_are_told_apart(tmp_path: Path) -> None:
+    _repo(tmp_path)
     _log(tmp_path, {"at": "2026-11-06T01:17:00+00:00", "event": "push_skipped", "tag": "hourly",
                     "reason": "detached HEAD: no branch to push"})
     status = backup_status(tmp_path)
@@ -313,6 +383,7 @@ def _failing(root: Path) -> None:
                 "out": "fatal: Could not read from remote repository.", "to": "origin main"})
 
 
+@needs_git
 def test_the_nightly_reports_the_backup_and_a_failing_push_fails_the_night(
         tmp_path: Path) -> None:
     from smriti.daylog.config import DaylogConfig
@@ -334,6 +405,7 @@ def test_the_nightly_reports_the_backup_and_a_failing_push_fails_the_night(
     assert "NIGHTLY HAD FAILURES for 2026-11-05: backup" in _nightly_line(tmp_path)
 
 
+@needs_git
 def test_smriti_status_prints_the_backup_line(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str]) -> None:

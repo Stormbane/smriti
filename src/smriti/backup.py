@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import sys
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
@@ -345,19 +344,31 @@ def _line(name: str, outcome: Outcome, tz: tzinfo | None) -> str:
     return line + (f": {outcome.detail}" if outcome.detail else "")
 
 
-# Compiled on first use (re caches it): only a failed push needs it.
-_REMOTE_PATTERN = r'^\s*\[\s*remote\s+"([^"]+)"\s*\]'
+def _push_target(event: dict[str, object]) -> str:
+    """The remote (a name, or a URL or path) a push line went to: its ``to`` less the refspec."""
+    to = str(event.get("to", "")).strip()
+    remote, _, _refspec = to.rpartition(" ")  # a refspec holds no space; a path may
+    return remote or to
 
 
-def _remote_configured(common: Path, target: str) -> bool:
-    """Whether a push to *target* (a remote's name, or a URL or path) has somewhere to go."""
-    if not target or any(c in target for c in "/\\:"):
-        return True  # a URL or a path: it names its own destination
-    try:
-        config = (common / "config").read_text(encoding="utf-8", errors="replace")
-    except OSError:
+def _remote_configured(root: Path, target: str) -> bool:
+    """Whether a push to *target* (a remote's name, or a URL or path) has somewhere to go.
+
+    Git answers, from its effective configuration (included files, the global
+    and worktree configs), by the installer's rule for the backup's remote
+    (:func:`smriti.install.privacy.push_has_destination`). When it can't say,
+    the push counts as having somewhere to go, so its failure stays a failure.
+    """
+    import subprocess
+
+    from smriti.install.privacy import push_has_destination
+
+    if not target:
         return True
-    return target in re.findall(_REMOTE_PATTERN, config, re.MULTILINE | re.IGNORECASE)
+    try:
+        return push_has_destination(root, target)
+    except (OSError, subprocess.SubprocessError):
+        return True
 
 
 def backup_status(root: Path) -> BackupStatus:
@@ -366,8 +377,9 @@ def backup_status(root: Path) -> BackupStatus:
     A push that failed because its remote isn't configured at all (no
     upstream and no ``origin``: the script then tries ``origin``) is
     reported as skipped, not failed: such an install has nowhere to push,
-    which isn't a failure of its backups. Pushes that were skipped (a
-    detached HEAD) are reported so too.
+    which isn't a failure of its backups. Git decides whether the remote is
+    configured (:func:`_remote_configured`); it is asked only when the last
+    push failed. Pushes that were skipped (a detached HEAD) are reported so too.
     """
     common = git_common_dir(root)
     if common is None:
@@ -388,8 +400,8 @@ def backup_status(root: Path) -> BackupStatus:
             if e.get("ok"):
                 push = Outcome("ok", at)
             else:
-                target = str(e.get("to", "")).split(" ")[0]
-                if _remote_configured(common, target):
+                target = _push_target(e)
+                if _remote_configured(root, target):
                     push, failing_since = Outcome("failed", at, _detail(e)), at
                 else:
                     push = Outcome("skipped", at, f"no remote {target!r} is configured")

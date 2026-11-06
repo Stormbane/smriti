@@ -361,10 +361,13 @@ def redact_url(url: str) -> str:
 
 
 def _git(root: Path, *args: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+    # No console of its own: the nightly runs windowless, and a console child of
+    # a windowless parent opens a visible window (smriti.daylog.schedule).
     return subprocess.run(
         ["git", "-C", str(root), *args],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         input=stdin, stdin=None if stdin is not None else subprocess.DEVNULL, timeout=60,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
     )
 
 
@@ -446,6 +449,20 @@ def _names_a_location(remote: str) -> bool:
     return any(c in remote for c in ":/\\")
 
 
+def configured_remotes(root: Path) -> list[str]:
+    """The remotes git knows for *root*: ``git remote``, from every config scope.
+
+    Its effective configuration: the repository's, the worktree's, included
+    files, the global and system configs, as ``git push`` resolves a remote
+    (``git remote get-url`` knows only the repository's own). Raises
+    SubprocessError when git can't say.
+    """
+    done = _git(root, "remote")
+    if done.returncode != 0:
+        raise subprocess.SubprocessError(done.stderr.strip() or f"git exited {done.returncode}")
+    return done.stdout.splitlines()
+
+
 def _is_direct(root: Path, remote: str) -> bool:
     """Whether the upstream names a URL or path itself rather than a configured remote.
 
@@ -455,6 +472,18 @@ def _is_direct(root: Path, remote: str) -> bool:
     if not _names_a_location(remote):
         return False
     return remote not in _git(root, "remote").stdout.splitlines()
+
+
+def push_has_destination(root: Path, remote: str) -> bool:
+    """Whether ``git push <remote>`` has somewhere to go: a remote git knows, or a URL or path.
+
+    The rule :func:`_is_direct` and :func:`backup_remote` follow: a configured
+    remote (:func:`configured_remotes`) by its name, else a name shaped like a
+    location names one. ``smriti.backup`` asks it of a failed push, to tell an
+    install with nowhere to push from a push that failed. Raises
+    SubprocessError when git can't say.
+    """
+    return remote in configured_remotes(root) or _names_a_location(remote)
 
 
 def _url_rewrites(root: Path) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
