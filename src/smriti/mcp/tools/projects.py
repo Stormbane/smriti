@@ -454,7 +454,8 @@ TOOLS = (
         description="Append a new task line to a project's .ai/todo.md (via the mirror "
             "junction at <root>/mirrors/{project}/ai/todo.md). Fails loud if "
             "the project slug is not a known mirror — no silent misroute. "
-            "Substring-dedups on `topic` to avoid pile-up. Use Edit (not this "
+            "Skips the task when its `topic` is already in the file as a whole "
+            "phrase (any case or spacing), to avoid pile-up. Use Edit (not this "
             "tool) when restructuring or placing among related items — this tool "
             "is for append-only autonomous flows.",
         input_schema={

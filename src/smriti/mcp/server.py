@@ -14,6 +14,7 @@ import logging
 import sys
 from typing import Any
 
+from smriti import __version__
 from smriti.core.safe_names import PATH_ARGUMENTS, UnsafeName, safe_name
 from smriti.mcp.tool import Tool, ToolError, check_arguments
 from smriti.mcp.tools import active_tools
@@ -21,7 +22,7 @@ from smriti.mcp.tools import active_tools
 log = logging.getLogger(__name__)
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "smriti", "version": "0.1.0"}
+SERVER_INFO = {"name": "smriti", "version": __version__}
 CAPABILITIES: dict[str, Any] = {"tools": {}}
 
 Message = dict[str, Any]
