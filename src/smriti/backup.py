@@ -378,7 +378,11 @@ def backup_status(root: Path) -> BackupStatus:
                     push, failing_since = Outcome("failed", at, _detail(e)), at
                 else:
                     push = Outcome("skipped", at, f"no remote {target!r} is configured")
-        elif push is not None and push.state == "failed" and kind == "push":
+        elif (push is not None and push.state == "failed" and kind == "push"
+              and not streak_found):
+            # Back through the failures to the push before them; past that one,
+            # older failures are another streak, however long the scan goes on
+            # for the last commit.
             if e.get("ok"):
                 streak_found = True
             else:

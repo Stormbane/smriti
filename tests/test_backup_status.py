@@ -160,6 +160,22 @@ def test_since_when_is_the_first_failure_after_the_last_success(tmp_path: Path) 
     assert status.as_dict()["failing_since"] == "2026-11-05T03:17:05+00:00"
 
 
+def test_failures_before_a_success_are_not_this_streak(tmp_path: Path) -> None:
+    """The scan goes on past the streak for an older commit; it must not extend the
+    streak past the success that ended the one before (Codex review, P2)."""
+    _log(tmp_path,
+         {"at": "2026-11-01T01:17:00+00:00", "event": "commit", "tag": "hourly", "ok": True},
+         {"at": "2026-11-02T01:17:05+00:00", "event": "push", "ok": False,
+          "out": "fatal: no", "to": "origin main"},
+         {"at": "2026-11-03T01:17:05+00:00", "event": "push", "ok": True, "to": "origin main"},
+         {"at": "2026-11-04T01:17:05+00:00", "event": "push", "ok": False,
+          "out": "fatal: no", "to": "origin main"})
+    _config_remote(tmp_path)
+    status = backup_status(tmp_path)
+    assert status.failing_since == "2026-11-04T01:17:05+00:00"
+    assert status.commit == backup.Outcome("ok", "2026-11-01T01:17:00+00:00")
+
+
 def test_a_log_of_failures_only_says_since_its_first(tmp_path: Path) -> None:
     _log(tmp_path, *({"at": f"2026-11-0{d}T01:17:00+00:00", "event": "push", "ok": False,
                       "out": "fatal: no", "to": "origin main"} for d in (3, 4, 5)))
