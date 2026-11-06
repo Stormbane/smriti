@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import sys
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone, tzinfo
 from pathlib import Path
@@ -225,8 +226,8 @@ def backup_log_path(root: Path) -> Path | None:
     return common / LOG_NAME if common is not None else None
 
 
-def _read_events(path: Path | None, offset: int = 0) -> list[dict[str, object]]:
-    """The log's records from byte *offset* on, oldest first; lines that aren't records skipped."""
+def _read_lines(path: Path | None, offset: int = 0) -> list[str]:
+    """The log's lines from byte *offset* on, oldest first."""
     if path is None:
         return []
     try:
@@ -235,15 +236,23 @@ def _read_events(path: Path | None, offset: int = 0) -> list[dict[str, object]]:
             data = f.read()
     except OSError:
         return []
-    events = []
-    for line in data.decode("utf-8", errors="replace").splitlines():
+    return data.decode("utf-8", errors="replace").splitlines()
+
+
+def _records(lines: Iterable[str]) -> Iterator[dict[str, object]]:
+    """Each line's record, in the lines' order; lines that aren't records skipped."""
+    for line in lines:
         try:
             record = json.loads(line)
         except ValueError:
             continue
         if isinstance(record, dict):
-            events.append(record)
-    return events
+            yield record
+
+
+def _read_events(path: Path | None, offset: int = 0) -> list[dict[str, object]]:
+    """The log's records from byte *offset* on, oldest first."""
+    return list(_records(_read_lines(path, offset)))
 
 
 @dataclass(frozen=True)
@@ -351,7 +360,8 @@ def backup_status(root: Path) -> BackupStatus:
     push: Outcome | None = None
     failing_since = ""
     streak_found = False  # the push before the failures, or the log's start
-    for e in reversed(_read_events(common / LOG_NAME)):
+    # Newest first, parsing only as far back as the answer needs.
+    for e in _records(reversed(_read_lines(common / LOG_NAME))):
         kind, at = e.get("event"), str(e.get("at", ""))
         if commit is None and kind in ("commit", "add_failed"):
             ok = kind == "commit" and bool(e.get("ok"))
