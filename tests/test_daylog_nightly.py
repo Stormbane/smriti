@@ -184,27 +184,136 @@ def test_digest_writes_file_with_input_hash(tmp_path: Path, fake_llm: FakeProvid
         "--strict-mcp-config", "--tools=", "--disallowedTools=*", "--disable-slash-commands"]
 
 
-def test_digest_falls_back_when_primary_fails(tmp_path: Path,
-                                              monkeypatch: pytest.MonkeyPatch) -> None:
+class Boom:
+    """A provider that is there and fails every call."""
+
+    def is_available(self) -> bool:
+        return True
+
+    def call(self, request: LLMRequest) -> LLMResponse:
+        raise RuntimeError("primary down")
+
+
+def _claude_down(monkeypatch: pytest.MonkeyPatch, fallback: FakeProvider) -> None:
+    providers = {"claude_cli": Boom(), "codex_cli": fallback}
+    monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: providers[name])
+
+
+def test_digest_falls_back_when_primary_fails_and_a_fallback_is_set(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _cfg(tmp_path)
+    cfg.nightly_fallback = "codex_cli"  # as the reference install's daylog.json sets
     _seed_day(cfg)
     render_day(cfg, "2026-09-04")
     good = FakeProvider("fallback digest")
-
-    class Boom:
-        def is_available(self) -> bool:
-            return True
-
-        def call(self, request: LLMRequest) -> LLMResponse:
-            raise RuntimeError("primary down")
-
-    providers = {"claude_cli": Boom(), "codex_cli": good}
-    monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: providers[name])
+    _claude_down(monkeypatch, good)
     attempts: list[dict[str, str]] = []
     out = digest_mod.digest_day(cfg, "2026-09-04", attempts)
     assert out is not None and "fallback digest" in out.read_text(encoding="utf-8")
     assert [a["provider"] for a in attempts] == ["claude_cli", "codex_cli"]
     assert attempts[0]["outcome"].startswith("error")
+    # The same call the nightly's codex seat always got: no extra flags.
+    assert good.requests[0].cli_args is None
+
+
+def test_by_default_a_failed_digest_does_not_fall_back(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """H12.2: codex's read-only sandbox can read the user's files while it
+    reads untrusted transcripts, so the fallback is opt-in."""
+    from smriti.llm.types import LLMError
+
+    cfg = _cfg(tmp_path)
+    _seed_day(cfg)
+    render_day(cfg, "2026-09-04")
+    codex = FakeProvider("must not run")
+    _claude_down(monkeypatch, codex)
+    attempts: list[dict[str, str]] = []
+    with pytest.raises(LLMError, match="all providers failed"):
+        digest_mod.digest_day(cfg, "2026-09-04", attempts)
+    assert [a["provider"] for a in attempts] == ["claude_cli"] and codex.requests == []
+    assert not cfg.day_digest("2026-09-04").exists()
+
+
+@pytest.mark.parametrize(("env", "configured", "chain"), [
+    (None, "", ["claude_cli"]),
+    (None, "codex_cli", ["claude_cli", "codex_cli"]),
+    ("", "codex_cli", ["claude_cli"]),  # the variable wins; empty means none
+    ("codex_cli", "", ["claude_cli", "codex_cli"]),
+    (None, "claude_cli", ["claude_cli"]),  # the primary isn't its own fallback
+])
+def test_the_fallback_is_opt_in_and_the_variable_wins(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        env: str | None, configured: str, chain: list[str]) -> None:
+    if env is not None:
+        monkeypatch.setenv("SMRITI_NIGHTLY_FALLBACK", env)
+    cfg = _cfg(tmp_path)
+    cfg.nightly_fallback = configured
+    assert digest_mod._providers(cfg) == chain
+    assert digest_mod._providers(None) == (["claude_cli", "codex_cli"]
+                                           if env == "codex_cli" else ["claude_cli"])
+
+
+def test_the_codex_seat_is_read_only_with_no_mcp_from_the_empty_workdir(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """What the fallback call runs: the provider's own isolation and nothing else."""
+    import subprocess
+
+    from smriti.llm.providers import codex_cli
+    from smriti.llm.workdir import llm_workdir
+
+    seen: dict[str, object] = {}
+
+    def run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+        seen.update(cmd=cmd, input=kw.get("input"))
+        return subprocess.CompletedProcess(cmd, 0, stdout="a digest", stderr="")
+
+    monkeypatch.setattr(codex_cli.subprocess, "run", run)
+    provider = codex_cli.CodexCliProvider()
+    response = provider.call(LLMRequest(system="sys", user="the day", cli_args=None))
+    assert response.text == "a digest"
+    cmd = seen["cmd"]
+    assert isinstance(cmd, list)
+    assert cmd[1:] == ["exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only",
+                       "-c", "mcp_servers={}", "--cd", str(llm_workdir()), "-"]
+    assert seen["input"] == "sys\n\nthe day"
+
+
+def test_daylog_json_names_the_fallback(tmp_path: Path) -> None:
+    from smriti.daylog.config import load_config
+
+    assert load_config(tmp_path).nightly_fallback == ""
+    path = tmp_path / ".smriti" / "daylog.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps({"nightly_fallback": " codex_cli "}), encoding="utf-8")
+    assert load_config(tmp_path).nightly_fallback == "codex_cli"
+    path.write_text(json.dumps({"nightly_fallback": True}), encoding="utf-8")
+    assert load_config(tmp_path).nightly_fallback == ""  # a name, or nothing
+
+
+def test_a_rollup_follows_the_fallback_setting(tmp_path: Path,
+                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import date
+
+    from smriti.daylog.rollup import build_rollup
+    from smriti.llm.types import LLMError
+
+    cfg = _cfg(tmp_path)
+    for day in ("2026-09-01", "2026-09-02"):
+        _seed_day(cfg, day)
+        render_day(cfg, day)
+    monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: FakeProvider())
+    for day in ("2026-09-01", "2026-09-02"):
+        digest_mod.digest_day(cfg, day, [])
+    [week] = [p for p in enumerate_stale_periods(cfg, date(2026, 9, 20)) if p.kind == "week"]
+    good = FakeProvider("fallback rollup")
+    _claude_down(monkeypatch, good)
+    with pytest.raises(LLMError):
+        build_rollup(week, [], cfg)  # off by default
+    cfg.nightly_fallback = "codex_cli"
+    attempts: list[dict[str, str]] = []
+    out = build_rollup(week, attempts, cfg)
+    assert "fallback rollup" in out.read_text(encoding="utf-8")
+    assert [a["provider"] for a in attempts] == ["claude_cli", "codex_cli"]
 
 
 # ---------------------------------------------------------------- rollups
@@ -758,6 +867,7 @@ def test_a_web_search_call_never_falls_back_to_codex(monkeypatch: pytest.MonkeyP
 
     providers = {"claude_cli": Boom(), "codex_cli": good}
     monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: providers[name])
+    monkeypatch.setenv("SMRITI_NIGHTLY_FALLBACK", "codex_cli")  # even with the fallback on
     attempts: list[dict[str, str]] = []
     from smriti.llm.types import LLMError
 

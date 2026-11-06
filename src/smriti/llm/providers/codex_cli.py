@@ -1,14 +1,25 @@
 """Codex CLI provider — shells out to ``codex exec``.
 
-The nightly cycle's fallback seat (spec: subscription seats only, no
-per-token billing). ``codex exec`` runs one non-interactive turn and
-prints the final message to stdout.
+The nightly cycle's fallback seat when one is configured (spec:
+subscription seats only, no per-token billing; opt-in since hardening
+H12.2). ``codex exec`` runs one non-interactive turn and prints the final
+message to stdout.
 
-Isolation (diff review P1s): ``--ephemeral`` so internal calls persist
-no rollout for the day-log daemon to ingest; ``--sandbox read-only`` +
-``-c mcp_servers={}`` so transcript-derived prompt content cannot
-trigger writes, exec, or the user's MCP servers; ``--cd`` into the
-empty smriti LLM workdir so even reads see nothing.
+Isolation (diff review P1s), and what it doesn't cover:
+
+- ``--ephemeral``: the call persists no rollout for capture to ingest.
+- ``-c mcp_servers={}``: none of the user's MCP servers load.
+- ``--sandbox read-only``: the commands codex runs can't write files or
+  reach the network. They still run, and they can read any file the user
+  can: an absolute path (``~/.ssh``, another project, the memory tree)
+  reads as well as it does without the sandbox, and how strictly the
+  sandbox holds depends on the platform. A prompt injection in the
+  transcripts the call reads can make it copy what it reads into its
+  answer, which becomes a digest that is indexed, committed and pushed.
+- ``--cd`` into the empty smriti LLM workdir: it starts with no project's
+  files or AGENTS.md around it. That is only where it starts; it limits
+  no read. The user's own Codex configuration still loads, apart from
+  its MCP servers.
 """
 
 from __future__ import annotations

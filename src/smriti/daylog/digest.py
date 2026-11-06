@@ -1,10 +1,11 @@
 """The daily digest — one read-compose-emit LLM call per day, a few for a long day.
 
-Primary seat: ``claude_cli`` (the maintainer's ruling, 2026-09-04); fallback:
-``codex_cli``. The subprocess is constrained to no tools/MCP — it holds
-no ``smriti_write`` license; anything notable belongs in the digest
-file itself, which lives in the tree and gets indexed (spec: review
-round 1, finding 6).
+Primary seat: ``claude_cli`` (the maintainer's ruling, 2026-09-04). A
+fallback seat, usually ``codex_cli``, only when configured
+(:func:`nightly_fallback`; opt-in since hardening H12.2). The subprocess
+is constrained to no tools/MCP — it holds no ``smriti_write`` license;
+anything notable belongs in the digest file itself, which lives in the
+tree and gets indexed (spec: review round 1, finding 6).
 
 A day whose rendered log fits in one call (``_MAX_LOG_CHARS``) gets one
 call. A longer day is split at turn boundaries into time-ordered parts
@@ -123,9 +124,25 @@ _NO_TOOLS_ARGS = ["--strict-mcp-config", "--tools=", "--disallowedTools=*",
                   "--disable-slash-commands"]
 
 
-def _providers() -> list[str]:
+def nightly_fallback(cfg: DaylogConfig | None) -> str:
+    """The provider to fall back to when the primary fails, or "" for none.
+
+    ``SMRITI_NIGHTLY_FALLBACK`` wins when it is set (empty: none); else
+    ``"nightly_fallback"`` in daylog.json; else none. Until H12.2 it was
+    ``codex_cli`` unless turned off, but codex's read-only sandbox still
+    lets it read any file the user can, and run commands that only read,
+    while it reads untrusted transcripts: a prompt injection in one could
+    make it copy a local file into a digest. So it is opt-in.
+    """
+    env = os.environ.get("SMRITI_NIGHTLY_FALLBACK")
+    if env is not None:
+        return env.strip()
+    return cfg.nightly_fallback if cfg is not None else ""
+
+
+def _providers(cfg: DaylogConfig | None) -> list[str]:
     primary = os.environ.get("SMRITI_NIGHTLY_PROVIDER", "claude_cli")
-    fallback = os.environ.get("SMRITI_NIGHTLY_FALLBACK", "codex_cli")
+    fallback = nightly_fallback(cfg)
     chain = [primary]
     if fallback and fallback != primary:
         chain.append(fallback)
@@ -137,18 +154,22 @@ def compose(
     user: str,
     attempts_log: list[dict[str, str]],
     *,
+    cfg: DaylogConfig | None = None,
     claude_cli_args: list[str] | None = None,
 ) -> str:
     """Run one read-compose-emit call through the provider chain.
 
-    ``claude_cli_args`` overrides the default no-tools constraint for
-    the claude_cli seat (the morning call allows web search). Such a call
-    runs on claude_cli ONLY: the fallback seat can't be held to the same
-    tool boundary (codex_cli keeps its shell), and a call that reads
-    untrusted web results must not fall through to it (Codex, 2026-11-05).
+    The chain is the primary and, when *cfg* or the environment sets one,
+    the fallback (:func:`nightly_fallback`); without *cfg*, only the
+    environment can. ``claude_cli_args`` overrides the default no-tools
+    constraint for the claude_cli seat (the morning call allows web
+    search). Such a call runs on claude_cli ONLY: the fallback seat can't
+    be held to the same tool boundary (codex_cli keeps its shell), and a
+    call that reads untrusted web results must not fall through to it
+    (Codex, 2026-11-05).
     """
     last_error: Exception | None = None
-    chain = _providers()
+    chain = _providers(cfg)
     if claude_cli_args is not None:
         chain = ["claude_cli"]
     for name in chain:
@@ -361,7 +382,7 @@ def _capped_notes(notes: str) -> tuple[str, bool]:
             f"of their {len(notes):,} characters]"), True
 
 
-def _digest_in_parts(day: str, plan: _Plan, autonomous: str,
+def _digest_in_parts(cfg: DaylogConfig, day: str, plan: _Plan, autonomous: str,
                      attempts_log: list[dict[str, str]]) -> tuple[str, int]:
     """One notes call per part, in time order, then one merge call.
 
@@ -376,13 +397,14 @@ def _digest_in_parts(day: str, plan: _Plan, autonomous: str,
     notes_cut = 0
     for index, part in enumerate(plan.parts, start=1):
         text, was_cut = _capped_notes(
-            compose(_PART_SYSTEM, _part_prompt(day, index, part, plan), attempts_log))
+            compose(_PART_SYSTEM, _part_prompt(day, index, part, plan), attempts_log, cfg=cfg))
         notes.append(text)
         notes_cut += was_cut
     if notes_cut:
         log.warning("digest %s: the notes of %d parts were cut to %d chars for the merge",
                     day, notes_cut, _MAX_NOTES_CHARS)
-    digest = compose(_MERGE_SYSTEM, _merge_prompt(day, notes, plan, autonomous), attempts_log)
+    digest = compose(_MERGE_SYSTEM, _merge_prompt(day, notes, plan, autonomous), attempts_log,
+                     cfg=cfg)
     return digest, notes_cut
 
 
@@ -406,11 +428,11 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]]) 
         user = f"Day log for {day}:\n\n{log_text}"
         if autonomous:
             user += f"\n\nAutonomous activity sample:\n{autonomous}"
-        text = compose(_system_prompt(cfg), user, attempts_log)
+        text = compose(_system_prompt(cfg), user, attempts_log, cfg=cfg)
         coverage = _Coverage(1, len(log_text), len(log_text))
     else:
         plan = _plan(log_text)
-        text, notes_cut = _digest_in_parts(day, plan, autonomous, attempts_log)
+        text, notes_cut = _digest_in_parts(cfg, day, plan, autonomous, attempts_log)
         coverage = plan.coverage
 
     out = cfg.day_digest(day)

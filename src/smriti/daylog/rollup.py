@@ -149,6 +149,7 @@ def build_rollup(period: Period, attempts_log: list[dict[str, str]],
         _system_prompt(period.kind, cfg),
         f"Digests for this {period.kind}:\n\n{rollup_body(period)}",
         attempts_log,
+        cfg=cfg,  # its fallback setting; without cfg, only the environment's
     )
     header = "\n".join(
         [

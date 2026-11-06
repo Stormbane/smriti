@@ -7,7 +7,8 @@ from pathlib import Path
 
 # What the reference installation's daylog.json sets to keep its behaviour.
 REFERENCE_CONFIG: dict[str, object] = {"profile": "reference", "user_name": "Suti",
-                                      "agent_name": "Narada", "morning_web_search": True}
+                                      "agent_name": "Narada", "morning_web_search": True,
+                                      "nightly_fallback": "codex_cli"}
 
 
 def enable_profile(root: Path, **config: object) -> Path:

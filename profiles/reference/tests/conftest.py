@@ -25,6 +25,9 @@ def _isolated_memory_root(tmp_path_factory: pytest.TempPathFactory,
     monkeypatch.setenv("SMRITI_ROOT", str(root))
     monkeypatch.setenv("NARADA_ROOT", str(root))
     monkeypatch.delenv("SMRITI_INTERNAL", raising=False)
+    # The nightly's providers come from each test's config, not the shell's.
+    monkeypatch.delenv("SMRITI_NIGHTLY_PROVIDER", raising=False)
+    monkeypatch.delenv("SMRITI_NIGHTLY_FALLBACK", raising=False)
     # The day boundary follows the machine's zone by default; tests mustn't
     # (CI runs in UTC).
     monkeypatch.setenv("SMRITI_DAY_UTC_OFFSET", "10")

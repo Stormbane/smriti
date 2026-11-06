@@ -33,6 +33,13 @@ one installation's tools, wake sections and morning persona to the core
 
 ``morning_web_search`` (default false) lets the morning call search the
 web for headlines; off, that call gets no tools at all.
+
+``nightly_fallback`` (default none) names the provider the nightly's
+digests and rollups, and the morning message, fall back to when Claude
+Code fails, e.g. ``"codex_cli"``. It is opt-in (hardening H12.2): codex's
+read-only sandbox still reads the user's files, while the call reads
+untrusted transcripts. ``SMRITI_NIGHTLY_FALLBACK``, when set, wins
+(see :func:`smriti.daylog.digest.nightly_fallback`).
 """
 
 from __future__ import annotations
@@ -73,6 +80,8 @@ class DaylogConfig:
     # The morning call may search the web for headlines only when this is on;
     # off, it gets no tools at all, like the digest (see daylog.morning).
     morning_web_search: bool = False
+    # The provider to fall back to when claude_cli fails; "" means none (H12.2).
+    nightly_fallback: str = ""
 
     def speaker(self, who: str) -> str:
         """The display name for a turn's role; anything but the user is the agent."""
@@ -183,6 +192,9 @@ def load_config(root: Path | None = None) -> DaylogConfig:
     web_search = raw.get("morning_web_search")
     if isinstance(web_search, bool):  # only a JSON true turns it on
         cfg.morning_web_search = web_search
+    fallback = raw.get("nightly_fallback")
+    if isinstance(fallback, str):  # a provider's name; anything else means none
+        cfg.nightly_fallback = fallback.strip()
     return cfg
 
 
