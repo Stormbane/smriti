@@ -372,8 +372,31 @@ is a finding. In order:
 | H12.11 | The nightly holds a run lock, so a manual run and the scheduled one can't overlap, and its render, digest and rollup writers use unique temp names. A digest hashes the turns it summarised: render and digest work from one read of the day. (Codex, high effort; verified.) | An overlap test: the second run waits or reports; a test that appends a turn between render and digest and finds the digest stale. |
 | H12.12 | Rollup freshness follows what it read: a member's file content (not only the turns behind it) and the rollup prompt's fingerprint; provenance is taken before the LLM call. (Codex, high effort; verified at `rollup.py:49`.) | A regenerated digest with the same turns makes its week stale; a prompt change does too. |
 | H12.13 | A failed backup commit or push reaches the nightly's status and `smriti status` (the hourly run's outcome as well), not only `.git/smriti-backup.jsonl`; the script still never blocks the caller. (Codex, high effort.) | A test with an unreachable remote: the status says the push failed. |
+| H12.9 | Quality with real models, not only stubs: a weekly CI job runs the `needs_model` tests with the model cached, and `smriti eval` grows a versioned set (paraphrases, irrelevant queries, contradictions, corrections) whose retrieval and abstention scores, and the digests' coverage, are reported. | The job, green; the scores recorded per release. |
+| H12.14 | `index_tree` splits into scan, plan, embed and commit, and embeds in bounded batches, so a full index's memory stays flat; embedding gets one public API that the indexer, search and the service share (no private imports between them). | A slow-marked test indexes about 100k chunks under a memory ceiling; the benchmark's index times no slower. |
+| H12.15 | SECURITY.md lists every outbound data flow (transcripts to the LLM CLI, the tree to the git remote, hashes to the timestamp calendars, the model download, the morning message) and states the private store's threat model plainly. | The doc. |
+| H12.16 | Small items: MCP answers a malformed message with a parse error (-32700) instead of dropping it; Python 3.13 joins the CI matrix; branch coverage is reported in CI with a floor; stale comments fixed (`index_policy`'s private-README line); comments in touched modules state their invariant, with incident history in the commit message. | CI; a parse-error test. |
 | H12.9 | A weekly CI job runs the `needs_model` tests with the model cached. | The job, green. |
 | H12.10 | Outside review #6. | Grades recorded. |
+
+What an A needs, in the reviewers' own words (2026-11-06, `09fd037`, asked
+directly; Opus B, Codex C on that run, which is outside the trend):
+- Both: the LLM fallback can't reach a shell, and every write into the tree is
+  masked at one chokepoint, shown by adversarial tests with canaries (H12.1,
+  H12.2); capture recovers from torn and oversized records, shown by fault
+  injection, and a stuck source is visible (H12.6); a self-contained wheel,
+  smoke-tested from a clean environment (H12.4).
+- Codex: nightly results from immutable input snapshots, serialised runs and
+  provenance bound to the bytes consumed (H12.11); complete, transitive
+  invalidation (H12.12); retrieval and synthesis quality measured with real
+  models (H12.9).
+- Opus: clean module boundaries and bounded memory in indexing (H12.5,
+  H12.14); the legacy integrations cut or split out (H12.8, dropped: they
+  stay while the reference install uses them); outbound flows and the private
+  store's threat model written down (H12.15); comments that state invariants
+  and a coverage floor (H12.16); and a second install, run by someone other
+  than the maintainer on Linux or macOS with native scheduling, green for
+  weeks. That last one is evidence code can't supply.
 
 Not doing:
 - **Masking stays pattern-based** (Sonnet 2): it catches credential shapes and
