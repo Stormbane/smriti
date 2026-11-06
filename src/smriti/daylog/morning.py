@@ -10,8 +10,10 @@ a claim a crashed run left behind is taken over once it is
 ``_CLAIM_STALE_S`` old (see :func:`_claim_day`). The
 LLM composes from the digest with no tools, or with web search and
 nothing else when ``morning_web_search`` is on in daylog.json (it reads
-search results, which can carry a prompt injection, so it is opt-in);
-smriti's own code delivers through the ``notify_user`` shim.
+search results, which can carry a prompt injection, so it is opt-in).
+When that call fails and the nightly's fallback is on, the fallback
+composes from the digest alone (:func:`compose_message`). smriti's own
+code delivers through the ``notify_user`` shim.
 
 The prompt is the configured profile's ``morning_prompt`` when it has
 one (the reference profile's carries its agent's persona), else
@@ -29,16 +31,17 @@ import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from smriti.core.files import edit_lock, write_atomic
 from smriti.daylog.config import DaylogConfig, load_config
-from smriti.daylog.digest import _NO_TOOLS_ARGS, compose
+from smriti.daylog.digest import _NO_TOOLS_ARGS, compose, nightly_fallback
 from smriti.daylog.model import day_key, day_tz
 from smriti.daylog.notify import notify_user
 from smriti.daylog.scrub import scrub
+from smriti.llm import LLMError
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +115,31 @@ _COMPOSE_ARGS = ["--strict-mcp-config", "--tools=WebSearch", "--allowedTools=Web
 def _cli_args(cfg: DaylogConfig) -> list[str]:
     """The compose call's flags: web search alone when configured, else no tools."""
     return _COMPOSE_ARGS if cfg.morning_web_search else _NO_TOOLS_ARGS
+
+
+def compose_message(cfg: DaylogConfig, user: str, attempts: list[dict[str, str]]) -> str:
+    """The morning message: on claude_cli, with the tools ``cfg`` allows.
+
+    When that call fails and the nightly's fallback is on
+    (:func:`smriti.daylog.digest.nightly_fallback`, opt-in), the fallback
+    composes the message instead, from the digest alone: the digest-only
+    prompt, whatever ``morning_web_search`` says (codex gets no web search
+    here, and must not read search results), in the call the nightly's
+    fallback makes, with no flags of smriti's and its empty working
+    directory. With the fallback off, a failed call raises, as it did since
+    d2e0518 dropped the morning's fallback.
+    """
+    try:
+        # Given either way, so the call stays on claude_cli (see compose).
+        return compose(_system_prompt(cfg), user, attempts, claude_cli_args=_cli_args(cfg))
+    except LLMError:
+        fallback = nightly_fallback(cfg)
+        if not fallback or fallback == "claude_cli":
+            raise
+        log.warning("morning: claude_cli failed; composing on %s from the digest alone",
+                    fallback)
+        digest_only = _system_prompt(replace(cfg, morning_web_search=False))
+        return compose(digest_only, user, attempts, providers=[fallback])
 
 
 def _scrubbed(value: object) -> object:
@@ -297,13 +325,8 @@ def run_morning(
     # exception text: a notify_cmd or timeout error string can carry a
     # bearer token, and the log tree is backed up (review).
     try:
-        message = compose(
-            _system_prompt(cfg),
-            f"Yesterday's digest ({yesterday}):\n\n{digest_text[:20_000]}",
-            attempts,
-            # Given either way, so the call stays on claude_cli (see compose).
-            claude_cli_args=_cli_args(cfg),
-        )
+        message = compose_message(
+            cfg, f"Yesterday's digest ({yesterday}):\n\n{digest_text[:20_000]}", attempts)
     except Exception as exc:
         _release(claim)  # nothing was sent: the day is open for a retry
         result["sent"] = False

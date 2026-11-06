@@ -151,3 +151,38 @@ def test_the_reference_profile_keeps_the_morning_persona(tmp_path: Path) -> None
     assert offline.startswith(persona) and offline.endswith("Return ONLY the message.")
     assert "you have no web search" in offline
     assert "Use web search" not in offline and "half-line each" not in offline
+
+
+def test_the_morning_fallback_keeps_the_persona_without_web_search(
+        tmp_path: Path, monkeypatch: Any) -> None:
+    """H12.2: with the fallback on, a failed Claude compose goes to codex with
+    the persona's digest-only prompt, though the install searches the web."""
+    from dataclasses import replace
+
+    from smriti.daylog import digest
+    from smriti.daylog.morning import _system_prompt, compose_message
+    from smriti.llm.types import LLMRequest, LLMResponse
+
+    class Seat:
+        def __init__(self, fails: bool) -> None:
+            self.fails, self.requests = fails, list[LLMRequest]()
+
+        def is_available(self) -> bool:
+            return True
+
+        def call(self, request: LLMRequest) -> LLMResponse:
+            self.requests.append(request)
+            if self.fails:
+                raise RuntimeError("claude down")
+            return LLMResponse(text="good morning")
+
+    seats = {"claude_cli": Seat(fails=True), "codex_cli": Seat(fails=False)}
+    monkeypatch.setattr(digest, "get_provider", lambda name=None: seats[name])
+    cfg = DaylogConfig(root=tmp_path, profile="reference", morning_web_search=True,
+                       nightly_fallback="codex_cli")
+    assert compose_message(cfg, "Yesterday's digest", []) == "good morning"
+    assert seats["claude_cli"].requests[0].system == _REFERENCE_MORNING
+    [request] = seats["codex_cli"].requests
+    assert request.system == _system_prompt(replace(cfg, morning_web_search=False))
+    assert request.system.startswith("You are Narada")
+    assert "you have no web search" in request.system and request.cli_args is None

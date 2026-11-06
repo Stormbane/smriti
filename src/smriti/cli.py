@@ -270,16 +270,13 @@ def _cmd_morning(args: argparse.Namespace) -> int:
 
     cfg = load_config()
     if args.dry_run:
-        from smriti.daylog.digest import compose
-        from smriti.daylog.morning import _cli_args, _system_prompt  # noqa: PLC2701
+        from smriti.daylog.morning import compose_message
 
         attempts: list[dict[str, str]] = []
-        # The scheduled run's flags, so a preview has exactly its tools: web
-        # search only when morning_web_search is on.
-        message = compose(_system_prompt(cfg),
-                          "Yesterday's digest: (dry run — compose a sample)",
-                          attempts, claude_cli_args=_cli_args(cfg))
-        print(message)
+        # The scheduled run's compose, so a preview has exactly its tools (web
+        # search only when morning_web_search is on) and its fallback.
+        print(compose_message(cfg, "Yesterday's digest: (dry run — compose a sample)",
+                              attempts))
         return 0
     result = run_morning(cfg)
     if result.get("sent"):

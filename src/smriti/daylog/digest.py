@@ -156,6 +156,7 @@ def compose(
     *,
     cfg: DaylogConfig | None = None,
     claude_cli_args: list[str] | None = None,
+    providers: list[str] | None = None,
 ) -> str:
     """Run one read-compose-emit call through the provider chain.
 
@@ -166,12 +167,18 @@ def compose(
     search). Such a call runs on claude_cli ONLY: the fallback seat can't
     be held to the same tool boundary (codex_cli keeps its shell), and a
     call that reads untrusted web results must not fall through to it
-    (Codex, 2026-11-05).
+    (Codex, 2026-11-05). ``providers`` names the chain outright (the
+    morning's fallback call, :func:`smriti.daylog.morning.compose_message`);
+    a seat other than claude_cli gets no flags of smriti's, so its own
+    isolation is all it has.
     """
     last_error: Exception | None = None
-    chain = _providers(cfg)
-    if claude_cli_args is not None:
+    if providers is not None:
+        chain = list(providers)
+    elif claude_cli_args is not None:
         chain = ["claude_cli"]
+    else:
+        chain = _providers(cfg)
     for name in chain:
         try:
             provider = get_provider(name)

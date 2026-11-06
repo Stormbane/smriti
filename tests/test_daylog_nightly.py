@@ -811,7 +811,7 @@ def test_morning_dry_run_uses_the_formatted_prompt(monkeypatch: pytest.MonkeyPat
     import argparse
 
     from smriti import cli
-    from smriti.daylog import digest
+    from smriti.daylog import morning
 
     seen: dict[str, str] = {}
 
@@ -819,7 +819,7 @@ def test_morning_dry_run_uses_the_formatted_prompt(monkeypatch: pytest.MonkeyPat
         seen["system"] = system
         return "ok"
 
-    monkeypatch.setattr(digest, "compose", fake_compose)
+    monkeypatch.setattr(morning, "compose", fake_compose)
     assert cli._cmd_morning(argparse.Namespace(dry_run=True)) == 0
     assert "{where}" not in seen["system"] and "{region}" not in seen["system"]
 
@@ -834,7 +834,7 @@ def test_a_morning_dry_run_has_exactly_the_scheduled_runs_tools(
 
     from smriti import cli
     from smriti.core.tree import tree_root
-    from smriti.daylog import digest, morning
+    from smriti.daylog import morning
     from smriti.daylog.config import load_config
 
     config = tree_root() / ".smriti" / "daylog.json"
@@ -846,7 +846,7 @@ def test_a_morning_dry_run_has_exactly_the_scheduled_runs_tools(
         seen.update(kw)
         return "ok"
 
-    monkeypatch.setattr(digest, "compose", fake_compose)
+    monkeypatch.setattr(morning, "compose", fake_compose)
     assert cli._cmd_morning(argparse.Namespace(dry_run=True)) == 0
     assert seen["claude_cli_args"] == morning._cli_args(load_config())
     assert ("--tools=WebSearch" in seen["claude_cli_args"]) is web_search  # type: ignore[operator]
@@ -874,3 +874,87 @@ def test_a_web_search_call_never_falls_back_to_codex(monkeypatch: pytest.MonkeyP
     with pytest.raises(LLMError, match="all providers failed"):
         digest_mod.compose("sys", "user", attempts, claude_cli_args=["--tools", "WebSearch"])
     assert [a["provider"] for a in attempts] == ["claude_cli"]
+
+
+# ------------------------------------------------- the morning's fallback (H12.2)
+
+_MORNING = datetime(2026, 9, 4, 21, 0, tzinfo=timezone.utc)  # 07:00 on 09-05, UTC+10
+
+
+def test_by_default_a_morning_whose_compose_fails_sends_nothing(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """As since d2e0518: no fallback unless the nightly's is on."""
+    from smriti.llm.types import LLMError
+
+    cfg = _cfg(tmp_path)
+    cfg.notify_cmd, sent = _notify_to_file(tmp_path)
+    codex = FakeProvider("must not run")
+    _claude_down(monkeypatch, codex)
+    with pytest.raises(LLMError):
+        run_morning(cfg, now=_MORNING)
+    assert codex.requests == [] and not sent.exists()
+    status = json.loads((cfg.log_dir / ".morning-status.json").read_text(encoding="utf-8"))
+    assert [a["provider"] for a in status["llm_attempts"]] == ["claude_cli"]
+    assert status["phase"] == "compose" and status["sent"] is False
+
+
+@pytest.mark.parametrize("web_search", [False, True], ids=["digest-only", "web-search"])
+def test_with_the_fallback_on_the_morning_falls_back_from_the_digest_alone(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, web_search: bool) -> None:
+    """The fallback never searches: the digest-only prompt and the codex seat's
+    own call, whatever morning_web_search says."""
+    cfg = _cfg(tmp_path)
+    cfg.notify_cmd, sent = _notify_to_file(tmp_path)
+    cfg.nightly_fallback, cfg.morning_web_search = "codex_cli", web_search
+    digest = cfg.day_digest("2026-09-04")
+    digest.parent.mkdir(parents=True)
+    digest.write_text("## Highlights\n- Ari finished the index\n", encoding="utf-8")
+    codex = FakeProvider("good morning from codex")
+    _claude_down(monkeypatch, codex)
+    result = run_morning(cfg, now=_MORNING)
+    assert result["sent"] is True and sent.read_text(encoding="utf-8") == codex.text
+    [request] = codex.requests
+    assert request.cli_args is None  # as the nightly's codex call: its own isolation only
+    assert "you have no web search" in request.system and "Use web search" not in request.system
+    assert "Ari finished the index" in request.user
+    assert [a["provider"] for a in result["llm_attempts"]] == ["claude_cli", "codex_cli"]  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize(("env", "configured", "falls_back"), [
+    ("", "codex_cli", False),  # the variable wins: empty means none
+    ("codex_cli", "", True),
+])
+def test_the_morning_follows_the_variable_too(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        env: str, configured: str, falls_back: bool) -> None:
+    from smriti.daylog.morning import compose_message
+    from smriti.llm.types import LLMError
+
+    monkeypatch.setenv("SMRITI_NIGHTLY_FALLBACK", env)
+    cfg = _cfg(tmp_path)
+    cfg.nightly_fallback = configured
+    codex = FakeProvider("from codex")
+    _claude_down(monkeypatch, codex)
+    attempts: list[dict[str, str]] = []
+    if falls_back:
+        assert compose_message(cfg, "digest", attempts) == "from codex"
+    else:
+        with pytest.raises(LLMError):
+            compose_message(cfg, "digest", attempts)
+    assert [a["provider"] for a in attempts] == ["claude_cli", "codex_cli"][:1 + falls_back]
+
+
+def test_a_morning_dry_run_falls_back_as_the_scheduled_run_does(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    import argparse
+
+    from smriti import cli
+    from smriti.core.tree import tree_root
+
+    config = tree_root() / ".smriti" / "daylog.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps({"nightly_fallback": "codex_cli"}), encoding="utf-8")
+    codex = FakeProvider("a sample from codex")
+    _claude_down(monkeypatch, codex)
+    assert cli._cmd_morning(argparse.Namespace(dry_run=True)) == 0
+    assert "a sample from codex" in capsys.readouterr().out
