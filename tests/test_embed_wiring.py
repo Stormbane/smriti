@@ -225,10 +225,17 @@ def report():
         import psutil
         rss = psutil.Process().memory_info().rss
     except ImportError:
-        if sys.platform != "win32":
+        if sys.platform.startswith("linux"):
+            # This process's own peak. ru_maxrss would also count the parent's: Linux
+            # keeps the pre-exec high-water mark, so a server forked from a pytest that
+            # had grown read as large as pytest (177 MB against 40 alone).
+            with open("/proc/self/status", encoding="ascii") as status:
+                for line in status:
+                    if line.startswith("VmHWM:"):
+                        rss = int(line.split()[1]) * 1024
+        elif sys.platform == "darwin":
             import resource
-            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-            rss = peak if sys.platform == "darwin" else peak * 1024
+            rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     with open(os.environ["MCP_REPORT"], "w", encoding="utf-8") as f:
         json.dump({"heavy": heavy, "rss": rss}, f)
 
@@ -275,10 +282,8 @@ def test_an_mcp_server_stays_small_and_never_loads_a_model(
 
     assert measured["heavy"] == [], measured["heavy"]  # no model, no runtime, no provider
     if measured["rss"] is not None:
-        # A model is about 1 GB. Without one, a server's peak (ru_maxrss on Linux CI, where
-        # psutil isn't installed) measured 95-105 MB across runs of the same commit, and
-        # about 45 MB of working set on Windows: 200 MB is far from both.
-        assert measured["rss"] < 200 * 2**20, measured["rss"]
+        # A model is about 1 GB; a server without one peaks at about 40-50 MB.
+        assert measured["rss"] < 100 * 2**20, measured["rss"]
     vec = "sqlite-vec is not available" not in texts[5]
     saved = "saved and indexed" if vec else "vectors pending (sqlite-vec"
     assert saved in texts[2] and saved in texts[4]
