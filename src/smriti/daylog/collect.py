@@ -166,6 +166,10 @@ def _collect_locked(cfg: DaylogConfig, state: DaylogState, batch: AppendPass) ->
             ):
                 # truncated or recreated: re-read, dedup absorbs
                 fstate.offset = fstate.waiting = fstate.stalled = 0
+            elif size < fstate.size or fstate.waiting > size:
+                # It shrank but kept what was read: what lay past the offset was
+                # rewritten, so a long record waited for there may be gone. Look again.
+                fstate.waiting = fstate.stalled = 0
             grew, start = size > fstate.size, fstate.offset
             fstate.size = size
             fstate.fingerprint = fingerprint

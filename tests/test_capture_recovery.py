@@ -307,6 +307,29 @@ def test_a_long_record_still_being_written_is_waited_for_not_skipped(
     assert [t.text for t in read_day_turns(cfg.day_jsonl(DAY))][-1] == "after the image"
 
 
+def test_a_file_that_shrinks_while_a_long_record_is_waited_for_is_read_again(
+        tmp_path: Path) -> None:
+    """Codex review of H12.6: a rewrite that kept the head and the consumed prefix left
+    the waiting mark past the end, so later records were ignored, then skipped with it."""
+    cfg, transcript = _source(tmp_path)
+    first = _claude(0, "before the image, long enough to keep the head fingerprint " * 6)
+    _say(transcript, first, _huge(1, 9 * MIB, end=False))
+    _passes(cfg, 2)  # the first record, then the long one, waited for
+    fstate = DaylogState.load(cfg.state_path).sources["claude"].files[str(transcript)]
+    assert fstate.offset == len(first.encode()) and fstate.waiting > fstate.offset
+
+    transcript.write_bytes(first.encode() + _claude(2, "after the rewrite").encode())
+    assert fstate.offset < transcript.stat().st_size < fstate.waiting
+    collect_once(cfg)
+    assert [t.text for t in read_day_turns(cfg.day_jsonl(DAY))][-1] == "after the rewrite"
+    fstate = DaylogState.load(cfg.state_path).sources["claude"].files[str(transcript)]
+    assert fstate.offset == transcript.stat().st_size and fstate.waiting == 0
+    assert fstate.skipped == [] and fstate.parse_errors == 0
+
+    _say(transcript, _claude(3, "and the next"))  # it goes on as any file does
+    assert collect_once(cfg).appended == 1
+
+
 def test_skipping_a_long_record_reads_it_a_step_at_a_time(tmp_path: Path) -> None:
     import tracemalloc
 
