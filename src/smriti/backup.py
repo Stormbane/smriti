@@ -126,10 +126,19 @@ def _run_script(script: Path, root: Path, tag: str, *, push: bool, timeout: int)
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
     )
     try:
-        proc.wait(timeout=timeout)
+        code = proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
+        # Not a success: the commit and push may still fail. Never killed (above).
         return BackupRun(ran=False, detail=f"still running after {timeout}s; left to finish")
     events = _events_of_run(log_path, run_id, start, started, tag)
+    if code != 0:
+        # The script exits 0 whatever git did, so this is the script itself
+        # failing (it couldn't start, or raised): what it logged first, if
+        # anything, and nothing it didn't log taken as done.
+        done = _summarise(events, push=push, finished=False)
+        why = f"the backup script exited {code}" + (f"; {done.detail}" if done.detail else "")
+        return BackupRun(ran=False, commit=done.commit, push=done.push,
+                         detail=why[:_DETAIL_CHARS])
     return _summarise(events, push=push)
 
 
@@ -165,8 +174,14 @@ def _events_of_run(log_path: Path | None, run_id: str, start: int, started: str,
     return [e for e in events if not e.get("run") and e.get("tag", tag) in (tag, "")]
 
 
-def _summarise(events: list[dict[str, object]], *, push: bool) -> BackupRun:
-    commit, push_state, detail = "nothing to commit", "up to date" if push else "not asked", ""
+def _summarise(events: list[dict[str, object]], *, push: bool,
+               finished: bool = True) -> BackupRun:
+    """What a run's lines say it did. A run that didn't *finish* did nothing it didn't log."""
+    if finished:
+        commit, push_state = "nothing to commit", "up to date" if push else "not asked"
+    else:
+        commit, push_state = "", ""
+    detail = ""
     for e in events:
         kind = e.get("event")
         if kind == "skipped":

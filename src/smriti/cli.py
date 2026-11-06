@@ -423,7 +423,10 @@ def _cmd_backup(args: argparse.Namespace) -> int:
         print(f"Backup ({args.tag}): commit {run.commit}; push {run.push}"
               + (f": {run.detail}" if run.detail else ""))
     else:
-        print(f"Backup ({args.tag}): did not run: {run.detail}")
+        known = "; ".join(f"{name} {state}" for name, state in
+                          (("commit", run.commit), ("push", run.push)) if state)
+        print(f"Backup ({args.tag}): did not complete: {run.detail}"
+              + (f" ({known})" if known else ""))
     return 0
 
 

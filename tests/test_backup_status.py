@@ -259,6 +259,42 @@ def test_a_run_skipped_for_another_backup_says_so() -> None:
                              "detail": "another backup is running"}
 
 
+def _deploy(root: Path, body: str) -> None:
+    """A stand-in for the deployed backup script."""
+    (root / ".git").mkdir(parents=True, exist_ok=True)
+    (root / ".smriti").mkdir(exist_ok=True)
+    (root / ".smriti" / "backup.py").write_text(body, encoding="utf-8")
+
+
+def test_a_script_that_fails_before_logging_is_not_a_success(tmp_path: Path) -> None:
+    """The script exits 0 whatever git does, so another code is the script failing; with
+    no line logged, its run read as nothing to commit and up to date (Codex review, P2)."""
+    _deploy(tmp_path, "raise RuntimeError('a broken deployment')\n")
+    run = trigger("hourly", push=True, root=tmp_path)
+    assert not run.ran and not run.ok
+    assert run.detail == "the backup script exited 1"
+    assert (run.commit, run.push) == ("", "")
+
+
+def test_a_script_that_fails_after_its_commit_keeps_what_it_logged(tmp_path: Path) -> None:
+    _deploy(tmp_path, (
+        "import json, os, pathlib, sys\n"
+        "log = pathlib.Path(os.environ['SMRITI_ROOT']) / '.git' / 'smriti-backup.jsonl'\n"
+        "log.write_text(json.dumps({'at': '2026-11-06T01:17:00+00:00', 'event': 'commit',\n"
+        "    'tag': 'hourly', 'ok': True, 'run': os.environ['SMRITI_BACKUP_RUN']}) + '\\n')\n"
+        "sys.exit(2)\n"))
+    run = trigger("hourly", push=True, root=tmp_path)
+    assert not run.ok
+    assert (run.commit, run.push, run.detail) == ("ok", "", "the backup script exited 2")
+
+
+def test_a_script_still_running_at_the_timeout_is_not_a_success(tmp_path: Path) -> None:
+    _deploy(tmp_path, "import time\ntime.sleep(3)\n")
+    run = trigger("hourly", push=True, root=tmp_path, timeout=1)
+    assert not run.ran and not run.ok
+    assert run.detail == "still running after 1s; left to finish"
+
+
 def test_trigger_says_why_it_did_not_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert "no backup script" in trigger("t", root=tmp_path).detail
     (tmp_path / ".smriti").mkdir()
@@ -320,6 +356,11 @@ def test_smriti_backup_prints_what_the_run_did(
         ran=True, commit="ok", push="failed", detail="fatal: gone"))
     assert cli.main(["backup", "--push", "--tag", "hourly"]) == 0
     assert "Backup (hourly): commit ok; push failed: fatal: gone" in capsys.readouterr().out
+    monkeypatch.setattr(backup, "trigger", lambda tag, push=False: backup.BackupRun(
+        ran=False, commit="ok", detail="the backup script exited 2"))
+    assert cli.main(["backup", "--push", "--tag", "hourly"]) == 0  # still best effort
+    assert ("Backup (hourly): did not complete: the backup script exited 2 (commit ok)"
+            in capsys.readouterr().out)
 
 
 @needs_git
