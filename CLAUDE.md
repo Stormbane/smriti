@@ -25,7 +25,7 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 - `smriti nightly` (03:00): reconcile → render → digest (one `claude -p` call per day, `codex exec` as fallback) → week/month/year rollups → index → witness (a git commit plus an OpenTimestamps stamp) → status file.
 - `smriti morning` (07:00): one message a day composed from the digest, from the configured agent to the configured user; a profile can supply its own prompt (the reference profile's carries its persona).
 - The wake briefing: a SessionStart hook prints `smriti.wake.briefing()`, at most 9,500 characters.
-- The embedding service (hardening H10): `smriti embed serve`, one per memory root, holds the model; the MCP servers and `smriti read` ask it over authenticated loopback TCP and start it on demand, and it exits after 15 idle minutes. `smriti index` (and so the nightly) loads its own model. A write without vectors is indexed for keyword search, its vectors pending until the service fills them. `SMRITI_EMBED_SERVICE=0` turns it off. `SECURITY.md` has its trust boundary.
+- The embedding service (hardening H10): `smriti embed serve`, one per memory root, holds the model; the MCP servers and `smriti read` ask it over authenticated loopback TCP and start it on demand. An MCP server holds it while it runs (H12.0b: a workless request every 5 minutes, from its first search or write on), so the model stays loaded while sessions are open; it exits 15 minutes after the last request or hold. `smriti index` (and so the nightly) loads its own model. A write without vectors is indexed for keyword search, its vectors pending until the service fills them. `SMRITI_EMBED_SERVICE=0` turns it off. `SECURITY.md` has its trust boundary.
 - Backups: `<root>/.smriti/backup.py` commits the memory tree hourly (the `smriti-backup` task; it pushes only when there is something new) and in the nightly. Sessions don't trigger it.
 
 **Removed** (2026-11-05, hardening H3; the code is in the git history): the deep pipeline that `smriti sleep --deep` ran (cognitive cascade, JUDGE, ingest and routing, consolidation, thread synthesis, actionables, journal rollups, the wake-context rebuild), its task queue and file watcher, and the `sleep`, `queue`, `daemon`, `watch`, `ingest` and `merge-concepts` commands. `smriti eval` keeps only its search cases.
@@ -48,7 +48,7 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 - **CLI:** 15 `smriti` subcommands: `backup`, `doctor`, `embed`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `recall`, `status`, `tasks`, `witness`, `write`. Nested: `embed` has `serve`, `status`, `stop`; `recall` has `query`, `status`, `stats`, `index`, `daemon`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 748 test functions in 60 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 762 test functions in 61 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 Regenerate with `python scripts/doc_facts.py --write`; `tests/test_doc_facts.py` fails when this block drifts from the code.
