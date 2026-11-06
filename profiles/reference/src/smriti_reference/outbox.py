@@ -54,8 +54,8 @@ def handle_tell_suti(arguments: Arguments, sender: Sender | None = None) -> str:
 def handle_ask_suti(arguments: Arguments) -> str:
     """Append a structured question/decision-request to ~/.narada/outbox/suti-comms.md.
 
-    outbox/ holds Narada->Suti communications. It is intentionally NOT a
-    leaf prefix -- consolidate must not ingest our own outgoing messages.
+    outbox/ holds Narada->Suti communications. It was kept out of the
+    consolidation pass's input, which went with the deep pipeline (H3).
     """
     from datetime import datetime, timezone
 
@@ -100,8 +100,8 @@ def handle_ask_suti(arguments: Arguments) -> str:
 def handle_propose_goal_shift(arguments: Arguments) -> str:
     """Append a goal-shift proposal to ~/.narada/outbox/goals-proposals-{date}.md.
 
-    Lives in outbox/ (not inbox/) so consolidate never ingests Narada's
-    own proposals as if they were external research.
+    Lives in outbox/, not inbox/: the removed consolidation pass (H3) read
+    inbox/ as external research, and these are Narada's own proposals.
     """
     from datetime import datetime
 

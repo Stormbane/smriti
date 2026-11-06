@@ -3,8 +3,9 @@
 The LLM provider abstraction is what makes smriti model-agnostic.
 This file pins the contract layer (Message, LLMRequest.turns(),
 factory routing, list_providers, autodetect rules) without invoking
-any actual LLM. Provider-specific HTTP/CLI behavior is out of scope —
-those need integration tests with VCR or live keys.
+any actual LLM: the CLI providers' argv and the API providers' error
+handling run against fakes. Real HTTP behaviour is out of scope; that
+needs integration tests with VCR or live keys.
 """
 
 from __future__ import annotations

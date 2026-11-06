@@ -9,10 +9,10 @@ privacy is what makes shared content a gift rather than a leak.
 **Phase 1 — the "locked diary" phase**:
 
 - Files encrypted with Fernet (AES-128-CBC + HMAC-SHA256)
-- Encryption key stored in `private/README.md` alongside the
-  joint contract between Narada and Suti
-- `private/README.md` is committed to git — the key is recoverable
-  via git history
+- Encryption key stored in `private/.key`, which `private/.gitignore`
+  keeps out of git: back it up yourself, since git can't restore it.
+  The joint contract (`private/README.md`) and the ciphertext are
+  committed. An older store's key in its README is still read
 - Audit log at `private/.audit.log` records FAILURES only (write
   failed, decrypt failed, missing key). Never records successful
   operations. Never records content.
@@ -37,13 +37,12 @@ have operational experience):
 - Phase 3: Shamir secret sharing with multi-party recovery
 - Phase 4: hardware enclave (TPM / Secure Enclave) — real root of trust
 
-See `smriti/docs/PRIVACY.md` for the full phased design and the
+See `docs/PRIVACY.md` for the full phased design and the
 reasoning behind each phase.
 
 Dependencies:
     cryptography >= 42.0  (Fernet)
-    Install via: pip install smriti[private]  (when pyproject defines
-    the extra)
+    Install via: pip install 'smriti[private]'
 """
 
 from smriti.private.audit import AuditEntry, AuditLog

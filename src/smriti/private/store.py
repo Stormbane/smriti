@@ -1,6 +1,6 @@
 """Private file store with Fernet encryption; the key never goes to git.
 
-Phase 1 of the smriti privacy design. See `smriti/docs/PRIVACY.md`
+Phase 1 of the smriti privacy design. See `docs/PRIVACY.md`
 for the full reasoning.
 
 Layout:
@@ -62,7 +62,7 @@ class PrivateStore:
 
     Usage:
         store = PrivateStore(memory_root)
-        store.init()  # creates private/ + README with generated key
+        store.init()  # creates private/: its contract, its key (.key), its .gitignore
 
         # Write (anywhere, no consent needed — writes are trivially
         # non-invasive because the content is encrypted by the time
