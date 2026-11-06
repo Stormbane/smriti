@@ -132,7 +132,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
     # Read-only, like smriti read and the MCP server: a status check has no
     # business opening the index for writing, where it could hold up a writer.
-    conn = open_readonly(db_path)
+    # It reads no vectors, so it doesn't load sqlite-vec (and numpy with it).
+    conn = open_readonly(db_path, vectors=False)
     try:
         chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         source_count = conn.execute("SELECT COUNT(DISTINCT source) FROM chunks").fetchone()[0]

@@ -87,7 +87,7 @@ def _has_fts5(conn: sqlite3.Connection) -> bool:
         return False
 
 
-def open_readonly(db_path: Path) -> IndexDB:
+def open_readonly(db_path: Path, *, vectors: bool = True) -> IndexDB:
     """Read-only connection for search paths.
 
     Readers must never be failed by writers ("database is locked" under
@@ -97,6 +97,10 @@ def open_readonly(db_path: Path) -> IndexDB:
     Capability flags come from *what exists in the index*, not from
     write-probes (the old FTS5 probe created a table, which a reader
     neither can nor should).
+
+    ``vectors=False`` skips loading sqlite-vec, for a reader of counts and
+    metadata only: its Python package imports numpy, which costs a short
+    process (``smriti status``) more than everything else it does.
     """
     if not db_path.exists():
         raise FileNotFoundError(f"no index at {db_path}")
@@ -108,7 +112,7 @@ def open_readonly(db_path: Path) -> IndexDB:
     conn = sqlite3.connect(uri, uri=True, timeout=10.0)
     conn.execute("PRAGMA busy_timeout=10000")
     conn.execute("PRAGMA query_only=ON")
-    has_vec = _load_sqlite_vec(conn)
+    has_vec = _load_sqlite_vec(conn) if vectors else False
     has_fts = bool(conn.execute(
         "SELECT 1 FROM sqlite_master WHERE name = 'chunks_fts'"
     ).fetchone())

@@ -17,7 +17,21 @@ path. Guarantees (see .ai/features/nightly-cycle.md):
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from smriti.daylog.model import Turn, day_key, local_day
-from smriti.daylog.writer import append_turns
+
+if TYPE_CHECKING:
+    from smriti.daylog.writer import append_turns
 
 __all__ = ["Turn", "day_key", "local_day", "append_turns"]
+
+
+def __getattr__(name: str) -> Any:
+    # The writer (its locks and the scrubber) is imported where it is used, not
+    # by every reader of daylog.json: the MCP server reads it on each request.
+    if name == "append_turns":
+        from smriti.daylog.writer import append_turns
+
+        return append_turns
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
