@@ -13,7 +13,8 @@ import re
 import time
 from pathlib import Path
 
-from smriti.core.files import edit_lock, write_atomic
+from smriti.core.files import edit_lock
+from smriti.core.memwrite import mask, write_memory
 from smriti.core.tree import tree_root
 from smriti.metrics import get_logger
 
@@ -74,7 +75,13 @@ def update_index_pages(path: Path, root: Path | None = None) -> list[Path]:
                 old_content = index_file.read_text(encoding="utf-8")
                 changed = new_content.strip() != old_content.strip()
                 if changed:
-                    write_atomic(index_file, new_content)
+                    # A listed heading can carry a credential shape (a file
+                    # written by hand): the listing as written is masked, and
+                    # is a change only if it differs once masked.
+                    new_content = mask(new_content)
+                    changed = new_content.strip() != old_content.strip()
+                if changed:
+                    write_memory(index_file, new_content)
             if changed:
                 updated.append(index_file)
                 log.info("Updated index page %s", index_file.relative_to(root))

@@ -23,7 +23,6 @@ separated by horizontal rules, under the file's edit lock.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -158,7 +157,8 @@ def write_entry_result(
         ``"precompact"``, a session UUID).  Stored in frontmatter.
 
         Credential-shaped strings in ``content``, ``title`` and
-        ``source_hint`` are masked first (:func:`smriti.daylog.scrub.scrub`).
+        ``source_hint`` are masked before they reach the disk
+        (:mod:`smriti.core.memwrite`).
     root:
         Tree root (defaults to ``tree_root()``).
     reindex:
@@ -194,13 +194,15 @@ def write_entry_result(
     # Strings shaped like credentials are masked before anything reaches the
     # disk, as capture masks them in each turn: the tree is committed and
     # pushed, and an agent writes down whatever it was shown, pasted keys too.
-    from smriti.daylog.scrub import scrub
+    # The whole entry is masked where it is written (smriti.core.memwrite);
+    # the title and source are masked here as well, before they are folded,
+    # since the source goes to the metrics log too.
+    from smriti.core.memwrite import mask
 
-    content = scrub(content)
     # Folded to one line: a newline in either could forge frontmatter keys.
-    heading = (one_line(scrub(title or ""))
+    heading = (one_line(mask(title or ""))
                or f"Entry {now_local.strftime('%Y-%m-%d %H:%M')}")
-    source = one_line(scrub(source_hint or ""))
+    source = one_line(mask(source_hint or ""))
 
     # Build the entry block
     entry_lines = [
@@ -242,40 +244,17 @@ def write_entry_result(
     return written
 
 
-# How much of a daily file is read to learn its line ending: its first line
-# (the frontmatter's opening rule) ends well inside this.
-_HEAD_BYTES = 4096
-
-
-def _line_ending(head: bytes) -> bytes:
-    """The line ending of a file that starts with *head*: its first line's, else the platform's."""
-    end = head.find(b"\n")
-    if end < 0:
-        return os.linesep.encode("ascii")
-    return b"\r\n" if head[end - 1:end] == b"\r" else b"\n"
-
-
 def _append_entry(path: Path, entry_block: str) -> None:
-    """Append an entry to a daily file, under the file's edit lock.
+    """Append an entry to a daily file, masked, under the file's edit lock.
 
     Every open session's MCP server can write the same day's file. Unlocked,
     a writer that created the file could write over an entry another had
-    just appended, and Windows appends aren't atomic between processes.
-    Each entry after the first follows a rule. The entry takes the file's
-    line ending, read from its first line, so a CRLF file stays CRLF and an
-    LF file LF; a new file gets the platform's, as a text-mode write gives.
+    just appended. Each entry after the first follows a rule; the append
+    keeps the file's line ending (:func:`smriti.core.memwrite.append_memory`).
     """
-    from smriti.core.files import edit_lock
+    from smriti.core.memwrite import append_memory
 
-    with edit_lock(path), path.open("a+b") as f:
-        f.seek(0)
-        head = f.read(_HEAD_BYTES)
-        block = (("\n---\n\n" if head else "") + entry_block).replace("\r\n", "\n")
-        newline = _line_ending(head)
-        if newline != b"\n":
-            block = block.replace("\n", newline.decode("ascii"))
-        f.seek(0, os.SEEK_END)
-        f.write(block.encode("utf-8"))
+    append_memory(path, entry_block, separator="\n---\n\n")
 
 
 def _reindex_one(path: Path, root: Path) -> Written:

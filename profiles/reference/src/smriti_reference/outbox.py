@@ -59,7 +59,7 @@ def handle_ask_suti(arguments: Arguments) -> str:
     """
     from datetime import datetime, timezone
 
-    from smriti.core.files import edit_lock
+    from smriti.core.memwrite import append_memory
     from smriti.core.tree import tree_root
 
     question = arguments.get("question", "").strip()
@@ -90,11 +90,8 @@ def handle_ask_suti(arguments: Arguments) -> str:
         entry.append(f"\n**Source:** {source}\n")
     entry.append("\n**Status:** open\n\n---\n\n")
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with edit_lock(path):
-        new_file = not path.exists()
-        with path.open("a", encoding="utf-8") as f:
-            f.write((header if new_file else "") + "".join(entry))
+    # Masked, under the file's edit lock; a new file gets the header first.
+    append_memory(path, "".join(entry), header=header)
     return f"Queued for Suti: {question[:80]}"
 
 
@@ -106,7 +103,7 @@ def handle_propose_goal_shift(arguments: Arguments) -> str:
     """
     from datetime import datetime
 
-    from smriti.core.files import edit_lock
+    from smriti.core.memwrite import append_memory
     from smriti.core.tree import tree_root
 
     title = one_line(arguments.get("title", ""))
@@ -136,10 +133,7 @@ def handle_propose_goal_shift(arguments: Arguments) -> str:
         entry.append(f"\nSource: {source}  \n")
     entry.append(f"\n**Rationale:** {rationale}\n")
     entry.append(f"\n**Proposed change:** {proposed_change}\n\n---\n\n")
-    with edit_lock(path):
-        new_file = not path.exists()
-        with path.open("a", encoding="utf-8") as f:
-            f.write((header if new_file else "") + "".join(entry))
+    append_memory(path, "".join(entry), header=header)  # masked, under the edit lock
     return f"Goal proposal queued: {title}"
 
 
@@ -157,7 +151,8 @@ def handle_resolve_outbox(arguments: Arguments) -> str:
     """
     import re as _re
 
-    from smriti.core.files import edit_lock, write_atomic
+    from smriti.core.files import edit_lock
+    from smriti.core.memwrite import write_memory
     from smriti.core.tree import tree_root
 
     file = arguments.get("file", "").strip()
@@ -258,7 +253,7 @@ def handle_resolve_outbox(arguments: Arguments) -> str:
 
         sections[idx] = seg
         new_text = preamble + "".join(sections)
-        write_atomic(path, new_text)
+        write_memory(path, new_text)
 
     summary = f"Resolved {path.name} entry {item!r} -> status={resolution}"
     if linked_to:

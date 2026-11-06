@@ -1,10 +1,10 @@
 """Secret scrub applied to every turn, and every memory write, before persistence.
 
 Session transcripts can contain pasted credentials, and so can what an
-agent writes to memory (``smriti_write``, ``smriti write``): it writes
-down what it was shown. The tree lives in a backed-up git repo, so
-credential shapes are masked at capture (``smriti.daylog.writer``) and
-at write (``smriti.store.writer``). This is a targeted scrub for
+agent writes to memory: it writes down what it was shown. The tree lives
+in a backed-up git repo, so credential shapes are masked at capture
+(``smriti.daylog.writer``) and on every write of memory text into the
+tree (``smriti.core.memwrite``). This is a targeted scrub for
 high-confidence credential patterns, not a PII framework (spec: review
 round 1, finding 7): anything it doesn't recognise is kept.
 

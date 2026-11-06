@@ -159,7 +159,8 @@ def handle_write_handoff(arguments: Arguments) -> str:
     # archives a letter it didn't show or reads a half-written one.
     from smriti.wake.briefing import handoff_lock
 
-    from smriti.core.files import FileBusy, write_atomic
+    from smriti.core.files import FileBusy
+    from smriti.core.memwrite import write_memory
 
     with handoff_lock(root, wait_s=5.0) as held:
         if not held:
@@ -167,7 +168,7 @@ def handle_write_handoff(arguments: Arguments) -> str:
                 "a session is reading the handoff right now; nothing was written. Try again."
             )
         try:
-            write_atomic(path, fm + body)
+            write_memory(path, fm + body)  # masked: the letter is memory text like any other
         except FileBusy as exc:
             raise ToolError(
                 "the handoff file was busy; nothing was written. Try again."

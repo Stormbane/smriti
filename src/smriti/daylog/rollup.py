@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from smriti.core.memwrite import write_memory
 from smriti.daylog.config import DEFAULT_AGENT_NAME, DaylogConfig
 from smriti.daylog.digest import compose
 from smriti.daylog.render import read_input_hash
@@ -159,8 +160,6 @@ def build_rollup(period: Period, attempts_log: list[dict[str, str]],
             "",
         ]
     )
-    period.out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = period.out_path.with_name(period.out_path.name + ".tmp")
-    tmp.write_text(header + text + "\n", encoding="utf-8")
-    tmp.replace(period.out_path)
+    # Masked, as the digest is: the rollup's model reads digests of untrusted text.
+    write_memory(period.out_path, header + text + "\n")
     return period.out_path

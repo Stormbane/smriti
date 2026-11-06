@@ -62,14 +62,16 @@ def handle_add_todo(arguments: Arguments) -> str:
     """Append to mirrors/{project}/ai/todo.md. Fails loud on unknown project."""
     import re
 
-    from smriti.core.files import edit_lock, write_atomic
+    from smriti.core.files import edit_lock
+    from smriti.core.memwrite import mask, write_memory
     from smriti.core.tree import tree_root
 
     project = arguments.get("project", "").strip()
-    topic = arguments.get("topic", "").strip()
-    line = arguments.get("line", "").strip()
+    # Masked before the topic is looked for, so a masked line still dedupes.
+    topic = mask(arguments.get("topic", "")).strip()
+    line = mask(arguments.get("line", "")).strip()
     kind = arguments.get("kind", "").strip().lower()
-    source = one_line(arguments.get("source", ""))
+    source = one_line(mask(arguments.get("source", "")))
 
     if not project or not topic or not line or not kind:
         raise ToolError("project, topic, line, and kind are required.")
@@ -112,7 +114,7 @@ def handle_add_todo(arguments: Arguments) -> str:
                 content.rstrip() + f"\n\n## Active\n\n{final_line}\n"
                 if content else f"# TODO\n\n## Active\n\n{final_line}\n"
             )
-        write_atomic(todo_path, new_content)
+        write_memory(todo_path, new_content)
     return f"Added to {project}/ai/todo.md [{kind}]: {topic[:60]}"
 
 
@@ -120,8 +122,12 @@ def handle_record_finding(arguments: Arguments) -> str:
     """Write {date}-{slug}.md under mirrors/{project}/findings/."""
     from datetime import datetime
 
+    from smriti.core.files import edit_lock
+    from smriti.core.memwrite import create_memory, mask, write_memory
+
     project = arguments.get("project", "").strip()
-    title = one_line(arguments.get("title", ""))
+    # The title and tags name files and directories: masked before they do.
+    title = one_line(mask(arguments.get("title", "")))
     finding = arguments.get("finding", "").strip()
     why_it_matters = arguments.get("why_it_matters", "").strip()
     if not project or not title or not finding or not why_it_matters:
@@ -144,8 +150,8 @@ def handle_record_finding(arguments: Arguments) -> str:
     if isinstance(tags, str):
         tags = tags.split(",")
     # One line each, and nothing that would end the frontmatter list early.
-    tags = [t for t in (one_line(str(t).translate(_LIST_SYNTAX)) for t in tags) if t]
-    source = one_line(arguments.get("source", ""))
+    tags = [t for t in (one_line(mask(str(t)).translate(_LIST_SYNTAX)) for t in tags) if t]
+    source = one_line(mask(arguments.get("source", "")))
 
     fm_lines = [
         "---",
@@ -170,9 +176,7 @@ def handle_record_finding(arguments: Arguments) -> str:
 
     # A second finding with the same title on the same day gets -2, -3...
     # rather than replacing the first.
-    from smriti.core.files import create_new
-
-    path = create_new(path, fm + body)
+    path = create_memory(path, fm + body)
     slug = path.stem.removeprefix(f"{date_str}-")
 
     # For each tag, drop a wikilink stub under
@@ -192,26 +196,23 @@ def handle_record_finding(arguments: Arguments) -> str:
             tag_dir.mkdir(parents=True, exist_ok=True)
             stub = tag_dir / f"{date_str}-{project}-{slug}.md"
             try:
-                with stub.open("x", encoding="utf-8") as f:
-                    f.write(
-                        f"---\n"
-                        f"type: cross-project-finding-link\n"
-                        f"tag: {tag}\n"
-                        f"project: {project}\n"
-                        f"date: {date_str}\n"
-                        f"---\n\n"
-                        f"# {title}\n\n"
-                        f"Source: [[{rel_link}]]\n\n"
-                        f"## Finding\n\n{finding}\n\n"
-                        f"## Why it matters\n\n{why_it_matters}\n"
-                    )
+                create_memory(stub, (
+                    f"---\n"
+                    f"type: cross-project-finding-link\n"
+                    f"tag: {tag}\n"
+                    f"project: {project}\n"
+                    f"date: {date_str}\n"
+                    f"---\n\n"
+                    f"# {title}\n\n"
+                    f"Source: [[{rel_link}]]\n\n"
+                    f"## Finding\n\n{finding}\n\n"
+                    f"## Why it matters\n\n{why_it_matters}\n"
+                ), unique=False)
             except FileExistsError:
                 continue
             linked_tags.append(tag_slug)
 
         # Update cross-project index (append-only, dedup by line content)
-        from smriti.core.files import edit_lock, write_atomic
-
         idx_path = cp_root / "index.md"
         idx_line = (
             f"- [[semantic/concepts/cross-project/findings/{_slugify(tags[0])}]]"
@@ -228,7 +229,7 @@ def handle_record_finding(arguments: Arguments) -> str:
                     "links to per-project findings.\n\n"
                 )
             if idx_line not in idx_text:
-                write_atomic(idx_path, idx_text.rstrip() + "\n" + idx_line + "\n")
+                write_memory(idx_path, idx_text.rstrip() + "\n" + idx_line + "\n")
 
     msg = f"Recorded finding: {project}/findings/{path.name}"
     if linked_tags:
@@ -240,8 +241,10 @@ def handle_record_decision(arguments: Arguments) -> str:
     """Write {date}-{slug}.md under mirrors/{project}/decisions/."""
     from datetime import datetime
 
+    from smriti.core.memwrite import create_memory, mask
+
     project = arguments.get("project", "").strip()
-    title = one_line(arguments.get("title", ""))
+    title = one_line(mask(arguments.get("title", "")))  # it names the file: masked first
     decision = arguments.get("decision", "").strip()
     rationale = arguments.get("rationale", "").strip()
     alternatives = arguments.get("alternatives_considered", "").strip()
@@ -260,7 +263,7 @@ def handle_record_decision(arguments: Arguments) -> str:
     date_str = datetime.now().astimezone().strftime("%Y-%m-%d")
     slug = _slugify(title)
     path = decisions_dir / f"{date_str}-{slug}.md"
-    source = one_line(arguments.get("source", ""))
+    source = one_line(mask(arguments.get("source", "")))
 
     fm = (
         "---\n"
@@ -282,9 +285,7 @@ def handle_record_decision(arguments: Arguments) -> str:
     if source:
         body += f"\n## Source\n\n{source}\n"
 
-    from smriti.core.files import create_new
-
-    path = create_new(path, fm + body)  # same title, same day: -2, not a replacement
+    path = create_memory(path, fm + body)  # same title, same day: -2, not a replacement
     return f"Recorded decision: {project}/decisions/{path.name}"
 
 
@@ -308,6 +309,12 @@ def handle_record_feature(arguments: Arguments) -> str:
         )
 
     from smriti.core.files import edit_lock
+    from smriti.core.memwrite import create_memory, mask
+
+    # The slug is the file's name, kept for the feature's life, so it isn't
+    # masked into another name: one that looks like a credential is refused.
+    if mask(slug) != slug:
+        raise ToolError("slug looks like a credential; choose another")
 
     # Features live in {project}/.ai/features/active/ (junctioned in via mirror/ai)
     base = mirror / "ai" / "features"
@@ -350,8 +357,7 @@ def handle_record_feature(arguments: Arguments) -> str:
         for sub in ("active", "shipped", "abandoned"):
             if (base / sub / f"{slug}.md").exists():
                 raise ToolError(f"feature slug {slug!r} already exists at {sub}/{slug}.md")
-        with path.open("x", encoding="utf-8") as f:
-            f.write(fm + "\n".join(body))
+        create_memory(path, fm + "\n".join(body), unique=False)
     return f"Opened feature: {project}/.ai/features/active/{slug}.md"
 
 
@@ -373,7 +379,8 @@ def handle_update_feature_status(arguments: Arguments) -> str:
     if mirror is None:
         raise ToolError(f"project {project!r} has no mirror.")
 
-    from smriti.core.files import edit_lock, write_atomic
+    from smriti.core.files import edit_lock
+    from smriti.core.memwrite import write_memory
 
     base = mirror / "ai" / "features"
     # Destination
@@ -429,7 +436,7 @@ def handle_update_feature_status(arguments: Arguments) -> str:
                 text = text.rstrip() + f"\n\n{section_title}\n\n{notes}\n"
 
         # Write to destination, remove from source if different
-        write_atomic(dest_path, text)
+        write_memory(dest_path, text)
         if dest_path != current_path:
             current_path.unlink()
 

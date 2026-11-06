@@ -57,6 +57,46 @@ def test_reference_tools_are_answered(reference_profile: Path) -> None:
     assert "**Ask:** Ship it?" in comms.read_text(encoding="utf-8")
 
 
+# Credential shapes the scrub knows, split so no scanner takes them for real ones.
+_KEY = "sk-ant-api03-" + "abcdefghijklmnop1234"
+_TOKEN = "ghp_" + "ABCDEFGHIJKLMNOPQRST1234"
+
+
+def _masked(text: str) -> bool:
+    return "[redacted]" in text and _KEY not in text and _TOKEN not in text
+
+
+def test_the_outbox_is_masked(reference_profile: Path) -> None:
+    """H12.1: every outbox write goes through smriti.core.memwrite, as smriti's own do."""
+    outbox = reference_profile / "outbox"
+    _call("smriti_ask_suti", {"question": f"Revoke {_KEY}?", "context": f"{_TOKEN} leaked",
+                              "source": f"session {_TOKEN}"})
+    comms = (outbox / "suti-comms.md").read_text(encoding="utf-8")
+    assert _masked(comms) and "**Ask:** Revoke [redacted]?" in comms
+    assert comms.startswith("# Communications for Suti")  # a new file gets its header
+
+    _call("smriti_propose_goal_shift", {"title": f"Rotate {_KEY}", "rationale": f"{_TOKEN}",
+                                        "proposed_change": f"drop {_KEY}"})
+    [proposals] = outbox.glob("goals-proposals-*.md")
+    assert _masked(proposals.read_text(encoding="utf-8"))
+
+    item = next(line for line in comms.split("\n") if line.startswith("## "))[3:]
+    _call("smriti_resolve_outbox", {"file": "suti-comms", "item": item, "resolution": "answered",
+                                    "answer": f"Revoked {_KEY}.", "linked_to": "notes/keys"})
+    resolved = (outbox / "suti-comms.md").read_text(encoding="utf-8")
+    assert _masked(resolved) and "**Resolution:** Revoked [redacted]." in resolved
+    assert "**Status:** answered" in resolved
+
+
+def test_an_outbox_append_keeps_a_crlf_file_crlf(reference_profile: Path) -> None:
+    comms = reference_profile / "outbox" / "suti-comms.md"
+    comms.parent.mkdir()
+    comms.write_bytes(b"# Communications for Suti\r\n\r\n")
+    _call("smriti_ask_suti", {"question": "Ship it?", "context": "tests pass"})
+    data = comms.read_bytes()
+    assert data.count(b"\n") == data.count(b"\r\n") and b"**Ask:** Ship it?\r\n" in data
+
+
 def test_outbox_file_traversal_is_refused(reference_profile: Path, tmp_path: Path) -> None:
     (reference_profile / "outbox").mkdir()
     (reference_profile / "outbox" / "comms.md").write_text(

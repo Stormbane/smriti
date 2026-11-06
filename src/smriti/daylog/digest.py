@@ -27,6 +27,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from smriti.core.memwrite import write_memory
 from smriti.daylog.config import DaylogConfig
 from smriti.daylog.model import USER, Turn, day_tz
 from smriti.daylog.render import AUTONOMOUS_HEADING, input_hash
@@ -432,7 +433,7 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]]) 
     if notes_cut:
         fields.append(f"notes_cut: {notes_cut}")
     header ="\n".join([*fields, "generated_by: smriti nightly (digest)", "---", ""])
-    tmp = out.with_name(out.name + ".tmp")
-    tmp.write_text(header + text + "\n", encoding="utf-8")
-    tmp.replace(out)
+    # Masked: the model reads untrusted transcripts, and an injection can make
+    # it copy a credential shape into the digest, which is indexed and pushed.
+    write_memory(out, header + text + "\n")
     return out

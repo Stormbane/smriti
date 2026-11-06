@@ -17,6 +17,7 @@ import hashlib
 import re
 from pathlib import Path
 
+from smriti.core.memwrite import write_memory
 from smriti.daylog.config import DaylogConfig
 from smriti.daylog.model import USER, Turn, day_tz
 from smriti.daylog.writer import read_day_turns
@@ -95,9 +96,8 @@ def render_day(cfg: DaylogConfig, day: str) -> Path | None:
             lines.append(
                 f"- [autonomous: {group[0].channel}, {start}–{end}, {len(group)} turns]"
             )
+    # Masked like every write of memory text. Capture masked each turn already;
+    # this catches days captured before a pattern existed.
     out = cfg.day_md(day)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_name(out.name + ".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    tmp.replace(out)
+    write_memory(out, "\n".join(lines) + "\n")
     return out
