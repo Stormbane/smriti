@@ -27,8 +27,8 @@ def hold_while_running() -> None:
     its client holds the service (:class:`smriti.embed.client.ServiceEmbedding`),
     so a search after a long pause still finds the model loaded. Short-lived
     processes (``smriti read``, hooks, the nightly) don't call it, so they
-    never keep the model in memory. It imports nothing: the server calls it
-    at startup.
+    never keep the model in memory. The server calls it at its first tool
+    call, so its startup imports no more than before.
     """
     global _holding
     _holding = True

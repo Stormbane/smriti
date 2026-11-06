@@ -26,6 +26,12 @@ CAPABILITIES: dict[str, Any] = {"tools": {}}
 
 Message = dict[str, Any]
 
+# Set by main(): this process is a session's server. Its first tool call then
+# marks it as holding the embedding service (smriti.embed.hold_while_running),
+# so the model stays loaded until the session ends; at that call, not at
+# startup, so a server starts with exactly the imports it had before.
+_hold_at_first_call = False
+
 
 def _response(id: Any, result: dict[str, Any]) -> Message:
     return {"jsonrpc": "2.0", "id": id, "result": result}
@@ -82,6 +88,8 @@ def handle_message(msg: Message) -> Message | None:
     if method == "tools/list":
         return _response(id, {"tools": [tool.listing() for tool in active_tools()]})
     if method == "tools/call":
+        if _hold_at_first_call:
+            _hold_service()
         name = params.get("name")
         if not isinstance(name, str):
             return _error(id, -32602, "Invalid params: name must be a string")
@@ -98,13 +106,21 @@ def handle_message(msg: Message) -> Message | None:
     return None
 
 
-def main() -> None:
-    """Run the MCP server over stdio."""
+def _hold_service() -> None:
+    """Hold the embedding service from this process's first embedding on (once)."""
+    global _hold_at_first_call
+    _hold_at_first_call = False
     from smriti.embed import hold_while_running
 
+    hold_while_running()
+
+
+def main() -> None:
+    """Run the MCP server over stdio."""
+    global _hold_at_first_call
     # A session's server lives as long as the session: once it has embedded,
     # it keeps the embedding service loaded until it exits (smriti.embed.client).
-    hold_while_running()
+    _hold_at_first_call = True
     # UTF-8 for Windows
     if hasattr(sys.stdin, "reconfigure"):
         sys.stdin.reconfigure(encoding="utf-8")

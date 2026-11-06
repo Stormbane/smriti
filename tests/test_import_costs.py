@@ -76,6 +76,26 @@ def test_listing_the_tools_does_not_import_the_day_log_writer() -> None:
     assert not any(imported.values()), imported
 
 
+def test_a_server_starts_with_no_embedding_module_and_no_thread() -> None:
+    """H12.0b: the server holds the embedding service, but only from its first
+    tool call (the hold thread from its first embedding): starting it, and
+    answering initialize and tools/list, import nothing they didn't before."""
+    lines = "".join(json.dumps({"jsonrpc": "2.0", "id": i, "method": m}) + "\n"
+                    for i, m in enumerate(("initialize", "tools/list")))
+    step = "\n".join((
+        "import io, threading",
+        f"sys.stdin, real_out = io.StringIO({lines!r}), sys.stdout",
+        "sys.stdout = io.StringIO()",
+        "from smriti.mcp.server import main",
+        "main()",
+        "replies, sys.stdout = sys.stdout.getvalue().splitlines(), real_out",
+        "assert len(replies) == 2, replies",
+        "assert threading.active_count() == 1, threading.enumerate()"))
+    imported = _imported_by(
+        step, ["smriti.embed", "smriti.embed.client", "smriti.store.search", "socket"])
+    assert not any(imported.values()), imported
+
+
 def test_a_profile_from_a_warm_cache_does_not_import_importlib_metadata(
         tmp_path: Path) -> None:
     """Importing importlib.metadata alone (it brings the email package) cost
