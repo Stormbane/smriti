@@ -186,3 +186,20 @@ def test_the_morning_fallback_keeps_the_persona_without_web_search(
     assert request.system == _system_prompt(replace(cfg, morning_web_search=False))
     assert request.system.startswith("You are Narada")
     assert "you have no web search" in request.system and request.cli_args is None
+
+
+def test_a_masked_proposal_resolves_by_the_title_given_or_returned(
+    reference_profile: Path,
+) -> None:
+    # The file's heading is masked; the reply and the resolver must agree with it,
+    # or the title the tool returns can't be resolved (Codex review of H12.1).
+    reply = _call("smriti_propose_goal_shift", {
+        "title": f"Rotate {_KEY}", "rationale": "it leaked", "proposed_change": "rotate it"})
+    text = reply["result"]["content"][0]["text"]
+    assert _KEY not in text and "Rotate [redacted]" in text
+    [proposals] = (reference_profile / "outbox").glob("goals-proposals-*.md")
+    for item in (f"Rotate {_KEY}", text.removeprefix("Goal proposal queued: ")):
+        done = _call("smriti_resolve_outbox", {"file": proposals.stem, "item": item,
+                                               "resolution": "accepted"})
+        assert not done["result"].get("isError"), done
+    assert "**Status:** accepted" in proposals.read_text(encoding="utf-8")

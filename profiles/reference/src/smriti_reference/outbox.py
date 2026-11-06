@@ -92,7 +92,9 @@ def handle_ask_suti(arguments: Arguments) -> str:
 
     # Masked, under the file's edit lock; a new file gets the header first.
     append_memory(path, "".join(entry), header=header)
-    return f"Queued for Suti: {question[:80]}"
+    from smriti.daylog.scrub import scrub
+
+    return f"Queued for Suti: {scrub(question)[:80]}"  # as the file has it
 
 
 def handle_propose_goal_shift(arguments: Arguments) -> str:
@@ -106,7 +108,11 @@ def handle_propose_goal_shift(arguments: Arguments) -> str:
     from smriti.core.memwrite import append_memory
     from smriti.core.tree import tree_root
 
-    title = one_line(arguments.get("title", ""))
+    from smriti.daylog.scrub import scrub
+
+    # Masked here, not only in the file: the reply names the entry by its title,
+    # and resolving it looks for the heading as written (Codex review of H12.1).
+    title = scrub(one_line(arguments.get("title", "")))
     rationale = arguments.get("rationale", "").strip()
     proposed_change = arguments.get("proposed_change", "").strip()
     source = one_line(arguments.get("source", ""))
@@ -156,7 +162,11 @@ def handle_resolve_outbox(arguments: Arguments) -> str:
     from smriti.core.tree import tree_root
 
     file = arguments.get("file", "").strip()
-    item = arguments.get("item", "").strip()
+    from smriti.daylog.scrub import scrub
+
+    # Headings are masked when written, so a title quoted as first given still
+    # matches once masked the same way.
+    item = scrub(arguments.get("item", "").strip())
     resolution = arguments.get("resolution", "").strip().lower()
     answer = arguments.get("answer", "").strip()
     linked_to = arguments.get("linked_to", "").strip()
