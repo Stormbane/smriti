@@ -131,10 +131,32 @@ class Discovery:
     version: str = ""
 
 
+# Waits before reading a refused discovery file again: 50 ms in all.
+_REFUSED_WAITS_S = (0.005, 0.01, 0.015, 0.02)
+
+
 def read_discovery(paths: ServicePaths) -> Discovery | None:
+    """The service's discovery record, or None when there is none (or it is malformed).
+
+    Windows refuses to open the file (PermissionError) for the moment
+    ``os.replace`` swaps a new record in, as a service does when it turns
+    ready; read as "no service", that made a client spawn a second service,
+    or, with spawning off, fail a query. A refused read is tried again for
+    up to 50 ms; it costs nothing unless the refusal happens.
+    """
+    for wait in (*_REFUSED_WAITS_S, None):
+        try:
+            text = paths.discovery.read_text(encoding="utf-8")
+            break
+        except PermissionError:
+            if wait is None:
+                return None
+            time.sleep(wait)
+        except OSError:
+            return None
     try:
-        data = json.loads(paths.discovery.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        data = json.loads(text)
+    except ValueError:
         return None
     if not isinstance(data, dict):
         return None
