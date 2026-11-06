@@ -37,8 +37,11 @@
   ERROR for unexpected. Never swallow silently.
 - **Blind excepts**: narrow `except Exception` to what can actually be raised.
   Keep one only where any failure must be survived (a top-level handler, a
-  hook, a non-critical step), with `# noqa: BLE001 — <reason>` on the line,
-  and still log the failure or record it in a status the caller sees.
+  hook, a non-critical step), or must be cleaned up after or recorded and then
+  re-raised, with `# noqa: BLE001 — <reason>` on the line, and still log the
+  failure or record it in a status the caller sees. Ruff's BLE001 accepts a
+  handler that logs or re-raises; `tests/test_broad_excepts.py` asks every broad
+  one for its reason.
 - **Fallback pattern**: primary method -> secondary (the digest: `claude -p`, then
   `codex exec`). Both paths tested.
 

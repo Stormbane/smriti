@@ -48,7 +48,7 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 - **CLI:** 15 `smriti` subcommands: `backup`, `doctor`, `embed`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `recall`, `status`, `tasks`, `witness`, `write`. Nested: `embed` has `serve`, `status`, `stop`; `recall` has `query`, `status`, `stats`, `index`, `daemon`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 876 test functions in 72 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 892 test functions in 73 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 Regenerate with `python scripts/doc_facts.py --write`; `tests/test_doc_facts.py` fails when this block drifts from the code.
@@ -97,7 +97,7 @@ Tests import `smriti` from wherever it is installed. In a second checkout or wor
 ## Rules
 
 - Python 3.11+. `ruff` and `mypy --strict` are the standard. Ruff checks `E4`, `E7`, `E9` and `F`, plus `E501` (line length 100), `B` (bugbear) and `BLE` (blind excepts); vendored code is exempt from the last three. `ruff check src tests scripts profiles` passes, and CI enforces `mypy --strict` on the whole package and the reference profile on every OS (vendored code excepted), and checks that smriti's wheel has no reference code.
-- Narrow an `except Exception` to what can be raised. Keep one only where any failure must be survived (a top-level handler, a hook, a non-critical step), with `# noqa: BLE001 — <reason>`; it still logs the failure or records it in a status the caller sees.
+- Narrow an `except Exception` to what can be raised. Keep one only where any failure must be survived (a top-level handler, a hook, a non-critical step), or must be cleaned up after or recorded and then re-raised, with `# noqa: BLE001 — <reason>`; it still logs the failure or records it in a status the caller sees. `tests/test_broad_excepts.py` fails on a broad except (`Exception`, `BaseException`, a bare `except:`) without its reason.
 - No runtime dependencies in the base install (`dependencies = []`). Optional ones go in extras: `read`, `api`, `codex`, `private`, `witness`, `dev`.
 - Check `.ai/knowledge/conventions.md` before introducing a new pattern.
 - Atomic commits: one logical change per commit.

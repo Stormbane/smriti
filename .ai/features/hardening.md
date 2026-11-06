@@ -874,6 +874,59 @@ a recheck.
   alternating runs each (spreads 240-292 and 245-273); its new backup line costs
   about 5 ms, importing `smriti.backup` (three dataclasses) and reading a full
   log, the cost of the new information.
+- **H12.7 implemented** (2026-11-07, `hardening/h12r`; not yet reviewed or
+  merged). `tests/test_broad_excepts.py` scans the source (AST: `src`, the
+  reference profile, `narada/` and `scripts/`) and fails on a handler catching
+  `Exception`, `BaseException` or everything without `# noqa: BLE001 — <reason>`
+  on its clause. `store/indexer.py`, `store/search.py` and `embed/` are left out
+  until `hardening/h12s`, which restructures them, merges: **then drop
+  `NOT_YET` from the test.** Of the eleven handlers without a reason, two were
+  narrowed: the API providers to their SDK's error base (transport errors come
+  wrapped as `APIConnectionError`) plus `ValueError` (a body that isn't JSON;
+  anthropic's refusal of a non-streaming call too long for its timeout), so a bug
+  in a call is no longer an `LLMError`, while the nightly's compose still records
+  any provider failure. Nine kept with their reason: the MCP tool call and stdio
+  loop, the private store's write, read and key cleanup (audited or cleaned up,
+  then re-raised), the morning's compose (frees the day, re-raised), a profile's
+  load, `ensure_schema`'s rollback, the wake shim. Of the 53 that had a reason,
+  one more was narrowed (`witness._block`: a request, its reply and its JSON);
+  the rest are top-level handlers, hooks, nightly steps or third-party calls
+  (opentimestamps raises bare `Exception`). Where it differs from the brief: the
+  rule now names the re-raise case (CLAUDE.md, conventions), and the scan covers
+  `narada/` and `scripts/` too (one reason added, the wake shim's).
+- **H12.15 implemented** (same branch). SECURITY.md's "What leaves the machine"
+  lists each flow with what, to whom, when and the off switch, checked against
+  the code; "The private store" states its threat model. Found on the way:
+  `smriti read`'s reranker asks the Hugging Face Hub for its file list on every
+  run (PRIVACY.md now says so), and `SMRITI_NIGHTLY_PROVIDER` can send the
+  digests to an API provider. Beyond the brief: the agent's own session, a
+  hosted embedding provider, and Ollama and qmd when pointed off the machine.
+- **H12.16, the rest, implemented** (same branch). MCP: a line that isn't JSON
+  gets -32700 and JSON that isn't an object -32600, each with a null id
+  (`answer_line`); beyond the brief, a byte that isn't UTF-8 and JSON nested too
+  deep, which both ended the server, now get -32700 (stdin read with
+  `surrogateescape`). Startup imports the same 125 modules. `smriti eval
+  --search` parses again and runs the same cases as `smriti eval`. Stale
+  comments: `index_policy`'s private README, `private/__init__`'s committed key,
+  `PrivateStore.init`'s README key, the outbox's consolidation pass. Not done
+  here: Python 3.13 in CI, the coverage floor, and comments stating invariants
+  in touched modules.
+- **Two follow-ups** (same branch). The installer's privacy question named no
+  destination for a remote defined only in the global or system config: `git
+  remote get-url` doesn't know it, though `git push` uses it. Its push URLs now
+  come from `git config --get-regexp` by git's own rule (push URLs rewritten by
+  insteadOf, else URLs a pushInsteadOf rewrites, else URLs by insteadOf); eight
+  shapes in a temp `GIT_CONFIG_GLOBAL` match `get-url` for the same remote
+  defined in the repository, and a real push lands where the installer said.
+  And `test_a_query_does_not_wait_while_the_service_is_starting`, which failed
+  once on windows-latest: its writer polled the discovery file while the
+  in-thread service replaced it, Windows refused the open mid-replace, and
+  `read_discovery` read the PermissionError as no service, so a client that may
+  not spawn raised "not running". The test's polls and the publish now take
+  turns; 50 runs in a row pass. **The client has the same window** (a poll that
+  meets a replace reads "no service": a spurious throttled spawn, or one "not
+  running" without spawn): `read_discovery` could retry a PermissionError
+  briefly, in `hardening/h12s`, which owns `smriti/embed`.
 - **H11.1, H11.5, H11.10 done** (2026-11-06, merged at `498ce0e` after a Codex diff
   review; its two findings, the capture override and the metrics scrub, fixed). Capture is off unless `daylog.json` says
   `"capture": true` (the default sources; the installer's `--capture` writes it) or
