@@ -2,10 +2,10 @@
 status: in progress
 opened: 2026-11-05
 goal: an outside, no-context reviewer finds no P1/P2 issue and would adopt smriti as a dependency (see .ai/knowledge/quality-bar.md)
-baseline: outside reviews at 4c9c9dd: Opus C+, Sonnet B-
+baseline: outside reviews at 4c9c9dd
 ---
 
-# Hardening: from C+ to A
+# Hardening
 
 This plan works through the findings of two isolated, no-context code reviews
 (`.ai/knowledge/quality-bar.md`, `.ai/todo.md` "Hardening"). Each phase:
@@ -78,7 +78,7 @@ parallel. H2 runs alongside H1 because it only adds new files.
 Run the isolated two-model review on the public repo and record the grades.
 New P1/P2 findings become H9.
 
-## H9. From outside review #3 (B- and B, at `3074a41`)
+## H9. From outside review #3 (at `3074a41`)
 
 Both reviewers verified their claims against the code; the first five
 were rechecked by hand before this list was written.
@@ -290,7 +290,7 @@ rejection sound (66 sessions at 250 MB is still about 16.5 GB).
    [medium]: **accepted**. A repair loop in the service while sources are
    pending; a test of a timed-out write followed only by reads.
 
-## H11. From outside review #4 (B and B+, at `f1319a1`)
+## H11. From outside review #4 (at `f1319a1`)
 
 | # | Change | Acceptance |
 |---|---|---|
@@ -343,7 +343,7 @@ rejection sound (66 sessions at 250 MB is still about 16.5 GB).
   and a morning that refuses to send. Its root doesn't move (`~/.narada` exists, and
   the hooks set `SMRITI_ROOT`).
 
-## H12. From outside review #5 (B- and B+, at `bcec9a2`, v0.2.0)
+## H12. From outside review #5 (at `bcec9a2`, v0.2.0)
 
 Every problem review #4 named is fixed. Opus's five are new, one layer deeper:
 packaging, privacy and module boundaries. All five, and the torn day-log line,
@@ -419,8 +419,7 @@ a recheck.
   CI runs `mypy --strict` on core, store, daylog, wake, mcp and profiles on
   every OS, with mypy pinned; the first Linux run found Windows-only code
   behind `os.name`/`hasattr` checks that mypy doesn't narrow.
-- **H8 done** (2026-11-05). Review #3 at `3074a41`: Opus B- (was C+), Sonnet B
-  (was B-). The findings are H9.
+- **H8 done** (2026-11-05). Review #3 at `3074a41`. The findings are H9.
 - **H9.1-H9.11 done** (2026-11-05). Codex reviewed each branch; real findings
   fixed with regression tests: a missing crypto extra left an empty key that
   blocked the store; the day zone ignored an explicit root; the installer
@@ -430,7 +429,7 @@ a recheck.
   with E501, B and BLE, and `mypy --strict` on the whole package, on every OS;
   getting there found numpy's and the Anthropic SDK's stubs differing by
   version from the development machine's.
-- **H9.12 done**: outside review #4 at `f1319a1`, Opus B (was B-), Sonnet B+ (was B).
+- **H9.12 done**: outside review #4 at `f1319a1`; its findings are H11.
   The findings are H11.
 - **H10 done** (2026-11-05). Live: an MCP server is 42 MB after searches (was
   1,028 MB); one shared service holds the model (1,029 MB); a search with the model
@@ -441,7 +440,7 @@ a recheck.
   stack's stubs reached through huggingface_hub. Left for H11: during a cold start
   each search waits its full 3 s before falling back; it should fall back at once
   while the service says it is starting.
-- **H11**: done. H11.8: outside review #5 at `bcec9a2` graded B- and B+; its
+- **H11**: done. H11.8: outside review #5 at `bcec9a2`; its
   findings are H12.
 - **H12**: planned, awaiting approval.
 - **H11.1, H11.5, H11.10 done** (2026-11-06, merged at `498ce0e` after a Codex diff

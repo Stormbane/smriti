@@ -33,7 +33,7 @@ publish, per-lens scheduling) comes before any new nightly lens.
 - [ ] Isolate the Codex fallback seat (dedicated `CODEX_HOME`, no AGENTS.md,
       hooks, plugins or MCP), as the Claude seat already is (plan 0.4).
 
-## Hardening (from two no-context code reviews, 2026-11-04: C+ and B-)
+## Hardening (from two no-context code reviews, 2026-11-04)
 
 Two fresh reviewers with no project context read the code. They agreed the
 live core is sound (connection discipline, capture design, backup locking,
