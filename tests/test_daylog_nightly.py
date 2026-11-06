@@ -339,7 +339,7 @@ def test_rollup_scan_finds_closed_weeks_and_repairs_stale(
     assert [p.kind for p in stale] == ["week"]
     from smriti.daylog.rollup import build_rollup
 
-    out = build_rollup(stale[0], [])
+    out = build_rollup(stale[0], [], cfg)  # as the nightly builds it: the prompt names Ari
     assert out.name == "week1.md"
     # Now up to date; a repaired member digest makes it stale again.
     assert enumerate_stale_periods(cfg, today) == []

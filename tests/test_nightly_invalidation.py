@@ -8,16 +8,25 @@ upgrade regenerates nothing by itself.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from smriti.daylog import digest as digest_mod
+from smriti.daylog import rollup as rollup_mod
 from smriti.daylog.config import DaylogConfig
+from smriti.daylog.digest import digest_fingerprint
 from smriti.daylog.model import AGENT, USER, Turn, parse_ts
+from smriti.daylog.nightly import run_nightly
 from smriti.daylog.render import head_field, read_head, render_day
-from smriti.daylog.rollup import Period, build_rollup, enumerate_stale_periods
+from smriti.daylog.rollup import (
+    Period,
+    build_rollup,
+    enumerate_stale_periods,
+    rollup_fingerprint,
+)
 from smriti.daylog.writer import append_turns
 from smriti.llm.types import LLMRequest, LLMResponse
 
@@ -173,6 +182,145 @@ def test_an_old_format_rollup_whose_member_changed_is_regenerated_in_the_new_for
     build_rollup(week, [], cfg)
     assert head_field(read_head(week.out_path), "members_hash")
     assert _stale_names(cfg) == []
+
+
+def _night(cfg: DaylogConfig, now: datetime, **kw: object) -> dict[str, Any]:
+    status = run_nightly(cfg, now=now, reindex=False, witness=False, **kw)  # type: ignore[arg-type]
+    steps = status["steps"]
+    assert isinstance(steps, dict)
+    return steps
+
+
+# ---------------------------------------------------------------- prompt and config
+
+NIGHT = datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc)  # target day 2026-09-04
+DAY = "2026-09-04"
+
+
+def _seed(cfg: DaylogConfig, day: str) -> None:
+    append_turns(cfg, [_turn(f"{day}T01:00:00Z", f"question on {day}"),
+                       _turn(f"{day}T01:00:05Z", f"answer on {day}", who=AGENT)])
+
+
+def _fp(path: Path) -> str:
+    return head_field(read_head(path), "prompt_fp")
+
+
+def _as_written_before_h12_12(path: Path) -> None:
+    """Drop the fields H12.12 added: the artifact as an older smriti wrote it."""
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    path.write_text("".join(ln for ln in lines
+                            if not ln.startswith(("prompt_fp:", "members_hash:"))),
+                    encoding="utf-8")
+
+
+def test_a_digest_records_the_fingerprint_of_what_made_it(
+        tmp_path: Path, llm: FakeProvider) -> None:
+    cfg = _cfg(tmp_path)
+    _digested(cfg, DAYS[0])
+    assert _fp(cfg.day_digest(DAYS[0])) == digest_fingerprint(cfg)
+    week = _week(cfg)
+    build_rollup(week, [], cfg)
+    assert _fp(week.out_path) == rollup_fingerprint("week", cfg)
+
+
+@pytest.mark.parametrize("change", ["agent", "user", "fallback", "provider", "prompt"])
+def test_the_fingerprint_follows_the_prompt_the_names_and_the_provider_chain(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str) -> None:
+    cfg = _cfg(tmp_path)
+    digest_fp, week_fp = digest_fingerprint(cfg), rollup_fingerprint("week", cfg)
+    assert digest_fingerprint(_cfg(tmp_path)) == digest_fp  # the same config, the same print
+    assert rollup_fingerprint("month", cfg) != week_fp  # each kind has its own prompt
+    if change == "agent":
+        cfg.agent_name = "Ara"
+    elif change == "user":
+        cfg.user_name = "Sana"
+    elif change == "fallback":
+        cfg.nightly_fallback = "codex_cli"
+    elif change == "provider":
+        monkeypatch.setenv("SMRITI_NIGHTLY_PROVIDER", "codex_cli")
+    else:
+        monkeypatch.setattr(digest_mod, "_MERGE_SYSTEM", digest_mod._MERGE_SYSTEM + " Be brief.")
+        monkeypatch.setattr(rollup_mod, "_SYSTEM", rollup_mod._SYSTEM + " Be brief.")
+    assert digest_fingerprint(cfg) != digest_fp
+    assert rollup_fingerprint("week", cfg) != week_fp
+
+
+def test_a_changed_prompt_makes_a_digest_stale_and_the_new_one_carries_it(
+        tmp_path: Path, llm: FakeProvider, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _cfg(tmp_path)
+    _seed(cfg, DAY)
+    assert _night(cfg, NIGHT)["digest"]["days"] == [DAY]
+    before = _fp(cfg.day_digest(DAY))
+    monkeypatch.setattr(digest_mod, "_SECTIONS", digest_mod._SECTIONS + " Be brief.")
+    assert _night(cfg, NIGHT.replace(minute=30))["digest"]["days"] == [DAY]
+    assert _fp(cfg.day_digest(DAY)) == digest_fingerprint(cfg) != before
+    assert llm.requests[-1].system.endswith("Be brief.")
+    assert _night(cfg, NIGHT.replace(minute=45))["digest"]["days"] == []
+
+
+def test_a_changed_prompt_makes_a_rollup_stale_unless_it_predates_the_fingerprint(
+        tmp_path: Path, llm: FakeProvider, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _cfg(tmp_path)
+    _digested(cfg, *DAYS)
+    week = _week(cfg)
+    build_rollup(week, [], cfg)
+    monkeypatch.setattr(rollup_mod, "_SYSTEM", rollup_mod._SYSTEM + " Be brief.")
+    assert _stale_names(cfg) == ["week1.md"]
+    _write_old_format_rollup(week)
+    assert _stale_names(cfg) == []
+
+
+def test_an_old_format_digest_is_not_redone_for_lacking_the_fingerprint(
+        tmp_path: Path, llm: FakeProvider, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _cfg(tmp_path)
+    _seed(cfg, DAY)
+    _night(cfg, NIGHT)
+    _as_written_before_h12_12(cfg.day_digest(DAY))
+    served = len(llm.requests)
+    # The prompt and the config change too: an old digest records neither.
+    monkeypatch.setattr(digest_mod, "_SECTIONS", digest_mod._SECTIONS + " Be brief.")
+    cfg.nightly_fallback = "codex_cli"
+    steps = _night(cfg, NIGHT.replace(minute=30))
+    assert steps["render"]["days"] == [] and steps["digest"]["days"] == []
+    assert len(llm.requests) == served and _fp(cfg.day_digest(DAY)) == ""
+
+    # A day that changes is redone for that, and its digest carries the print.
+    append_turns(cfg, [_turn(f"{DAY}T03:00:00Z", "a late turn")])
+    assert _night(cfg, NIGHT.replace(minute=45))["digest"]["days"] == [DAY]
+    assert _fp(cfg.day_digest(DAY)) == digest_fingerprint(cfg)
+
+
+def test_the_first_night_on_new_code_redoes_nothing_in_a_tree_written_before_it(
+        tmp_path: Path, llm: FakeProvider) -> None:
+    """A tree whose digests and rollups an older smriti wrote: no digest and no rollup
+    is regenerated for the new fields, only for what the old rules see."""
+    cfg = _cfg(tmp_path)
+    days = ("2026-09-01", "2026-09-02", "2026-09-09", "2026-09-10", "2026-10-01")
+    for day in days:
+        _digested(cfg, day)
+        _as_written_before_h12_12(cfg.day_digest(day))
+    target = date(2026, 10, 2)
+    while stale := enumerate_stale_periods(cfg, target):  # weeks, then their month
+        for period in stale:
+            _write_old_format_rollup(period)
+    served = len(llm.requests)
+    now = datetime(2026, 10, 2, 17, 5, tzinfo=timezone.utc)  # target day 2026-10-02
+
+    cfg.nightly_fallback = "codex_cli"  # as the reference install turns it on (H12.2)
+    steps = _night(cfg, now, rollup_cap=10)
+    assert steps["render"]["days"] == [] and steps["digest"]["days"] == []
+    assert steps["rollups"]["built"] == [] and steps["rollups"]["remaining"] == 0
+    assert len(llm.requests) == served
+
+    # A late turn redoes its day, then its week by the week's old rule, and the
+    # week's new file its month on the night after, as before.
+    append_turns(cfg, [_turn("2026-09-09T03:00:00Z", "a late turn")])
+    steps = _night(cfg, now.replace(minute=30), rollup_cap=10)
+    assert steps["digest"]["days"] == ["2026-09-09"]
+    assert steps["rollups"]["built"] == ["week2.md"]
+    assert _night(cfg, now.replace(minute=45), rollup_cap=10)["rollups"]["built"] == ["09.md"]
+    assert _night(cfg, now.replace(minute=55), rollup_cap=10)["rollups"]["built"] == []
 
 
 def test_an_old_format_month_follows_its_weeks_files(tmp_path: Path, llm: FakeProvider) -> None:

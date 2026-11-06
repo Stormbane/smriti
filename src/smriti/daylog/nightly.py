@@ -24,9 +24,17 @@ from pathlib import Path
 from smriti.core.files import write_atomic
 from smriti.core.oslock import BUSY, UNAVAILABLE, LockKey, lock_path, try_lock
 from smriti.daylog.config import DaylogConfig, load_config
-from smriti.daylog.digest import digest_day
-from smriti.daylog.model import day_key, day_tz
-from smriti.daylog.render import input_hash, read_input_hash, render_day, render_snapshot
+from smriti.daylog.digest import digest_day, digest_fingerprint
+from smriti.daylog.model import Turn, day_key, day_tz
+from smriti.daylog.render import (
+    head_field,
+    input_hash,
+    input_hash_of,
+    read_head,
+    read_input_hash,
+    render_day,
+    render_snapshot,
+)
 from smriti.daylog.rollup import build_rollup, enumerate_stale_periods
 from smriti.daylog.state import DaylogState
 from smriti.daylog.writer import read_day_turns
@@ -64,16 +72,30 @@ def _stale_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
     candidates = {day_key(d) for d in changed} | set(dirty) | _all_log_days(cfg)
     for back in range(_REPAIR_WINDOW_DAYS):
         candidates.add(day_key(target - timedelta(days=back)))
+    fingerprint = digest_fingerprint(cfg)
     stale: list[str] = []
     for day in sorted(candidates):
         turns = read_day_turns(cfg.day_jsonl(day))
-        if not turns:
-            continue
-        current = input_hash(turns)
-        if (read_input_hash(cfg.day_md(day)) != current
-                or read_input_hash(cfg.day_digest(day)) != current):
+        if turns and not _day_is_current(cfg, day, turns, fingerprint):
             stale.append(day)
     return stale
+
+
+def _day_is_current(cfg: DaylogConfig, day: str, turns: list[Turn], fingerprint: str) -> bool:
+    """Whether *day*'s render and digest were made from *turns*, and the digest as now.
+
+    A digest's ``prompt_fp`` (H12.12) must be *fingerprint*, the digest
+    prompt's and config's now; a digest written before H12.12 records none,
+    and is judged by its input hash alone, so the upgrade redoes no day.
+    """
+    current = input_hash(turns)
+    if read_input_hash(cfg.day_md(day)) != current:
+        return False
+    head = read_head(cfg.day_digest(day))
+    if input_hash_of(head) != current:
+        return False
+    recorded = head_field(head, "prompt_fp")
+    return not recorded or recorded == fingerprint
 
 
 def run_lock_key(root: Path) -> LockKey:
@@ -274,17 +296,15 @@ def _clear_dirty(cfg: DaylogConfig, dirty: set[str], digest_errors: dict[str, st
     try:
         from smriti.daylog.lock import writer_lock
 
+        fingerprint = digest_fingerprint(cfg)
         with writer_lock(cfg.lock_path, timeout_s=30.0):
             state = DaylogState.load(cfg.state_path)
             for day in dirty:
                 if day in digest_errors:
                     continue
                 turns = read_day_turns(cfg.day_jsonl(day))
-                if turns:
-                    current = input_hash(turns)
-                    if (read_input_hash(cfg.day_md(day)) != current
-                            or read_input_hash(cfg.day_digest(day)) != current):
-                        continue  # changed underneath us — stays dirty
+                if turns and not _day_is_current(cfg, day, turns, fingerprint):
+                    continue  # changed underneath us — stays dirty
                 state.dirty_days.discard(day)
             state.save()
     except Exception:  # noqa: BLE001 — markers surviving too long is harmless

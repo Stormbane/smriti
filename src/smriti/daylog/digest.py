@@ -22,6 +22,7 @@ counts the parts whose notes were cut to fit the merge call.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -29,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from smriti.core.memwrite import write_memory
-from smriti.daylog.config import DaylogConfig
+from smriti.daylog.config import DEFAULT_AGENT_NAME, DEFAULT_USER_NAME, DaylogConfig
 from smriti.daylog.model import USER, Turn, day_tz
 from smriti.daylog.render import AUTONOMOUS_HEADING, DaySnapshot, input_hash, input_hash_of
 from smriti.daylog.writer import read_day_turns
@@ -147,6 +148,28 @@ def _providers(cfg: DaylogConfig | None) -> list[str]:
     if fallback and fallback != primary:
         chain.append(fallback)
     return chain
+
+
+def prompt_fingerprint(cfg: DaylogConfig | None, *shaping: object) -> str:
+    """What shapes a nightly artifact besides its inputs, as a short hash (H12.12).
+
+    *shaping* is the artifact's own: its prompts and the budgets that decide
+    what its call sees. To it come the provider chain and the two speakers'
+    names. An artifact records this as ``prompt_fp``; one whose recorded
+    fingerprint differs from the current one is stale. One that records
+    none, written before H12.12, is judged without it.
+    """
+    user = cfg.user_name if cfg is not None else DEFAULT_USER_NAME
+    agent = cfg.agent_name if cfg is not None else DEFAULT_AGENT_NAME
+    parts = [*map(str, shaping), "providers=" + ",".join(_providers(cfg)),
+             "user=" + user, "agent=" + agent]
+    return hashlib.sha1("\x1f".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def digest_fingerprint(cfg: DaylogConfig) -> str:
+    """:func:`prompt_fingerprint` of a digest: all three of its prompts and its budgets."""
+    return prompt_fingerprint(cfg, _system_prompt(cfg), _PART_SYSTEM, _MERGE_SYSTEM,
+                              _MAX_LOG_CHARS, _MAX_PARTS, _MAX_AUTON_CHARS, _MAX_TRAILER_CHARS)
 
 
 def compose(
@@ -442,6 +465,7 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]], 
         except OSError:
             return None
         digested = input_hash_of(log_text) or input_hash(turns)
+    fingerprint = digest_fingerprint(cfg)  # what makes it, as it is before the call
     autonomous = _autonomous_sample(turns)
     notes_cut = 0
     if len(log_text) <= _MAX_LOG_CHARS:
@@ -462,6 +486,7 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]], 
         "---",
         f"date: {day}",
         f"input_hash: {digested}",
+        f"prompt_fp: {fingerprint}",
         f"tz_offset: {tz.utcoffset(None)}",
         f"parts: {coverage.parts}",
         f"chars_seen: {coverage.chars_seen}",

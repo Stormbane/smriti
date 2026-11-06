@@ -4,17 +4,19 @@ Rollups are found by SCANNING for closed periods that are missing or
 stale, never by boundary-triggering — a missed night can't permanently
 skip a week (spec: review round 1, finding 6).
 
-Staleness follows what a rollup read (hardening H12.12). Its frontmatter
+Staleness follows what made a rollup (hardening H12.12). Its frontmatter
 records ``members_hash``, a manifest of its members' content, taken from
 the bytes it read for its call and before that call: any change to a
 member, a digest regenerated from the same turns included, makes it
-stale, and a regenerated week makes its month stale in turn.
+stale, and a regenerated week makes its month stale in turn. It records
+``prompt_fp`` too (:func:`rollup_fingerprint`: its prompt, budgets,
+provider chain and names), and a different one now makes it stale.
 
 A rollup written before H12.12 has only ``inputs_hash``, a manifest of
 its members' input hashes (a file hash for a member that has none, as a
 rollup does). It is judged by that rule until it is regenerated for a
 reason that rule sees, so the upgrade itself regenerates nothing; from
-then on it carries the new field. New rollups write ``inputs_hash`` too,
+then on it carries the new fields. New rollups write ``inputs_hash`` too,
 so an older smriti still reads them as current.
 
 Week convention matches the journal tree: week N covers days
@@ -33,12 +35,13 @@ from pathlib import Path
 
 from smriti.core.memwrite import write_memory
 from smriti.daylog.config import DEFAULT_AGENT_NAME, DaylogConfig
-from smriti.daylog.digest import compose
+from smriti.daylog.digest import compose, prompt_fingerprint
 from smriti.daylog.render import head_field, head_of, input_hash_of, read_head
 
 _DIGEST_NAME_RE = re.compile(r"^(\d{2})-digest\.md$")
 _INPUTS_FIELD = "inputs_hash"  # the members' input hashes: the rule before H12.12
 _MEMBERS_FIELD = "members_hash"  # the members' content
+_PROMPT_FIELD = "prompt_fp"  # what made it besides its members (prompt_fingerprint)
 
 _SYSTEM = (
     "You are {agent}'s memory rollup writer. You receive the digests that make "
@@ -120,10 +123,13 @@ class Period:
         """The manifest of the members' input hashes: ``inputs_hash``, the rule before H12.12."""
         return _input_manifest(_read_members(self.inputs))
 
-    def is_current(self) -> bool:
-        """Whether the rollup exists and its members are what it read."""
+    def is_current(self, cfg: DaylogConfig | None = None) -> bool:
+        """Whether the rollup exists, its members are what it read, and *cfg* would make it so."""
         head = read_head(self.out_path)
         if not head:
+            return False
+        fingerprint = head_field(head, _PROMPT_FIELD)
+        if fingerprint and fingerprint != rollup_fingerprint(self.kind, cfg):
             return False
         members = _read_members(self.inputs)
         recorded = head_field(head, _MEMBERS_FIELD)
@@ -184,7 +190,7 @@ def enumerate_stale_periods(cfg: DaylogConfig, today: date) -> list[Period]:
         if year < today.year and months:
             periods.append(Period("year", cfg.log_dir / f"{year:04d}.md", months))
 
-    return [p for p in periods if not p.is_current()]
+    return [p for p in periods if not p.is_current(cfg)]
 
 
 # Total input budget per rollup kind, in chars. Each input gets an equal share
@@ -194,6 +200,12 @@ def enumerate_stale_periods(cfg: DaylogConfig, today: date) -> list[Period]:
 _BUDGET = {"week": 80_000, "month": 100_000, "year": 240_000}
 _PER_INPUT_MAX = 20_000
 _TRUNCATED = "\n\n[... truncated for length]"
+
+
+def rollup_fingerprint(kind: str, cfg: DaylogConfig | None = None) -> str:
+    """:func:`prompt_fingerprint` of a rollup of *kind*: its prompt and its budgets."""
+    return prompt_fingerprint(cfg, _system_prompt(kind, cfg), _BUDGET.get(kind, 80_000),
+                              _PER_INPUT_MAX)
 
 
 def _body(kind: str, members: list[_Member]) -> str:
@@ -222,6 +234,7 @@ def build_rollup(period: Period, attempts_log: list[dict[str, str]],
             f"kind: {period.kind}-rollup",
             f"{_INPUTS_FIELD}: {_input_manifest(members)}",
             f"{_MEMBERS_FIELD}: {_content_manifest(members)}",
+            f"{_PROMPT_FIELD}: {rollup_fingerprint(period.kind, cfg)}",
             "generated_by: smriti nightly (rollup)",
             "---",
             "",
