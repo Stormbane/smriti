@@ -401,26 +401,14 @@ def search_with_status(
                        LIMIT ?""",
                     (fts_query, candidate_k),
                 ).fetchall()
-                if rows:
-                    # FTS5 rank is negative (lower = better), flip for normalization
-                    raw = [-r[1] for r in rows]
-                    normed = _normalize(raw)
-                    for (rowid, _), ns in zip(rows, normed, strict=True):
-                        fts_scores[rowid] = ns
-                        if rowid not in candidates:
-                            row = conn.execute(
-                                """SELECT id, source, heading, content, trunk_distance
-                                   FROM chunks WHERE rowid = ?""",
-                                (rowid,),
-                            ).fetchone()
-                            if row:
-                                candidates[rowid] = {
-                                    "chunk_id": row[0],
-                                    "source": row[1],
-                                    "heading": row[2],
-                                    "content": row[3],
-                                    "trunk_distance": row[4],
-                                }
+                # FTS5 rank is negative (lower = better), flip for normalization
+                normed = _normalize([-r[1] for r in rows])
+                for (rowid, _), ns in zip(rows, normed, strict=True):
+                    fts_scores[rowid] = ns
+                    if rowid not in candidates:
+                        cand = _fetch_candidate(conn, rowid)
+                        if cand is not None:
+                            candidates[rowid] = cand
         except sqlite3.Error as exc:
             log.warning("FTS search failed: %s", exc)
 
@@ -442,7 +430,8 @@ def search_with_status(
 
     scored.sort(key=lambda x: x[1], reverse=True)
 
-    # ── Rerank (optional) ────────────────────────────────────────────
+    # ── Rerank (optional), else the top-k by combined score ─────────
+    results: list[SearchResult] | None = None
     if use_reranker and len(scored) > 1:
         try:
             from smriti._vendored.memsearch.reranker import rerank
@@ -451,50 +440,15 @@ def search_with_status(
                 {"content": s[2]["content"], "_rowid": s[0], "_cand": s[2]}
                 for s in scored[:candidate_k]
             ]
-            reranked = rerank(query, rerank_input, top_k=top_k)
-            results = []
-            for item in reranked:
-                cand = item["_cand"]
-                results.append(
-                    SearchResult(
-                        source=cand["source"],
-                        heading=cand["heading"],
-                        content=cand["content"],
-                        score=item.get("score", 0.0),
-                        trunk_distance=cand["trunk_distance"],
-                        chunk_id=cand["chunk_id"],
-                    )
-                )
-            from smriti.metrics import get_logger, query_fields
-            get_logger().log(
-                "search_query",
-                **query_fields(query),
-                vec_candidates=len(vec_scores),
-                fts_candidates=len(fts_scores),
-                final_results=len(results),
-                reranked=True,
-                keyword_only=bool(keyword_only),
-                elapsed_ms=int((_time.monotonic() - t0) * 1000),
-                top_score=results[0].score if results else 0,
-                top_source=results[0].source if results else "",
-            )
-            return SearchOutcome(results[:top_k], keyword_only, pending)
+            results = [_result(item["_cand"], item.get("score", 0.0))
+                       for item in rerank(query, rerank_input, top_k=top_k)]
         except Exception as exc:  # noqa: BLE001 — logged; the combined scores stand
             log.warning("Reranker failed; using the combined score: %s", exc)
+            results = None
+    reranked = results is not None
+    if results is None:
+        results = [_result(cand, score) for _, score, cand in scored[:top_k]]
 
-    # ── Return top-k by combined score ───────────────────────────────
-    results = []
-    for _, score, cand in scored[:top_k]:
-        results.append(
-            SearchResult(
-                source=cand["source"],
-                heading=cand["heading"],
-                content=cand["content"],
-                score=score,
-                trunk_distance=cand["trunk_distance"],
-                chunk_id=cand["chunk_id"],
-            )
-        )
     from smriti.metrics import get_logger, query_fields
     get_logger().log(
         "search_query",
@@ -502,10 +456,16 @@ def search_with_status(
         vec_candidates=len(vec_scores),
         fts_candidates=len(fts_scores),
         final_results=len(results),
-        reranked=False,
+        reranked=reranked,
         keyword_only=bool(keyword_only),
         elapsed_ms=int((_time.monotonic() - t0) * 1000),
         top_score=results[0].score if results else 0,
         top_source=results[0].source if results else "",
     )
-    return SearchOutcome(results, keyword_only, pending)
+    return SearchOutcome(results[:top_k], keyword_only, pending)
+
+
+def _result(cand: _Candidate, score: float) -> SearchResult:
+    return SearchResult(source=cand["source"], heading=cand["heading"],
+                        content=cand["content"], score=score,
+                        trunk_distance=cand["trunk_distance"], chunk_id=cand["chunk_id"])
