@@ -115,15 +115,70 @@ def test_a_message_has_the_same_id_in_either_encoding(tmp_path: Path) -> None:
     assert _extract(migrated) == LEGACY_TURNS
 
 
-def test_a_mixed_file_gives_each_message_once(tmp_path: Path) -> None:
-    """A thread begun in the legacy encoding and continued in the paginated one."""
+def _mixed(tmp_path: Path) -> list[dict[str, object]]:
+    """A thread begun in the legacy encoding and continued in the paginated one, with
+    its first message ("hi") written in both, 0.5 s apart."""
     records = _records(_copy(LEGACY, tmp_path / "src"))
     head, tail = records[:4], records[4:]  # through "hi"; the rest of the thread
     both = {"timestamp": "2026-07-15T13:10:02.900Z", "type": "event_msg",
             "payload": {"type": "user_message", "message": "hi"}}
-    mixed = _write(tmp_path / LEGACY, [*head, _paginated(both),  # "hi" again, 0.5 s on
-                                       *[_paginated(r) for r in tail]])
-    assert _extract(mixed) == LEGACY_TURNS
+    return [*head, _paginated(both), *[_paginated(r) for r in tail]]
+
+
+def test_a_mixed_file_gives_each_message_once(tmp_path: Path) -> None:
+    assert _extract(_write(tmp_path / LEGACY, _mixed(tmp_path))) == LEGACY_TURNS
+
+
+def test_a_mixed_file_gives_the_same_turns_wherever_a_read_ends(tmp_path: Path) -> None:
+    """Codex review of H12.17: the two copies in different reads were both kept, with
+    different ids, and the writer appended both for good."""
+    path = _write(tmp_path / LEGACY, _mixed(tmp_path))
+    data = path.read_bytes()
+    ends = [i + 1 for i, byte in enumerate(data) if byte == ord("\n")][:-1]
+    for end in ends:  # every line boundary, the one between the two copies included
+        first = CodexRolloutAdapter().extract(path, data[:end])
+        rest = CodexRolloutAdapter().extract(path, data[end:], first.carry)  # a new process
+        got = [(t.who, t.text, t.id, t.ts.isoformat()) for t in first.turns + rest.turns]
+        assert got == LEGACY_TURNS, f"read ended at byte {end}"
+
+
+def test_capture_keeps_one_copy_when_the_two_arrive_in_separate_passes(tmp_path: Path) -> None:
+    sessions = tmp_path / "sessions" / "2026" / "07" / "15"
+    sessions.mkdir(parents=True)
+    records = _mixed(tmp_path)
+    cfg = DaylogConfig(root=tmp_path / "root", sources=[_codex_source(tmp_path / "sessions")])
+    path = _write(sessions / LEGACY, records[:4])  # through the legacy "hi"
+    assert collect_once(cfg).appended == 1
+    with path.open("a", encoding="utf-8", newline="\n") as f:  # its copy, and the rest
+        f.write("".join(json.dumps(r) + "\n" for r in records[4:]))
+    assert collect_once(cfg).appended == 3
+    days = [cfg.day_jsonl(day) for day in ("2026-07-15", "2026-07-16")]
+    lines = [line for day in days for line in day.read_text(encoding="utf-8").splitlines()]
+    assert [json.loads(line)["id"] for line in lines] == [i for _, _, i, _ in LEGACY_TURNS]
+
+    saved = cfg.state_path.read_text(encoding="utf-8")
+    carry = json.loads(saved)["sources"]["codex"]["files"][str(path)]["carry"]
+    assert carry and all(len(e) == 4 and len(e[1]) == 16 and int(e[1], 16) >= 0 for e in carry)
+    assert not any(text in saved for _, text, _, _ in LEGACY_TURNS[1:])  # hashes, never text
+
+
+def test_capture_gives_the_same_turns_however_short_its_reads(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import smriti.daylog.collect as collect
+
+    sessions = tmp_path / "sessions" / "2026" / "07" / "15"
+    sessions.mkdir(parents=True)
+    path = _write(sessions / LEGACY, _mixed(tmp_path))
+    longest = max(len(line) for line in path.read_bytes().splitlines(keepends=True))
+    monkeypatch.setattr(collect, "_MAX_CHUNK", longest + 1)  # a read ends in every line
+    cfg = DaylogConfig(root=tmp_path / "root", sources=[_codex_source(tmp_path / "sessions")])
+    for _ in range(20):
+        collect_once(cfg)
+    assert DaylogState.load(cfg.state_path).sources["codex"].files[str(path)].offset == \
+        path.stat().st_size
+    turns = [*read_day_turns(cfg.day_jsonl("2026-07-15")),
+             *read_day_turns(cfg.day_jsonl("2026-07-16"))]
+    assert [t.id for t in turns] == [i for _, _, i, _ in LEGACY_TURNS]
 
 
 def test_the_same_words_said_again_later_are_a_new_turn(tmp_path: Path) -> None:

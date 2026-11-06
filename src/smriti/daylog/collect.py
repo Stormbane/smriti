@@ -136,6 +136,7 @@ def rescan_source(cfg: DaylogConfig, name: str, *, lock_timeout_s: float = 60.0)
         files = state.sources[name].files if name in state.sources else {}
         for fstate in files.values():
             fstate.offset = fstate.waiting = fstate.stalled = 0
+            fstate.carry = []
         state.save()
     return len(files)
 
@@ -166,6 +167,7 @@ def _collect_locked(cfg: DaylogConfig, state: DaylogState, batch: AppendPass) ->
             ):
                 # truncated or recreated: re-read, dedup absorbs
                 fstate.offset = fstate.waiting = fstate.stalled = 0
+                fstate.carry = []
             elif size < fstate.size or fstate.waiting > size:
                 # It shrank but kept what was read: what lay past the offset was
                 # rewritten, so a long record waited for there may be gone. Look again.
@@ -212,9 +214,11 @@ def _read_new(cfg: DaylogConfig, state: DaylogState, spec: SourceSpec, adapter: 
             fstate.waiting = fstate.offset + len(blob)
             blob = b""  # held no longer than the look: memory stays one read
             continue
-        result = adapter.extract(path, blob)
+        result = adapter.extract(path, blob, fstate.carry)
         if result.consumed <= 0 and not result.errors:
             return  # a partial last line, left for the next pass
+        if result.carry is not None:  # saved with the offset it goes with
+            fstate.carry = result.carry
         appended, changed = append_turns_unlocked(cfg, result.turns, batch)
         report.appended += appended
         report.changed_days |= changed

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 from smriti.daylog.adapters import ExtractResult, complete_lines, project_of
 from smriti.daylog.model import AGENT, USER, Turn, parse_ts
@@ -63,7 +64,8 @@ def _text_from_content(content: object) -> str:
 
 
 class ClaudeJsonlAdapter:
-    def extract(self, path: Path, blob: bytes) -> ExtractResult:
+    def extract(self, path: Path, blob: bytes,
+                carry: list[list[Any]] | None = None) -> ExtractResult:
         result = ExtractResult()
         lines, result.consumed = complete_lines(blob)
         session = path.stem

@@ -51,10 +51,12 @@ class FileState:
     skipped: list[list[int]] = field(default_factory=list)
     # Passes in which the file grew while its offset stayed put; two or more is stuck.
     stalled: int = 0
+    # What the file's adapter asked to get back with its next read (ExtractResult.carry).
+    carry: list[list[Any]] = field(default_factory=list)
 
 
 # Saved only when set, so the state of a file that never needed them looks as it did.
-_OPTIONAL = {"waiting": 0, "skipped": [], "stalled": 0}
+_OPTIONAL = {"waiting": 0, "skipped": [], "stalled": 0, "carry": []}
 
 # A file that grew in this many passes without its offset moving is stuck.
 STUCK_PASSES = 2
@@ -80,6 +82,7 @@ def _file_state(raw: dict[str, Any]) -> FileState:
         waiting=int(raw.get("waiting", 0)),
         skipped=[[int(x) for x in entry] for entry in raw.get("skipped", [])][-MAX_SKIPS_KEPT:],
         stalled=int(raw.get("stalled", 0)),
+        carry=[list(entry) for entry in raw.get("carry", []) if isinstance(entry, list)],
     )
 
 

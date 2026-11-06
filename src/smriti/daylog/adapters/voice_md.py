@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from smriti.daylog.adapters import ExtractResult, complete_lines
 from smriti.daylog.model import AGENT, USER, Turn
@@ -40,7 +41,8 @@ def _session_start(path: Path) -> tuple[datetime, str] | None:
 
 
 class VoiceMdAdapter:
-    def extract(self, path: Path, blob: bytes) -> ExtractResult:
+    def extract(self, path: Path, blob: bytes,
+                carry: list[list[Any]] | None = None) -> ExtractResult:
         result = ExtractResult()
         lines, result.consumed = complete_lines(blob)
         meta = _session_start(path)

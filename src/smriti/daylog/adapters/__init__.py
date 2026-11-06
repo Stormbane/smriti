@@ -9,7 +9,13 @@ persisted offset) and returns an :class:`ExtractResult`:
   left for the next pass;
 - ``errors`` — count of malformed/unknown records skipped. Never raises
   on bad input: unknown schemas are counted and skipped, not fatal
-  (spec: review round 1, finding 4).
+  (spec: review round 1, finding 4);
+- ``carry`` — what the adapter needs back with the next read of the same
+  file, kept in that file's capture state and saved with its offset; None
+  leaves what was carried unchanged. It lets an adapter decide the same
+  way however the file's bytes are split between reads, and across
+  restarts. It is JSON (lists of strings and numbers), small, and holds
+  no message text.
 """
 
 from __future__ import annotations
@@ -17,7 +23,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from smriti.daylog.model import Turn
 
@@ -27,10 +33,12 @@ class ExtractResult:
     turns: list[Turn] = field(default_factory=list)
     consumed: int = 0
     errors: int = 0
+    carry: list[list[Any]] | None = None
 
 
 class Adapter(Protocol):
-    def extract(self, path: Path, blob: bytes) -> ExtractResult: ...
+    def extract(self, path: Path, blob: bytes,
+                carry: list[list[Any]] | None = None) -> ExtractResult: ...
 
 
 def complete_lines(blob: bytes) -> tuple[list[bytes], int]:
