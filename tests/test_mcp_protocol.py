@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from smriti.mcp.server import call_tool, handle_message
+from smriti.mcp.server import answer_line, call_tool, handle_message
 from smriti.mcp.tool import Tool, ToolError
 from smriti.mcp.tools import TOOLS
 
@@ -94,6 +94,63 @@ def test_the_server_survives_malformed_messages() -> None:
     assert [r["id"] for r in replies] == [1, 2, 3]
     assert "error" in replies[0] and "error" in replies[1]
     assert replies[2]["result"] == {}
+
+
+def _null_id_error(response: dict[str, Any] | None) -> int:
+    """The code of ``response``, an error with a null id (the one shape it may have)."""
+    assert response is not None and set(response) == {"jsonrpc", "id", "error"}
+    assert response["jsonrpc"] == "2.0" and response["id"] is None
+    assert isinstance(response["error"]["message"], str) and response["error"]["message"]
+    return int(response["error"]["code"])
+
+
+@pytest.mark.parametrize("line", [
+    "not json",
+    '{"jsonrpc": "2.0", "id": 1, "method": "ping"',
+    "{'jsonrpc': '2.0'}",
+    # Deeper than the parser recurses: a RecursionError, which used to end the loop.
+    "[" * 100_000 + "]" * 100_000,
+    # A byte that wasn't UTF-8, as main() reads it (surrogateescape).
+    '{"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {"x": "\udcff"}}',
+], ids=["text", "cut short", "single quotes", "nested too deep", "not utf-8"])
+def test_a_line_that_is_not_json_gets_a_parse_error(line: str) -> None:
+    """H12.16: JSON-RPC 2.0 answers it with -32700 and a null id; it went unanswered."""
+    assert _null_id_error(answer_line(line)) == -32700
+
+
+@pytest.mark.parametrize("line", ["[]", '[{"jsonrpc": "2.0", "id": 1, "method": "ping"}]',
+                                  '"ping"', "3", "null", "true"])
+def test_json_that_is_not_an_object_is_an_invalid_request(line: str) -> None:
+    assert _null_id_error(answer_line(line)) == -32600
+
+
+def test_a_well_formed_line_is_answered_as_before() -> None:
+    line = '{"jsonrpc": "2.0", "id": 5, "method": "ping", "params": {"note": "café स्मृति"}}'
+    assert answer_line(line) == {"jsonrpc": "2.0", "id": 5, "result": {}}
+    assert answer_line('{"jsonrpc": "2.0", "method": "notifications/initialized"}') is None
+
+
+def test_the_server_answers_bad_lines_and_goes_on() -> None:
+    """Over stdio: a line that isn't JSON, isn't UTF-8 (which ended the server), or
+    isn't an object each gets its error, and the messages after them are answered."""
+    import json
+    import subprocess
+    import sys
+
+    stdin = b"".join([
+        b"not json\n",
+        b"\xff\xfe{}\n",
+        b"[1, 2]\n",
+        json.dumps({"jsonrpc": "2.0", "id": 7, "method": "ping",
+                    "params": {"note": "café"}}, ensure_ascii=False).encode("utf-8") + b"\n",
+        b'{"jsonrpc": "2.0", "id": 8, "method": "ping"}\n',
+    ])
+    proc = subprocess.run([sys.executable, "-m", "smriti.mcp_server"], input=stdin,
+                          capture_output=True, timeout=60, check=True)
+    replies = [json.loads(line) for line in proc.stdout.decode("utf-8").splitlines()]
+    assert [(r["id"], r.get("error", {}).get("code")) for r in replies] == [
+        (None, -32700), (None, -32700), (None, -32600), (7, None), (8, None)]
+    assert replies[3]["result"] == {} and replies[4]["result"] == {}
 
 
 def test_handshake_ping_and_notifications() -> None:

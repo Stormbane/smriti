@@ -115,15 +115,47 @@ def _hold_service() -> None:
     hold_while_running()
 
 
+def answer_line(line: str) -> Message | None:
+    """The response to one line of stdin, or None when it needs none.
+
+    A line that isn't JSON gets JSON-RPC's parse error (-32700), and JSON that
+    isn't an object its invalid request (-32600), each with a null id, since
+    none can be read (JSON-RPC 2.0, section 5.1); before, both went unanswered.
+    A line that isn't UTF-8 is not JSON either. ``main`` reads stdin with
+    ``surrogateescape``, which keeps such bytes as lone surrogates instead of
+    raising (one bad byte used to end the server), and only they can put a
+    surrogate in a line read from stdin.
+    """
+    if not line.isascii():
+        try:
+            line.encode("utf-8")
+        except UnicodeEncodeError:
+            return _error(None, -32700, "Parse error: the message is not UTF-8")
+    try:
+        msg = json.loads(line)
+    except (json.JSONDecodeError, RecursionError):  # RecursionError: nested too deep
+        return _error(None, -32700, "Parse error: the message is not JSON")
+    if not isinstance(msg, dict):
+        return _error(None, -32600, "Invalid Request: a message must be a JSON object")
+    try:
+        return handle_message(msg)
+    except Exception:  # noqa: BLE001 — logged and answered; the session's server lives on
+        # One malformed message must never end the server for the session.
+        log.exception("could not handle %.200r", msg)
+        id = msg.get("id")
+        return None if id is None else _error(id, -32603, "Internal error")
+
+
 def main() -> None:
     """Run the MCP server over stdio."""
     global _hold_at_first_call
     # A session's server lives as long as the session: once it has embedded,
     # it keeps the embedding service loaded until it exits (smriti.embed.client).
     _hold_at_first_call = True
-    # UTF-8 for Windows
+    # UTF-8 for Windows. Bytes that aren't UTF-8 are read as lone surrogates,
+    # so the line they are on is answered with a parse error (answer_line).
     if hasattr(sys.stdin, "reconfigure"):
-        sys.stdin.reconfigure(encoding="utf-8")
+        sys.stdin.reconfigure(encoding="utf-8", errors="surrogateescape")
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
@@ -131,19 +163,7 @@ def main() -> None:
         line = line.strip()
         if not line:
             continue
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(msg, dict):
-            continue
-        try:
-            response = handle_message(msg)
-        except Exception:  # noqa: BLE001 — logged and answered; the session's server lives on
-            # One malformed message must never end the server for the session.
-            log.exception("could not handle %.200r", msg)
-            id = msg.get("id")
-            response = None if id is None else _error(id, -32603, "Internal error")
+        response = answer_line(line)
         if response is not None:
             sys.stdout.write(json.dumps(response) + "\n")
             sys.stdout.flush()
