@@ -15,6 +15,7 @@ The search flow:
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import struct
 from collections.abc import Iterator
@@ -109,18 +110,17 @@ def fts_terms(conn: IndexDB | sqlite3.Connection, query: str, k: int = FTS_MAX_T
     ORing every word of a long prompt made FTS5 rank most of the index: p90
     13 s on real prompts, against 31 ms with the 12 rarest terms (retrieval
     eval, 2026-11-04). Rarity comes from a temp-schema fts5vocab table, so a
-    read-only connection works and index.db is never modified. Each token
-    loses non-alphanumerics, because FTS5 chokes on ` ' . : ( ) *.
+    read-only connection works and index.db is never modified. Each term is
+    matched as a quoted phrase (:func:`fts_match`); see :func:`_query_word`
+    for what a word becomes.
     """
-    import re
-
-    raw = [re.sub(r"[^A-Za-z0-9_]", "", t) for t in query.strip().split()]
-    raw = [t for t in raw if t]
+    raw = [t for t in (_query_word(w) for w in query.strip().split()) if t]
     seen: set[str] = set()
     content: list[str] = []
     for t in raw:
         tl = t.lower()
-        if len(tl) >= 3 and tl not in _STOPWORDS and tl not in seen:
+        # A word in another script is kept however short: 記憶 is two characters.
+        if (len(tl) >= 3 or not tl.isascii()) and tl not in _STOPWORDS and tl not in seen:
             seen.add(tl)
             content.append(tl)
     if not content:  # all stopwords or short tokens: still search, just bounded
@@ -130,23 +130,96 @@ def fts_terms(conn: IndexDB | sqlite3.Connection, query: str, k: int = FTS_MAX_T
     vocab = _vocab_table(conn)
     if vocab is None:
         return content[:k]
+    # unicode61 splits on '_', so `smriti_wake` is indexed as `smriti` + `wake`
+    # and matched as their phrase: its frequency is at most its rarest part's.
+    # A word in another script is split and folded by the tokenizer itself.
+    parts = {t: [p for p in t.split("_") if p] or [t] for t in content if t.isascii()}
+    wide = [t for t in content if not t.isascii()]
+    if wide:
+        tokens = _tokenized(wide)
+        if tokens is None:
+            return content[:k]
+        parts.update(tokens)
     df: dict[str, int] = {}
     try:
         for t in content:
-            # unicode61 splits on '_', so `smriti_wake` is indexed as `smriti` + `wake`
-            # and matched as their phrase: its frequency is at most its rarest part's.
-            parts = [p for p in t.split("_") if p] or [t]
             counts = []
-            for part in parts:
+            for part in parts[t]:
                 row = conn.execute(
                     f"SELECT doc FROM {vocab} WHERE term = ?", (part,)
                 ).fetchone()
                 counts.append(row[0] if row else 0)
-            df[t] = min(counts)
+            df[t] = min(counts, default=0)
     except sqlite3.Error:
         return content[:k]
     present = [t for t in content if df[t] > 0]  # absent terms can't match anything
     return sorted(present, key=lambda t: (df[t], t))[:k] or content[:k]
+
+
+_ASCII_NONWORD = re.compile(r"[^A-Za-z0-9_]")
+
+
+def _query_word(word: str) -> str:
+    """What one whitespace-separated word of a query is searched as ("" for nothing).
+
+    A word with a letter or digit outside ASCII (``café``, ``स्मृति``, ``記憶``)
+    is kept whole, less the punctuation at its ends: quoted, it reaches FTS5's
+    unicode61 tokenizer, which splits and folds it as it did the indexed text
+    (``café`` is the token ``cafe``). Stripped to ``[A-Za-z0-9_]``, as every word
+    was before H12.3, ``café`` became ``caf`` and a Devanagari or CJK word
+    nothing. Any other word is stripped to those characters as before, so an
+    ASCII query asks for exactly what it always did: ``e.g.`` is ``eg``.
+    """
+    if word.isascii() or not any(c.isalnum() and not c.isascii() for c in word):
+        return _ASCII_NONWORD.sub("", word)
+    start, end = 0, len(word)
+    while start < end and not _word_char(word[start]):
+        start += 1
+    while end > start and not _word_char(word[end - 1]):
+        end -= 1
+    return word[start:end]
+
+
+def _word_char(c: str) -> bool:
+    """A letter, digit, ``_`` or combining mark (a Devanagari vowel sign is a mark)."""
+    import unicodedata
+
+    return c.isalnum() or c == "_" or unicodedata.category(c).startswith("M")
+
+
+def _tokenized(terms: list[str]) -> dict[str, list[str]] | None:
+    """Each term's tokens, as FTS5's tokenizer makes them, or None if it can't be asked.
+
+    Read from a private in-memory FTS5 table with chunks_fts's tokenizer (the
+    default unicode61, schema.py), so the vocabulary lookup uses SQLite's own
+    folding and splitting: ``CAFÉ`` is ``cafe``, and ``स्मृति`` is three
+    tokens, its vowel signs and virama being separators to unicode61.
+    """
+    try:
+        mem = sqlite3.connect(":memory:")
+    except sqlite3.Error:
+        return None
+    try:
+        mem.execute("CREATE VIRTUAL TABLE t USING fts5(x)")
+        mem.execute("CREATE VIRTUAL TABLE v USING fts5vocab(t, 'instance')")
+        mem.executemany("INSERT INTO t(rowid, x) VALUES (?, ?)", list(enumerate(terms, 1)))
+        tokens: dict[int, list[str]] = {}
+        for doc, term in mem.execute("SELECT doc, term FROM v"):
+            tokens.setdefault(doc, []).append(term)
+        return {t: tokens.get(i, []) for i, t in enumerate(terms, 1)}
+    except sqlite3.Error:
+        return None
+    finally:
+        mem.close()
+
+
+def fts_match(terms: list[str]) -> str:
+    """The FTS5 MATCH expression for ``terms``: each a quoted phrase, ORed.
+
+    Quoted, a term is only text for the tokenizer, never syntax: ``AND``,
+    ``NEAR``, ``*`` and ``:`` mean nothing inside, and a ``"`` is doubled.
+    """
+    return " OR ".join('"' + t.replace('"', '""') + '"' for t in terms)
 
 
 def _vocab_table(conn: IndexDB | sqlite3.Connection) -> str | None:
@@ -316,14 +389,9 @@ def search_with_status(
 
     if has_fts:
         try:
-            # Simple query: wrap each word in quotes for exact matching,
-            # join with OR for broad recall.
-            #
-            # FTS5 chokes on special characters (`, ', ., :, parens, *).
-            # We strip every non-alphanumeric char from each token before
-            # quoting so a query like "claude -p 120s syntax" or content
-            # with `e.g.` / `it's` can't break the parser.
-            fts_query = " OR ".join(f'"{t}"' for t in fts_terms(conn, query))
+            # Each term a quoted phrase, ORed for broad recall: quoted, no
+            # query ("claude -p 120s", `e.g.`, `it's`, NEAR) can break the parser.
+            fts_query = fts_match(fts_terms(conn, query))
             if fts_query:
                 rows = conn.execute(
                     """SELECT rowid, rank
