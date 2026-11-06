@@ -400,6 +400,15 @@ directly; Opus B, Codex C on that run, which is outside the trend):
   than the maintainer on Linux or macOS with native scheduling, green for
   weeks. That last one is evidence code can't supply.
 
+Not doing:
+- **Masking stays pattern-based** (Sonnet 2): it catches credential shapes and
+  says so. A PII framework is out of scope.
+- **The bus factor and the shape of one setup** (Sonnet 3 and 4) aren't code
+  changes. H11.6 took the setup's own code out of the package.
+- **Incident history in comments** (Sonnet 5, Opus on readability): a pass that
+  keeps each comment's rule and moves its story to the commit message belongs
+  with the modules H12 touches, not a sweep of its own.
+
 ### H12.0 design
 
 - **Keep-alive** (`smriti.embed`). The service's hello advertises
@@ -531,15 +540,6 @@ What is still over the baseline, and why it stays:
   until vector results (+5%). In B the model loads in its own process,
   started by the first query, which a keyword answer meets at once; the bench
   polls every 0.5 s.
-
-Not doing:
-- **Masking stays pattern-based** (Sonnet 2): it catches credential shapes and
-  says so. A PII framework is out of scope.
-- **The bus factor and the shape of one setup** (Sonnet 3 and 4) aren't code
-  changes. H11.6 took the setup's own code out of the package.
-- **Incident history in comments** (Sonnet 5, Opus on readability): a pass that
-  keeps each comment's rule and moves its story to the commit message belongs
-  with the modules H12 touches, not a sweep of its own.
 
 ## Status
 
