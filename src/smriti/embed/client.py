@@ -287,7 +287,10 @@ class ServiceEmbedding:
     # ── One request ──────────────────────────────────────────────────
 
     def _request_batch(self, batch: list[str], kind: str, deadline: float) -> Embedded:
-        gone: _Gone | None = None
+        # Why the last attempt failed, as text: the exception itself would hold
+        # this frame through its traceback, and so the client and its kept
+        # connection (a service slot) until the garbage collector ran.
+        gone = ""
         for _attempt in range(2):
             runtime, paths = self._paths()
             key = load_key(runtime)
@@ -297,13 +300,13 @@ class ServiceEmbedding:
                     "op": "embed", "kind": kind, "texts": batch,
                     "budget_ms": max(1, int((deadline - time.monotonic()) * 1000))})
             except _Unreachable as exc:
-                gone = exc
+                gone = str(exc)
                 log.info("the embedding service on port %d took no connection (%s)",
                          found.port, exc)
                 self._recover(paths, found)
                 continue
             except _Gone as exc:
-                gone = exc
+                gone = str(exc)
                 log.info("the embedding service went away mid-request (%s); trying once more",
                          exc)
                 continue

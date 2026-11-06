@@ -637,6 +637,41 @@ def test_a_kept_connection_spares_the_pid_probe_and_a_dead_service_is_still_repl
     client.close()
 
 
+def test_a_retried_call_leaves_no_cycle_holding_the_kept_connection(
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The last failure was kept as an exception, whose traceback held the frame
+    that held it: a client whose call was retried lived on in that cycle, and
+    so did its kept connection, a service slot, until the collector ran (seen
+    as a flaky flood test)."""
+    import gc
+    import weakref
+
+    from smriti.embed.client import _Gone
+
+    svc = services.start(root)
+    real_call = ServiceEmbedding._call
+    failed: list[bool] = []
+
+    def once_gone(self: ServiceEmbedding, *args: Any) -> Any:
+        if not failed:
+            failed.append(True)
+            raise _Gone("closed before an answer")
+        return real_call(self, *args)
+
+    monkeypatch.setattr(ServiceEmbedding, "_call", once_gone)
+    client = ServiceEmbedding(root, spawn=False)
+    gc.disable()
+    try:
+        assert client.embed_with_identity(["retried"]).vectors == stub(["retried"])
+        assert failed and client._kept is not None and svc.active_connections == 1
+        alive = weakref.ref(client)
+        del client
+        assert alive() is None  # freed at once, not by the collector
+        assert _wait(lambda: svc.active_connections == 0, 2)
+    finally:
+        gc.enable()
+
+
 def test_a_drain_does_not_wait_out_kept_connections(root: Path, services: Services) -> None:
     svc = services.start(root)  # the full 10 s keep-alive
     client = ServiceEmbedding(root, spawn=False)
