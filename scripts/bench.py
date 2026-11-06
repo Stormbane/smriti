@@ -24,11 +24,13 @@ the embedding service's, when one runs (with psutil installed). Any
 embedding service a round starts is stopped at its end, so each round
 starts cold.
 
-Rounds alternate (A, B, B, A, ...) so drift on the machine falls on both
-sides. The table gives each side's mean over its rounds and B's ratio to
-A, then a top-5 parity check per query (as lists, since a result can
-repeat a file). ``--fail-slower`` exits 1 when any time in B is more than
-10% above A's.
+Each side first gets one unmeasured pass of the short processes, which
+compiles its bytecode and fills its new runtime directory (the profile
+lookup's cache), as an installation in use has them. Rounds then alternate
+(A, B, B, A, ...) so drift on the machine falls on both sides. The table
+gives each side's mean over its rounds and B's ratio to A, then a top-5
+parity check per query (as lists, since a result can repeat a file).
+``--fail-slower`` exits 1 when any time in B is more than 10% above A's.
 
 Queries come from ``--queries`` (one per line; blank lines and ``#``
 comments skipped), else a short generic list. Without ``--tree`` the
@@ -373,6 +375,21 @@ def measure_mcp(side: Side, queries: Sequence[str], out: dict[str, Any]) -> None
         mcp.close()
 
 
+def place_wake(side: Side) -> Path | None:
+    """The checkout's wake.py, copied into the tree copy's .smriti/; None if it has none.
+
+    Run from the copy, never from the checkout: the script touches
+    ``last-activity`` beside itself.
+    """
+    source = side.checkout / "narada" / ".smriti" / "wake.py"
+    if not source.is_file():
+        return None
+    wake = side.tree / ".smriti" / "wake.py"
+    wake.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, wake)
+    return wake
+
+
 def measure_cli(side: Side, queries: Sequence[str], round_no: int, wake_cwd: Path,
                 out: dict[str, Any]) -> None:
     problems: list[str] = out.setdefault("problems", [])
@@ -381,12 +398,8 @@ def measure_cli(side: Side, queries: Sequence[str], round_no: int, wake_cwd: Pat
         if done.returncode != 0:
             problems.append(f"{name} exited {done.returncode}: {(done.stderr or '')[-300:]}")
 
-    wake_src = side.checkout / "narada" / ".smriti" / "wake.py"
-    if wake_src.is_file():
-        # Run from the copy: the script touches `last-activity` beside itself.
-        wake = side.tree / ".smriti" / "wake.py"
-        wake.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(wake_src, wake)
+    wake = place_wake(side)
+    if wake is not None:
         wakes = []
         for _ in range(3):
             ms, done = run(side, [str(wake)], cwd=wake_cwd, SMRITI_WAKE="1")
@@ -433,7 +446,25 @@ def one_round(side: Side, queries: Sequence[str], wake_cwd: Path) -> dict[str, A
     return out
 
 
-def prepare(side: Side, source: Path) -> None:
+def warm_up(side: Side, wake_cwd: Path) -> None:
+    """One unmeasured pass of the short processes: an MCP server's start and tools
+    list, the wake and status. It compiles the checkout's bytecode and fills the
+    side's new runtime directory (the profile lookup's cache), as a long-used
+    installation has them, so neither falls on whichever round comes first."""
+    mcp = Mcp(side)
+    try:
+        mcp.call("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
+                                "clientInfo": {"name": "smriti-bench", "version": "1"}})
+        mcp.call("tools/list")
+    finally:
+        mcp.close()
+    wake = place_wake(side)
+    if wake is not None:
+        run(side, [str(wake)], cwd=wake_cwd, SMRITI_WAKE="1")
+    run(side, ["-m", "smriti", "status"])
+
+
+def prepare(side: Side, source: Path, wake_cwd: Path) -> None:
     log(f"copying {source} for {side.name}")
     copy_tree(source, side.tree)
     side.runtime.mkdir(parents=True, exist_ok=True)
@@ -448,6 +479,7 @@ def prepare(side: Side, source: Path) -> None:
         if done.returncode != 0:
             raise SystemExit(f"{side.name}: `smriti index` failed: {done.stderr[-500:]}")
         log(f"  built in {ms / 1000:.1f} s")
+    warm_up(side, wake_cwd)
 
 
 # ── Reporting ────────────────────────────────────────────────────────
@@ -581,7 +613,7 @@ def main(argv: Sequence[str] | None = None,
     log(f"work directory: {work}")
     with stopping(sides):
         for side in sides:
-            prepare(side, source)
+            prepare(side, source, args.wake_cwd.resolve())
         for i in order(args.rounds):
             measure(sides[i], queries, args.wake_cwd.resolve())
 
