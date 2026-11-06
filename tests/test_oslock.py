@@ -87,6 +87,21 @@ def test_unopenable_lock_path_yields_false(tmp_path: Path) -> None:
         assert not held
 
 
+def test_try_lock_says_whether_a_lock_is_busy_or_cannot_be_had(tmp_path: Path) -> None:
+    """The nightly skips a busy run lock, but runs when no lock file can be opened."""
+    path = tmp_path / "x.lock"
+    blocker = tmp_path / "file"
+    blocker.write_text("not a dir", encoding="utf-8")
+    with oslock.try_lock(path) as first:
+        assert first == oslock.HELD
+        with oslock.try_lock(path, wait_s=0.1) as second:
+            assert second == oslock.BUSY
+    with oslock.try_lock(blocker / "x.lock", wait_s=0.1) as nothing:
+        assert nothing == oslock.UNAVAILABLE
+    with oslock.try_lock(path, wait_s=0.1) as again:
+        assert again == oslock.HELD
+
+
 def test_lock_path_is_outside_the_tree_and_stable(tmp_path: Path) -> None:
     tree = tmp_path / "tree"
     a = lock_path("handoff", str(tree))

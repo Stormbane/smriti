@@ -6,16 +6,22 @@ construction: every step derives from inputs carrying an input hash;
 re-running a completed night is a no-op. Failure of any step is
 recorded in the status file and never blocks the remaining steps —
 silence must be visible, not fatal.
+
+One run at a time per memory root (:func:`run_lock_key`): the scheduled run
+and a manual one never interleave their writes, and the status file is the
+last complete run's.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from smriti.core.oslock import BUSY, UNAVAILABLE, LockKey, lock_path, try_lock
 from smriti.daylog.config import DaylogConfig, load_config
 from smriti.daylog.digest import digest_day
 from smriti.daylog.model import day_key, day_tz
@@ -27,6 +33,9 @@ from smriti.daylog.writer import read_day_turns
 log = logging.getLogger(__name__)
 
 _REPAIR_WINDOW_DAYS = 7
+# How long a second run waits for the first to finish before it skips. A run
+# with digests takes minutes, so this only covers one that is just finishing.
+_LOCK_WAIT_S = 10.0
 
 
 def _target_day(now: datetime, root: Path | None = None) -> date:
@@ -66,6 +75,11 @@ def _stale_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
     return stale
 
 
+def run_lock_key(root: Path) -> LockKey:
+    """The lock one nightly run holds from its first step to its status file, per memory root."""
+    return lock_path("nightly", os.path.normcase(str(root.resolve())))
+
+
 def run_nightly(
     cfg: DaylogConfig | None = None,
     *,
@@ -74,8 +88,15 @@ def run_nightly(
     digest_cap: int = 10,
     reindex: bool = True,
     witness: bool = True,
+    lock_wait_s: float = _LOCK_WAIT_S,
 ) -> dict[str, object]:
-    """Run the sleep task; returns (and persists) the status document."""
+    """Run the sleep task; returns (and persists) the status document.
+
+    One run at a time per memory root: a run that finds another holding the
+    run lock waits up to ``lock_wait_s``, then returns a status that says it
+    skipped (``"skipped": true``, and ok, since nothing failed) without
+    writing the status file, which stays the running night's.
+    """
     cfg = cfg or load_config()
     now = now or datetime.now(tz=day_tz(cfg.root))
     target = _target_day(now, cfg.root)
@@ -85,6 +106,24 @@ def run_nightly(
         "steps": {},
         "llm_attempts": [],
     }
+    with try_lock(run_lock_key(cfg.root), wait_s=lock_wait_s) as lock:
+        if lock == BUSY:
+            log.warning("nightly skipped: another nightly is running for %s", cfg.root)
+            status.update(skipped=True, ok=True, reason="another nightly is running")
+            return status
+        if lock == UNAVAILABLE:
+            # No lock file could be opened (smriti.core.oslock says when): run as
+            # every nightly did before the lock, and say so.
+            log.warning("nightly: the run lock can't be taken; running without it")
+            status["run_lock"] = "unavailable"
+        _run_steps(cfg, status, target, rollup_cap=rollup_cap, digest_cap=digest_cap,
+                   reindex=reindex, witness=witness)
+    return status
+
+
+def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
+               rollup_cap: int, digest_cap: int, reindex: bool, witness: bool) -> None:
+    """Every step of one night, then the status file; under the run lock."""
     steps: dict[str, object] = status["steps"]  # type: ignore[assignment]
     attempts: list[dict[str, str]] = status["llm_attempts"]  # type: ignore[assignment]
 
@@ -176,7 +215,6 @@ def run_nightly(
         (s.get("ok", True) if isinstance(s, dict) else True) for s in steps.values()
     )
     _write_status(cfg.nightly_status_path, status)
-    return status
 
 
 # Retry schedule for the index step: a live session's MCP server can
@@ -188,8 +226,6 @@ _INDEX_BUSY_TIMEOUT_MS = "60000"
 
 
 def _index_with_retries(cfg: DaylogConfig) -> dict[str, object]:
-    import os
-
     from smriti.store.indexer import index_tree
 
     previous = os.environ.get("SMRITI_DB_BUSY_TIMEOUT_MS")

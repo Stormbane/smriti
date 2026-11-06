@@ -224,6 +224,10 @@ def _release(fd: int) -> None:
         pass
 
 
+#: What :func:`try_lock` yields.
+HELD, BUSY, UNAVAILABLE = "held", "busy", "unavailable"
+
+
 @contextmanager
 def exclusive_lock(key: LockKey | Path, wait_s: float = 2.0) -> Iterator[bool]:
     """Hold an exclusive lock for the ``with`` block.
@@ -236,6 +240,19 @@ def exclusive_lock(key: LockKey | Path, wait_s: float = 2.0) -> Iterator[bool]:
     file can be opened), yields False and holds nothing; callers must honour
     that.
     """
+    with try_lock(key, wait_s) as outcome:
+        yield outcome == HELD
+
+
+@contextmanager
+def try_lock(key: LockKey | Path, wait_s: float = 2.0) -> Iterator[str]:
+    """:func:`exclusive_lock`, saying why a lock isn't held.
+
+    Yields :data:`HELD`; :data:`BUSY` when another holder kept it for all of
+    ``wait_s``; or :data:`UNAVAILABLE` when no lock file could be opened (the
+    module docstring's "When a file can't be used"), so no holder can be
+    excluded at all. Only HELD holds anything.
+    """
     if isinstance(key, LockKey):
         fds = _open_named(key)
     else:
@@ -244,7 +261,7 @@ def exclusive_lock(key: LockKey | Path, wait_s: float = 2.0) -> Iterator[bool]:
         except OSError:
             fds = []
     if not fds:
-        yield False
+        yield UNAVAILABLE
         return
     held: list[int] = []
     try:
@@ -257,7 +274,7 @@ def exclusive_lock(key: LockKey | Path, wait_s: float = 2.0) -> Iterator[bool]:
             for fd in reversed(held):
                 _release(fd)
             held.clear()
-        yield bool(held)
+        yield HELD if held else BUSY
     finally:
         for fd in reversed(held):
             _release(fd)

@@ -262,6 +262,10 @@ def _cmd_nightly(args: argparse.Namespace) -> int:
 
     status = run_nightly(rollup_cap=args.rollup_cap, digest_cap=args.digest_cap,
                          reindex=not args.no_reindex, witness=not args.no_witness)
+    if status.get("skipped"):
+        # Not a failure: the other run does this night's work and writes its status.
+        print(f"Nightly skipped for {status.get('target_day')}: {status.get('reason')}")
+        return 0
     steps = status.get("steps", {})
     if not isinstance(steps, dict):
         steps = {}
