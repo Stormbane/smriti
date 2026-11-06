@@ -60,6 +60,7 @@ def _isolated_memory_root(tmp_path_factory: pytest.TempPathFactory,
                           monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     import smriti.metrics as metrics
     import smriti.profiles as profiles
+    from smriti.daylog import model
 
     root = tmp_path_factory.mktemp("memory-root")
     monkeypatch.setenv("SMRITI_ROOT", str(root))
@@ -77,6 +78,9 @@ def _isolated_memory_root(tmp_path_factory: pytest.TempPathFactory,
     # Installed profiles are read once per process; each test sees only the
     # ones installed for it (tests/_profiles.py installs synthetic ones).
     profiles._installed.cache_clear()
+    # The day zone is looked up again at most once a second; each test starts afresh.
+    model._zone_looks.clear()
     yield root
     metrics._instance = None
     profiles._installed.cache_clear()
+    model._zone_looks.clear()
