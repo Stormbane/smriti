@@ -275,7 +275,10 @@ def test_an_mcp_server_stays_small_and_never_loads_a_model(
 
     assert measured["heavy"] == [], measured["heavy"]  # no model, no runtime, no provider
     if measured["rss"] is not None:
-        assert measured["rss"] < 100 * 2**20, measured["rss"]
+        # A model is about 1 GB. Without one, a server's peak (ru_maxrss on Linux CI, where
+        # psutil isn't installed) measured 95-105 MB across runs of the same commit, and
+        # about 45 MB of working set on Windows: 200 MB is far from both.
+        assert measured["rss"] < 200 * 2**20, measured["rss"]
     vec = "sqlite-vec is not available" not in texts[5]
     saved = "saved and indexed" if vec else "vectors pending (sqlite-vec"
     assert saved in texts[2] and saved in texts[4]
