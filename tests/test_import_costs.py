@@ -52,6 +52,20 @@ def test_status_loads_neither_sqlite_vec_nor_the_indexer(_isolated_memory_root: 
     assert not any(imported.values()), imported
 
 
+def test_the_wake_imports_no_installer_helper_and_no_file_locks() -> None:
+    """The wake hook runs in every session, from inside the integrations
+    package, whose __init__ imported every installer helper, and the agent-doc
+    helper brought smriti's file locks with it. It writes no document."""
+    imported = _imported_by(
+        "import contextlib, io, os\nos.environ['SMRITI_WAKE'] = '1'\n"
+        "from smriti.integrations.common.wake_runner import run\n"
+        "with contextlib.redirect_stdout(io.StringIO()):\n    run()",
+        ["smriti.integrations.common.managed_doc", "smriti.integrations.common.hook_model",
+         "smriti.integrations.common.hook_scripts", "smriti.integrations.common.mcp_spec",
+         "smriti.integrations.common.agent_md", "smriti.core.files", "smriti.core.oslock"])
+    assert not any(imported.values()), imported
+
+
 def test_listing_the_tools_does_not_import_the_day_log_writer() -> None:
     """The MCP server reads daylog.json on each request; that mustn't bring the
     day-log writer, its locks and the scrubber."""

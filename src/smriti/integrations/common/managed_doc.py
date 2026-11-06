@@ -28,8 +28,6 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from smriti.core.files import write_atomic
-
 MANAGED_BEGIN = "<!-- smriti:managed:begin -->"
 MANAGED_END = "<!-- smriti:managed:end -->"
 
@@ -56,6 +54,17 @@ LEGACY_SECTION_TITLES = frozenset({
 
 class ManagedDocError(Exception):
     """Raised when an agent doc cannot be safely written."""
+
+
+def _write(path: Path, text: str) -> None:
+    """``smriti.core.files.write_atomic``, imported on first use.
+
+    It brings smriti's file locks, which only writing a document needs; the
+    wake hook imports this package and writes no document.
+    """
+    from smriti.core.files import write_atomic
+
+    write_atomic(path, text)
 
 
 @dataclass(frozen=True)
@@ -119,7 +128,7 @@ def write_managed_doc(path: Path, block_content: str, *, title: str | None = Non
     block = render_managed_block(block_content)
     if state.kind == "missing":
         head = f"{title}\n\n" if title else ""
-        write_atomic(path, head + block + "\n")
+        _write(path, head + block + "\n")
         return True
     if state.kind in ("migration-required", "malformed"):
         raise ManagedDocError(state.detail)
@@ -129,7 +138,7 @@ def write_managed_doc(path: Path, block_content: str, *, title: str | None = Non
     new_text = text[:start] + block + text[end:]
     if new_text == text:
         return False
-    write_atomic(path, new_text)
+    _write(path, new_text)
     return True
 
 
@@ -184,7 +193,7 @@ def migrate_agent_doc(path: Path, block_content: str) -> Path:
 
     backup = path.with_name(path.name + ".pre-migrate.bak")
     shutil.copy2(path, backup)
-    write_atomic(path, new_text)
+    _write(path, new_text)
     return backup
 
 
