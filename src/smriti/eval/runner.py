@@ -37,21 +37,19 @@ def eval_sandbox() -> Iterator[Path]:
         root = Path(directory).resolve()
         shutil.copytree(FIXTURE_ROOT, root, dirs_exist_ok=True)
         previous_root = _active_root
-        previous_logger = metrics._instance
         env_names = ("SMRITI_ROOT", "NARADA_ROOT")
         previous_env = {name: os.environ.get(name) for name in env_names}
         try:
             for name in env_names:
                 os.environ[name] = str(root)
-            metrics._instance = metrics.MetricsLogger(root / ".smriti" / "metrics.jsonl")
-            _active_root = root
-            stats = index_tree(root=root, db=root / ".smriti" / "index.db")
-            if stats["errors"] or not stats["chunks"]:
-                raise RuntimeError(f"Could not index eval fixture: {stats}")
-            yield root
+            with metrics.logging_to(root / ".smriti" / "metrics.jsonl"):
+                _active_root = root
+                stats = index_tree(root=root, db=root / ".smriti" / "index.db")
+                if stats["errors"] or not stats["chunks"]:
+                    raise RuntimeError(f"Could not index eval fixture: {stats}")
+                yield root
         finally:
             _active_root = previous_root
-            metrics._instance = previous_logger
             for name, value in previous_env.items():
                 if value is None:
                     os.environ.pop(name, None)

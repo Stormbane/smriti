@@ -52,13 +52,13 @@ def _pid_path(cfg: DaylogConfig) -> Path:
 
 
 def _running_pid(cfg: DaylogConfig) -> int:
-    from smriti.daylog.lock import _pid_alive
+    from smriti.core.procs import pid_alive
 
     try:
         pid = int(_pid_path(cfg).read_text(encoding="ascii").strip() or "0")
     except (OSError, ValueError):
         return 0
-    return pid if _pid_alive(pid) else 0
+    return pid if pid_alive(pid) else 0
 
 
 def _ensure_qmd_daemon() -> None:

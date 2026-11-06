@@ -48,7 +48,7 @@ else:
     _CREATE_NO_WINDOW = 0
 
 
-def _resolve_qmd_cmd() -> list[str] | None:
+def resolve_qmd_cmd() -> list[str] | None:
     """Return argv prefix for invoking qmd, or None if it can't be found.
 
     Prefer ``node <qmd.js>`` directly to bypass the broken Windows shim.
@@ -72,7 +72,7 @@ def _resolve_qmd_cmd() -> list[str] | None:
 
 
 def is_available() -> bool:
-    return _resolve_qmd_cmd() is not None
+    return resolve_qmd_cmd() is not None
 
 
 def _qmd_collection() -> str:
@@ -164,7 +164,7 @@ def _query_via_subprocess(
     text: str, *, top_k: int, timeout_s: float, rerank: bool,
 ) -> tuple[list[object], int | None, str | None]:
     """Cold-start fallback. Returns (results, returncode, stderr_tail)."""
-    cmd = _resolve_qmd_cmd()
+    cmd = resolve_qmd_cmd()
     if not cmd:
         return [], None, "qmd_not_found"
 
@@ -246,7 +246,7 @@ def query(text: str, *, top_k: int, timeout_s: float, rerank: bool) -> RecallRes
 
 def daemon_start() -> tuple[bool, str]:
     """Best-effort: start the qmd HTTP daemon in detached mode."""
-    cmd = _resolve_qmd_cmd()
+    cmd = resolve_qmd_cmd()
     if not cmd:
         return False, "qmd_not_found"
     if daemon_health(timeout_s=0.5):
@@ -281,7 +281,7 @@ def daemon_start() -> tuple[bool, str]:
 
 def daemon_stop() -> tuple[bool, str]:
     """Stop the qmd daemon via its own ``mcp stop`` command."""
-    cmd = _resolve_qmd_cmd()
+    cmd = resolve_qmd_cmd()
     if not cmd:
         return False, "qmd_not_found"
     try:

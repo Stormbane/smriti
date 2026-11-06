@@ -171,6 +171,7 @@ def clear_discovery(paths: ServicePaths, instance: str) -> None:
 
 
 def pid_alive(pid: int) -> bool:
-    from smriti.daylog.lock import _pid_alive
+    """Whether ``pid`` is a running process (:func:`smriti.core.procs.pid_alive`)."""
+    from smriti.core.procs import pid_alive as alive
 
-    return _pid_alive(pid)
+    return alive(pid)

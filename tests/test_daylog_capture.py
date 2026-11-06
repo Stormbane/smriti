@@ -533,12 +533,12 @@ def test_lock_pid_alive_probe_is_side_effect_free(monkeypatch: pytest.MonkeyPatc
     import subprocess
     import sys
 
-    from smriti.daylog import lock
+    from smriti.core.procs import pid_alive
 
     if without_psutil:  # the fallback path that fresh Windows installs take
         monkeypatch.setitem(sys.modules, "psutil", None)
-    assert lock._pid_alive(os.getpid())
+    assert pid_alive(os.getpid())
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait()
-    assert not lock._pid_alive(proc.pid)
-    assert not lock._pid_alive(0)
+    assert not pid_alive(proc.pid)
+    assert not pid_alive(0)

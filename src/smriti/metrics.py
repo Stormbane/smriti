@@ -19,6 +19,8 @@ import hashlib
 import json
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -206,3 +208,15 @@ def get_logger(path: Path | None = None) -> MetricsLogger:
     if _instance is None or (path is not None and _instance.path != path):
         _instance = MetricsLogger(path)
     return _instance
+
+
+@contextmanager
+def logging_to(path: Path) -> Iterator[MetricsLogger]:
+    """Log this process's metrics to ``path`` for the block, then as before it."""
+    global _instance
+    previous = _instance
+    _instance = MetricsLogger(path)
+    try:
+        yield _instance
+    finally:
+        _instance = previous

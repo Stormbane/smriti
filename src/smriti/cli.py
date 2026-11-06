@@ -736,8 +736,8 @@ def _cmd_recall(args: argparse.Namespace) -> int:
         return stats_main(argv)
     if sub == "index":
         import subprocess
-        from smriti.recall.backends.qmd import _resolve_qmd_cmd
-        cmd = _resolve_qmd_cmd()
+        from smriti.recall.backends.qmd import resolve_qmd_cmd
+        cmd = resolve_qmd_cmd()
         if not cmd:
             print("qmd not found. install via: npm install -g @tobilu/qmd", file=sys.stderr)
             return 1

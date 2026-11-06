@@ -8,17 +8,17 @@ import time
 
 import pytest
 
-from smriti.daylog.lock import _pid_alive
+from smriti.core.procs import pid_alive
 
 
 def test_a_running_process_is_alive_and_an_exited_one_is_not() -> None:
     proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
-        assert _pid_alive(proc.pid)
+        assert pid_alive(proc.pid)
     finally:
         proc.kill()
         proc.wait(10)
-    assert not _pid_alive(proc.pid)
+    assert not pid_alive(proc.pid)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX zombies")
@@ -28,13 +28,13 @@ def test_an_unreaped_child_is_not_alive() -> None:
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
     deadline = time.monotonic() + 10
     try:
-        while time.monotonic() < deadline and _pid_alive(proc.pid):
+        while time.monotonic() < deadline and pid_alive(proc.pid):
             time.sleep(0.05)  # exits at once, but is not reaped: a zombie
-        assert not _pid_alive(proc.pid)
+        assert not pid_alive(proc.pid)
         assert proc.returncode is None  # still unreaped: it really was a zombie
     finally:
         proc.wait(10)
 
 
 def test_nonpositive_pids_are_not_alive() -> None:
-    assert not _pid_alive(0) and not _pid_alive(-1)
+    assert not pid_alive(0) and not pid_alive(-1)

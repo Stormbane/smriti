@@ -29,7 +29,7 @@ from smriti.integrations.common import (
     classify_wake_hook,
     mcp_registration_matches,
 )
-from smriti.integrations.common.hook_model import _ENCODED_RE  # noqa: F401 (reused below)
+from smriti.integrations.common.hook_model import ENCODED_RE
 from smriti.wake import briefing
 
 
@@ -51,7 +51,7 @@ def _script_targets(command: str, home: Path) -> list[Path]:
     import base64
 
     targets: list[Path] = []
-    encoded = _ENCODED_RE.search(command)
+    encoded = ENCODED_RE.search(command)
     if encoded:
         try:
             script = base64.b64decode(encoded.group(1)).decode("utf-16-le")

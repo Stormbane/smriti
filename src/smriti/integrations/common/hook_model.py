@@ -101,7 +101,7 @@ class WakeHookSpec:
     env: dict[str, str] = field(default_factory=dict)
 
 
-_ENCODED_RE = re.compile(r"-EncodedCommand\s+([A-Za-z0-9+/=]+)", re.IGNORECASE)
+ENCODED_RE = re.compile(r"-EncodedCommand\s+([A-Za-z0-9+/=]+)", re.IGNORECASE)
 _PS_ENV_LITERAL_RE = re.compile(r"\$env:(\w+)\s*=\s*'([^']*)'")
 _PS_ENV_JOINPATH_RE = re.compile(
     r"\$env:(\w+)\s*=\s*\(Join-Path \$HOME '([^']*)'\)"
@@ -121,7 +121,7 @@ def parse_wake_command(command: str) -> WakeHookSpec | None:
     Returns None when the command does not invoke a ``wake.py`` at all
     (i.e. it is not a wake hook of any lineage — UNRELATED territory).
     """
-    encoded = _ENCODED_RE.search(command)
+    encoded = ENCODED_RE.search(command)
     if encoded:
         try:
             script = base64.b64decode(encoded.group(1)).decode("utf-16-le")
