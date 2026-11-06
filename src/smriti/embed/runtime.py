@@ -1,14 +1,8 @@
 """Where the embedding service keeps its key, discovery file, lock and log.
 
-A private per-user directory, never inside the memory root:
-
-- ``%LOCALAPPDATA%\\smriti\\run`` on Windows, private to the user by the
-  profile's ACLs;
-- ``$XDG_RUNTIME_DIR/smriti``, or else ``~/.cache/smriti/run``, elsewhere:
-  created 0700, and refused when another user owns it or others can write
-  to it.
-
-``SMRITI_RUNTIME_DIR`` overrides it (tests use temporary directories).
+In the private per-user runtime directory, never inside the memory root:
+see :mod:`smriti.core.rundir`, whose names (``runtime_dir`` and the checks
+behind it) are re-exported here.
 
 One key serves every memory root of the user: 32 random bytes, created
 once by an exclusive create (mode 0600) and never replaced. Each memory
@@ -30,63 +24,18 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from smriti.core.rundir import RUNTIME_ENV as RUNTIME_ENV
+from smriti.core.rundir import RuntimeDirError as RuntimeDirError
+from smriti.core.rundir import default_runtime_dir as default_runtime_dir
+from smriti.core.rundir import private_dir_problem as private_dir_problem
+from smriti.core.rundir import runtime_dir as runtime_dir
 from smriti.embed.identity import EmbeddingIdentity
 from smriti.embed.protocol import PROTOCOL
 
 log = logging.getLogger(__name__)
 
-RUNTIME_ENV = "SMRITI_RUNTIME_DIR"
 _KEY_NAME = "embed.key"
 _KEY_TEXT = re.compile(r"[0-9a-f]{64}")
-
-
-class RuntimeDirError(PermissionError):
-    """The runtime directory, or the key in it, isn't safe to use."""
-
-
-def default_runtime_dir() -> Path:
-    if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA")
-        return (Path(base) if base else Path.home() / "AppData" / "Local") / "smriti" / "run"
-    xdg = os.environ.get("XDG_RUNTIME_DIR")
-    if xdg:
-        return Path(xdg) / "smriti"
-    return Path.home() / ".cache" / "smriti" / "run"
-
-
-def private_dir_problem(st: os.stat_result, uid: int) -> str | None:
-    """Why a directory with this ``lstat`` can't hold the key, or None when it can."""
-    if stat.S_ISLNK(st.st_mode):
-        return "it is a symbolic link"
-    if not stat.S_ISDIR(st.st_mode):
-        return "it is not a directory"
-    if st.st_uid != uid:
-        return f"it is owned by uid {st.st_uid}, not by this user (uid {uid})"
-    if st.st_mode & 0o022:
-        return f"other users can write to it (mode {stat.S_IMODE(st.st_mode):o})"
-    return None
-
-
-def _verify_private_dir(path: Path) -> None:
-    if sys.platform == "win32":
-        return  # the profile's ACLs make %LOCALAPPDATA% the user's own (see SECURITY.md)
-    st = os.lstat(path)
-    problem = private_dir_problem(st, os.getuid())
-    if problem:
-        raise RuntimeDirError(f"refusing the runtime directory {path}: {problem}")
-    if stat.S_IMODE(st.st_mode) & 0o077:
-        os.chmod(path, 0o700)  # ours, and not writable by others: close it to them too
-
-
-def runtime_dir(*, create: bool = True) -> Path:
-    """The runtime directory, created and checked (only checked when ``create`` is False)."""
-    env = os.environ.get(RUNTIME_ENV, "").strip()
-    path = Path(env).expanduser() if env else default_runtime_dir()
-    if create:
-        path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if os.path.lexists(path):
-        _verify_private_dir(path)
-    return path
 
 
 def _read_text(path: Path) -> str:
