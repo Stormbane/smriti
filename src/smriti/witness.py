@@ -101,10 +101,11 @@ def clear_stale_lock(root: Path, *, max_age_s: float = _STALE_LOCK_S) -> bool:
     return True
 
 
-def _commit(root: Path, tag: str, *, push: bool = False) -> None:
+def _commit(root: Path, tag: str, *, push: bool = False) -> dict[str, object]:
+    """Back the tree up now; what the run did (``BackupRun.as_dict``)."""
     from smriti.backup import trigger
 
-    trigger(tag, push=push, root=root)
+    return trigger(tag, push=push, root=root).as_dict()
 
 
 def _manifest_path(root: Path, night: str) -> Path:
@@ -283,7 +284,8 @@ def run_witness(root: Path, night: str, *, push: bool = True) -> dict[str, objec
         calendars = stamp(write_manifest(root, night))
         if calendars < _MIN_CALENDARS:
             result["error"] = f"only {calendars} calendar(s) accepted the stamp"
-        _commit(root, "witness", push=push)
+        # What the push did (H12.13); the nightly's backup step judges it.
+        result["push"] = _commit(root, "witness", push=push)
 
     unpushed = _git(root, "rev-list", "--count", "@{u}..HEAD").stdout.strip()
     result.update({

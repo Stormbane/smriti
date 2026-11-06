@@ -22,7 +22,10 @@ content is encrypted but commit messages are NOT. Keep tags generic
 
 Best-effort: failures exit 0 and the next trigger catches up. Every outcome
 is appended to ``.git/smriti-backup.jsonl`` (inside .git, so the log never
-creates a commit of its own) for `smriti audit` and humans to read.
+creates a commit of its own); `smriti status` and the nightly's status
+report the last commit and push from it (``smriti.backup.backup_status``).
+A caller that sets SMRITI_BACKUP_RUN gets that id on each line of its run,
+so it can tell what its own run did.
 
 Git is never killed. A git process killed mid-operation leaves
 ``.git/index.lock`` or a ref lock behind, and every later git call then fails
@@ -91,6 +94,9 @@ def log_event(cwd: Path, **fields: object) -> None:
     """Append one JSON line to <git common dir>/smriti-backup.jsonl. Never raises."""
     path = git_dirs(cwd)[1] / LOG_NAME
     record = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **fields}
+    run = os.environ.get("SMRITI_BACKUP_RUN", "")
+    if run:
+        record["run"] = run[:64]
     try:
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
@@ -341,9 +347,9 @@ def push_target(cwd: Path) -> tuple[list[str], str] | str:
     return ["push", "-q", "-u", "origin", f"{ref}:{ref}"], f"refs/remotes/origin/{branch}"
 
 
-def do_push(cwd: Path, push_args: list[str]) -> tuple[bool, str]:
+def do_push(cwd: Path, push_args: list[str], tag: str = "") -> tuple[bool, str]:
     code, out = run_git(push_args, cwd, timeout=300)
-    log_event(cwd, event="push", ok=code == 0, code=code, out=out[-500:],
+    log_event(cwd, event="push", tag=tag, ok=code == 0, code=code, out=out[-500:],
               to=" ".join(a for a in push_args[1:] if not a.startswith("-")))
     return code == 0, out
 
@@ -438,7 +444,7 @@ def main() -> int:
             if args.verbose:
                 print("[backup] push: nothing new", file=sys.stderr)
         elif target is not None:
-            ok, out = do_push(cwd, target[0])
+            ok, out = do_push(cwd, target[0], args.tag)
             if args.verbose:
                 if ok:
                     print("[backup] push: ok", file=sys.stderr)

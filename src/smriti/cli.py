@@ -132,6 +132,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
     if not db_path.exists():
         print("Status:     Not indexed (run 'smriti index')")
         _print_daylog_status()
+        _print_backup_status(root)
         return 0
 
     # Read-only, like smriti read and the MCP server: a status check has no
@@ -168,7 +169,19 @@ def _cmd_status(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001 — status must always print
         print(f"Embedding:  unavailable ({exc})")
     _print_daylog_status()
+    _print_backup_status(root)
     return 0
+
+
+def _print_backup_status(root: Path) -> None:
+    """The last backup commit and push, from the backup script's log (H12.13)."""
+    try:
+        from smriti.backup import backup_status
+        from smriti.daylog.model import day_tz
+
+        print(f"Backup:     {backup_status(root).describe(day_tz(root))}")
+    except Exception as exc:  # noqa: BLE001 — status must always print
+        print(f"Backup:     unavailable ({exc})")
 
 
 def _print_daylog_status() -> None:
@@ -403,7 +416,14 @@ def _cmd_embed(args: argparse.Namespace) -> int:
 def _cmd_backup(args: argparse.Namespace) -> int:
     from smriti.backup import trigger
 
-    trigger(args.tag, push=args.push)
+    run = trigger(args.tag, push=args.push)
+    # Always 0: a backup is best effort and the next run catches up; what went
+    # wrong is printed here, and `smriti status` and the nightly report it.
+    if run.ran:
+        print(f"Backup ({args.tag}): commit {run.commit}; push {run.push}"
+              + (f": {run.detail}" if run.detail else ""))
+    else:
+        print(f"Backup ({args.tag}): did not run: {run.detail}")
     return 0
 
 

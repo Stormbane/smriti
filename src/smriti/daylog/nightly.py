@@ -241,7 +241,18 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
         except Exception as exc:  # noqa: BLE001 — recorded in the status; the night goes on
             steps["witness"] = {"ok": False, "error": str(exc)[:300]}
 
-    # 8. Status file (consumed by the wake briefing).
+    # 8. Backup: the last commit and push the backup log records, whoever made
+    # them (this night's witness, the hourly task), so a failing backup fails
+    # the night where the wake sees it (H12.13). A tree with nowhere to push
+    # isn't failing.
+    try:
+        from smriti.backup import backup_status
+
+        steps["backup"] = backup_status(cfg.root).as_dict()
+    except Exception as exc:  # noqa: BLE001 — recorded in the status; the night goes on
+        steps["backup"] = {"ok": False, "error": str(exc)[:300]}
+
+    # 9. Status file (consumed by the wake briefing).
     status["finished"] = datetime.now(tz=day_tz(cfg.root)).isoformat()
     status["ok"] = all(
         (s.get("ok", True) if isinstance(s, dict) else True) for s in steps.values()
