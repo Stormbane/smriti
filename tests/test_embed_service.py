@@ -604,6 +604,39 @@ def test_a_restarted_service_gets_a_fresh_connection(root: Path, services: Servi
     client.close()
 
 
+def test_a_kept_connection_spares_the_pid_probe_and_a_dead_service_is_still_replaced(
+        root: Path, services: Services, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The probe took 4 ms of every request on Windows (psutil reads the process
+    table). A service that answered on the kept connection moments ago needn't
+    be probed; one that has died since is found when the connection is used."""
+    import smriti.embed.client as client_mod
+
+    paths = service_paths(runtime_dir(), root)
+    first = services.start(root)
+    client = ServiceEmbedding(root)
+    started: list[EmbedService] = []
+    client.start_service = lambda paths, **kw: bool(  # type: ignore[method-assign]
+        started.append(services.start(root)) or True)
+    client.embed_with_identity(["kept"])
+    probes: list[int] = []
+    real_alive = client_mod.pid_alive
+    monkeypatch.setattr(client_mod, "pid_alive", lambda pid: probes.append(pid) or real_alive(pid))
+
+    assert client.embed_with_identity(["again"]).vectors == stub(["again"])
+    assert probes == []
+
+    # It dies, and its record is left saying ready, as a crash leaves it.
+    stale = read_discovery(paths)
+    assert stale is not None
+    first.stop("crashed")
+    assert _wait(lambda: first.instance in services.reasons, 5)
+    write_discovery(paths, stale)
+
+    assert client.embed_with_identity(["after the crash"]).vectors == stub(["after the crash"])
+    assert len(started) == 1 and client.last_instance == started[0].instance
+    client.close()
+
+
 def test_a_drain_does_not_wait_out_kept_connections(root: Path, services: Services) -> None:
     svc = services.start(root)  # the full 10 s keep-alive
     client = ServiceEmbedding(root, spawn=False)

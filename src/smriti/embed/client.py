@@ -232,6 +232,20 @@ class ServiceEmbedding:
                 self._children.remove(child)
                 self._exited[child.pid] = now
 
+    def _kept_reaches(self, paths: ServicePaths, found: Discovery) -> bool:
+        """Whether the kept connection, still within its keep-alive, is to ``found``.
+
+        That service answered on it moments ago, so its pid needn't be probed
+        (with psutil on Windows the probe takes 4 ms, on every request). If it
+        has died since, using the connection finds it closed, a fresh connect
+        is refused, and it is replaced as any dead service is. Only reads: the
+        connection may be another thread's to use.
+        """
+        conn = self._kept
+        return (conn is not None
+                and conn.where == (str(paths.discovery), found.instance, found.port)
+                and time.monotonic() - conn.idle_since < conn.keepalive_s - KEEPALIVE_MARGIN_S)
+
     def _alive(self, found: Discovery) -> bool:
         gone = self._exited.get(found.pid)
         if gone is not None and found.updated <= gone:
@@ -321,7 +335,8 @@ class ServiceEmbedding:
         while True:
             self._reap()  # before any liveness check: a dead child must not look alive
             found = read_discovery(paths)
-            alive = found is not None and self._alive(found)
+            alive = found is not None and (self._kept_reaches(paths, found)
+                                           or self._alive(found))
             if found is not None and alive and found.state == "ready" and found.port:
                 return found
             if (found is not None and found.state == "failed"
