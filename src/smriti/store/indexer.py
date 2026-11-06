@@ -12,7 +12,7 @@ import logging
 import os
 import sqlite3
 import struct
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -114,19 +114,36 @@ def _delete_source(conn: IndexDB, source: str) -> None:
         )
 
 
+# A chunk as index_tree stages it for its write: id, source, heading, heading
+# level, content, start and end line, content hash, trunk distance, and its
+# vector as sqlite-vec stores it (None while pending).
+_Row = tuple[str, str, str, int, str, int, int, str, int, bytes | None]
+
+
+def _row(cid: str, chunk: Any, source: str, distance: int, vector: bytes | None) -> _Row:
+    return (cid, source, chunk.heading, chunk.heading_level, chunk.content,
+            chunk.start_line, chunk.end_line, chunk.content_hash, distance, vector)
+
+
 def _insert_chunk(conn: IndexDB, cid: str, chunk: Any, source: str, distance: int,
                   indexed_at: str, vector: list[float] | None) -> None:
+    """Insert one chunk and its vector (index_file's path; see :func:`_insert_row`)."""
+    blob = _serialize_f32(vector) if vector is not None else None
+    _insert_row(conn, _row(cid, chunk, source, distance, blob), indexed_at)
+
+
+def _insert_row(conn: IndexDB, row: _Row, indexed_at: str) -> None:
     """Insert one chunk and its vector: the one insert path for index_tree and index_file.
 
     A chunk whose vector is pending (None) is still indexed for keyword search.
     """
+    cid, source, heading, level, content, start, end, content_hash, distance, blob = row
     conn.execute(
         """INSERT OR REPLACE INTO chunks
            (id, source, heading, heading_level, content,
             start_line, end_line, content_hash, trunk_distance, indexed_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (cid, source, chunk.heading, chunk.heading_level, chunk.content,
-         chunk.start_line, chunk.end_line, chunk.content_hash, distance, indexed_at),
+        (cid, source, heading, level, content, start, end, content_hash, distance, indexed_at),
     )
     if not conn.has_vec:
         return
@@ -138,8 +155,8 @@ def _insert_chunk(conn: IndexDB, cid: str, chunk: Any, source: str, distance: in
     # constraint failed on chunks_vec" — which crashed every incremental
     # index from mid-July until 2026-09-06. Delete-then-insert is idempotent.
     conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
-    if vector is not None:
-        _insert_vector(conn, rowid, vector)
+    if blob is not None:
+        conn.execute("INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)", (rowid, blob))
 
 
 def _insert_vector(conn: IndexDB, rowid: int, vector: Sequence[float]) -> None:
@@ -151,6 +168,64 @@ def _insert_vector(conn: IndexDB, rowid: int, vector: Sequence[float]) -> None:
 
 _migrating = mismatched_identity
 
+# The most chunks index_tree embeds in one call, and holds in memory before
+# its write. A multiple of each in-process provider's own batch (onnx 32,
+# local 512), so every model call sees the texts it saw when a run embedded
+# all its chunks in one call, and the vectors are the same.
+EMBED_BATCH = 512
+
+
+class _Staged:
+    """The chunks a run has embedded, waiting for its write transaction.
+
+    Up to one batch they stay in memory, which covers an incremental run's
+    usual few files; past that they go to a private temporary SQLite
+    database on disk (SQLite deletes it on close), so a full index holds one
+    batch of chunks and vectors at a time however large the tree.
+    """
+
+    def __init__(self, batch: int) -> None:
+        self._batch = batch
+        self._rows: list[_Row] = []
+        self._db: sqlite3.Connection | None = None
+
+    def add(self, rows: list[_Row]) -> None:
+        if self._db is None and len(self._rows) + len(rows) <= self._batch:
+            self._rows.extend(rows)
+            return
+        if self._db is None:
+            self._db = sqlite3.connect("")  # "": a temporary database on disk
+            self._db.execute("PRAGMA journal_mode=OFF")
+            self._db.execute("PRAGMA synchronous=OFF")
+            self._db.execute("CREATE TABLE staged (id, source, heading, heading_level, "
+                             "content, start_line, end_line, content_hash, distance, vector)")
+            rows, self._rows = self._rows + rows, []
+        self._db.executemany("INSERT INTO staged VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        self._db.commit()
+
+    def rows(self) -> Iterator[_Row]:
+        """Every staged chunk, in the order it was embedded."""
+        if self._db is None:
+            yield from self._rows
+            return
+        yield from self._db.execute("SELECT * FROM staged ORDER BY rowid")
+
+    def close(self) -> None:
+        self._rows = []
+        if self._db is not None:
+            self._db.close()
+            self._db = None
+
+
+@dataclass
+class _Plan:
+    """What a run reads: the files it indexes, those it adopts unread, and the
+    records it began from (for the reconcile under the write lock)."""
+
+    to_index: list[tuple[Path, str, os.stat_result]]
+    adopted: list[tuple[str, os.stat_result]]
+    recorded: dict[str, tuple[int, int]]
+
 
 def index_tree(
     *,
@@ -159,7 +234,14 @@ def index_tree(
     db: Path | None = None,
     verbose: bool = False,
 ) -> dict[str, int]:
-    """Index the narada tree.
+    """Index the narada tree: scan, plan, embed, commit.
+
+    Embedding runs in batches of at most :data:`EMBED_BATCH` chunks with no
+    lock held, staging each batch (:class:`_Staged`); the write is one
+    transaction under ``BEGIN IMMEDIATE``, reconciled against the disk with
+    what other writers recorded meanwhile. So searches keep the old index
+    until it commits, a run that fails anywhere leaves it as it was, and a
+    full run's memory stays flat however large the tree.
 
     Parameters
     ----------
@@ -174,7 +256,7 @@ def index_tree(
 
     Returns
     -------
-    dict with keys: scanned, skipped, indexed, chunks, errors
+    dict with keys: scanned, skipped, indexed, chunks, errors, purged
     """
     import time as _time
     from smriti.metrics import get_logger
@@ -200,6 +282,7 @@ def index_tree(
 
     # ── Open / create database ───────────────────────────────────────
     conn = ensure_schema(db, dim)
+    staged = _Staged(EMBED_BATCH)
     try:
         # Identity guard: vectors from two models can't share an index.
         # Different dimensions fail every vector insert (chunks_vec has a
@@ -214,184 +297,12 @@ def index_tree(
                 f"embeds with {ours.describe()}; run 'smriti index --full' to "
                 "migrate the index"
             )
-
-        # ── Scan tree ────────────────────────────────────────────────────
-        root_resolved = root.resolve()
-        scanned_files = [
-            f for f in scan_paths(
-                [str(root)],
-                keep_dir=lambda d: may_hold_indexable(str(d.relative_to(root_resolved))),
-            )
-            if is_indexable(str(f.path.relative_to(root_resolved)))
-        ]
-        stats["scanned"] = len(scanned_files)
-        log.info("Scanned %d files", len(scanned_files))
-
-        # ── Purge sources that are gone or now excluded ──────────────────
-        # Judged against the disk, not this scan, so a scan that misses a
-        # directory once can't wipe its chunks. A full run replaces
-        # everything anyway.
-        indexed = _indexed_files(conn)
-        recorded = _recorded_sources(conn)
-        stats["purged"] = 0
-        if not full:
-            for source in sorted(set(indexed) | set(recorded)):
-                if not is_indexable(source) or not (root / source).is_file():
-                    _delete_source(conn, source)
-                    indexed.pop(source, None)
-                    recorded.pop(source, None)
-                    stats["purged"] += 1
-            if stats["purged"]:
-                conn.commit()
-                log.info("Purged %d sources (deleted or excluded)", stats["purged"])
-
-        # ── Determine which files need (re-)indexing ─────────────────────
-        # Each file is stat'ed before it is read, and that stat is what
-        # gets recorded: an edit made after the read leaves the file
-        # newer than its record, so the next run picks it up.
-        to_index: list[tuple[Path, str, os.stat_result]] = []
-        adopted: list[tuple[str, os.stat_result]] = []
-        # A source whose vectors are pending is read and embedded again,
-        # unchanged or not: this run is one of the ways its vectors arrive.
-        # Not without sqlite-vec, where its vectors still couldn't be stored.
-        pending = _pending_sources(conn) if conn.has_vec else set()
-
-        for sf in scanned_files:
-            rel_source = str(sf.path.relative_to(root_resolved)).replace("\\", "/")
-            try:
-                st = sf.path.stat()
-            except OSError:
-                continue  # gone since the scan; the next run purges it
-            if not full:
-                was = recorded.get(rel_source)
-                if was is not None:
-                    if was == (st.st_mtime_ns, st.st_size) and rel_source not in pending:
-                        stats["skipped"] += 1
-                        continue
-                elif rel_source in indexed:
-                    # Indexed before sources were recorded: trust the old
-                    # mtime test this once, and record the file as it is.
-                    prev_dt = datetime.fromisoformat(indexed[rel_source])
-                    if datetime.fromtimestamp(st.st_mtime, tz=timezone.utc) <= prev_dt:
-                        adopted.append((rel_source, st))
-                        stats["skipped"] += 1
-                        continue
-            to_index.append((sf.path, rel_source, st))
-
-        if to_index:
-            log.info("Indexing %d files (%d skipped)", len(to_index), stats["skipped"])
-        else:
-            log.info("Nothing to index (all files up to date)")
-
-        # ── Chunk all files ──────────────────────────────────────────────
-        all_chunks = []
-        read_sources: list[tuple[str, os.stat_result]] = []
-
-        for fpath, rel_source, st in to_index:
-            try:
-                text = fpath.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError) as exc:
-                log.warning("Could not read %s: %s", fpath, exc)
-                stats["errors"] += 1
-                continue
-
-            chunks = chunk_markdown(text, source=rel_source)
-            for c in chunks:
-                cid = compute_chunk_id(
-                    c.source, c.start_line, c.end_line, c.content_hash, provider.model_name
-                )
-                all_chunks.append((cid, c, rel_source, fpath))
-            read_sources.append((rel_source, st))
-
-        # ── Embed, with no write lock held ───────────────────────────────
-        texts = [c.content for _, c, _, _ in all_chunks]
-        if texts:
-            log.info("Embedding %d chunks...", len(texts))
-        embeddings = embedding.embed(provider, texts).vectors if texts else []
-
-        # ── Write, in one transaction ────────────────────────────────────
-        # Searches keep seeing the old index until this commits, and a run
-        # that fails anywhere leaves it as it was: a full run used to
-        # commit its delete-everything before the embed (minutes), so
-        # search found nothing meanwhile, and nothing at all if it crashed.
-        now = datetime.now(timezone.utc).isoformat()
-        conn.commit()
-        conn.execute("BEGIN IMMEDIATE")
-        # Other writers (index_file, behind every smriti_write) may have
-        # published sources while this run embedded. Read under the write
-        # lock. A later commit isn't a later read, so the disk decides: for
-        # a source someone else re-recorded, this run's read replaces theirs
-        # only when it is exactly the file as it is now. Otherwise theirs
-        # stays (it may be newer), and if neither is current the next run,
-        # finding the disk unlike the record, indexes it again.
-        now_recorded = _recorded_sources(conn)
-        ours_read = {src: (st.st_mtime_ns, st.st_size) for src, st in read_sources}
-        keep = {
-            s for s, rec in now_recorded.items()
-            if rec != recorded.get(s)
-            and (s not in ours_read or _disk_record(root / s) != ours_read[s])
-        }
-        # Checked again under the write lock: another writer may have given
-        # the index its first vectors, or migrated it, while this run embedded.
-        migrating = _migrating(conn, ours)
-        if migrating is not None and not full:
-            raise StaleEmbedding(
-                f"the index moved to {migrating.describe()} while this run embedded with "
-                f"{ours.describe()}; nothing was written. Run 'smriti index' again")
-        resize = conn.has_vec and vec_table_dimension(conn) != dim
-        if full and (migrating is not None or resize):
-            # Every stored vector is another model's (or the wrong size), so
-            # everything goes, including what others published meanwhile;
-            # their records go with them, so the next run embeds them again.
-            keep = set()
-            if conn.has_vec:
-                conn.execute("DROP TABLE IF EXISTS chunks_vec")
-                conn.execute(
-                    f"CREATE VIRTUAL TABLE chunks_vec USING vec0(embedding float[{dim}])")
-        # The index's identity, recorded in the transaction that writes these vectors.
-        if full and migrating is not None:
-            write_identity(conn, ours)
-        else:
-            bind_identity(conn, ours)
-        if full and not keep:
-            conn.execute("DELETE FROM chunks")
-            if conn.has_vec:
-                conn.execute("DELETE FROM chunks_vec")
-            if conn.has_fts:
-                # The delete trigger already removed each row; this clears
-                # any entries an old crash left without a chunk.
-                conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')")
-            conn.execute("DELETE FROM sources")
-        else:
-            replaced = (set(_indexed_files(conn)) | set(now_recorded) if full
-                        else {src for src, _ in read_sources})
-            for src in replaced - keep:
-                _delete_source(conn, src)
-        written = [(src, st) for src, st in adopted + read_sources if src not in keep]
-        for src, st in written:
-            _record_source(conn, src, st)
-        to_write = [(chunk, vector) for chunk, vector in zip(all_chunks, embeddings, strict=True)
-                    if chunk[2] not in keep]
-
-        for (cid, c, rel_source, fpath), vector in to_write:
-            _insert_chunk(conn, cid, c, rel_source, trunk_distance(fpath, root), now, vector)
-        if not conn.has_vec:
-            # No vectors were stored: what this run wrote is pending, so the
-            # repairs fill it in once sqlite-vec is installed.
-            for src, _ in written:
-                conn.execute("UPDATE sources SET vectors = 0 WHERE source = ? AND EXISTS "
-                             "(SELECT 1 FROM chunks WHERE source = ?)", (src, src))
-
-        stats["indexed"] = sum(1 for src, _ in read_sources if src not in keep)
-        stats["chunks"] = len(to_write)
-
-        # ── Update metadata ──────────────────────────────────────────────
-        conn.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_indexed', ?)",
-            (now,),
-        )
-
-        conn.commit()
+        files = _scan(root)
+        stats["scanned"] = len(files)
+        log.info("Scanned %d files", len(files))
+        plan = _plan(conn, files, root, full, stats)
+        read_sources = _embed_files(provider, plan, root, staged, stats)
+        _commit(conn, ours, dim, full, root, plan, read_sources, staged, stats)
         # Keep planner statistics fresh on the (growing) chunks table so
         # the source index actually gets picked. Cheap no-op when stats
         # are already current; runs on the nightly cadence.
@@ -400,22 +311,6 @@ def index_tree(
         except sqlite3.OperationalError:
             pass
         conn.close()
-
-        log.info(
-            "Indexed %d files → %d chunks (model=%s)",
-            stats["indexed"],
-            stats["chunks"],
-            provider.model_name,
-        )
-        metrics = get_logger()
-        metrics.log(
-            "index_completed",
-            **stats,
-            elapsed_ms=int((_time.monotonic() - t0) * 1000),
-            model=provider.model_name,
-            dimension=dim,
-        )
-        return stats
     except BaseException:
         # Never leak an open write transaction from a long-lived
         # process: a mid-index crash with the connection left open
@@ -430,6 +325,227 @@ def index_tree(
             except sqlite3.Error as exc:  # the original failure is what propagates
                 log.warning("could not close the index after a failure: %s", exc)
         raise
+    finally:
+        staged.close()
+
+    log.info(
+        "Indexed %d files → %d chunks (model=%s)",
+        stats["indexed"],
+        stats["chunks"],
+        provider.model_name,
+    )
+    get_logger().log(
+        "index_completed",
+        **stats,
+        elapsed_ms=int((_time.monotonic() - t0) * 1000),
+        model=provider.model_name,
+        dimension=dim,
+    )
+    return stats
+
+
+def _scan(root: Path) -> list[Path]:
+    """The indexable files under ``root``, walking only directories that may hold one."""
+    root_resolved = root.resolve()
+    return [
+        f.path for f in scan_paths(
+            [str(root)],
+            keep_dir=lambda d: may_hold_indexable(str(d.relative_to(root_resolved))),
+        )
+        if is_indexable(str(f.path.relative_to(root_resolved)))
+    ]
+
+
+def _plan(conn: IndexDB, files: list[Path], root: Path, full: bool,
+          stats: dict[str, int]) -> _Plan:
+    """Purge what is gone, then decide which files this run reads."""
+    root_resolved = root.resolve()
+    # ── Purge sources that are gone or now excluded ──────────────────
+    # Judged against the disk, not this scan, so a scan that misses a
+    # directory once can't wipe its chunks. A full run replaces
+    # everything anyway.
+    indexed = _indexed_files(conn)
+    recorded = _recorded_sources(conn)
+    stats["purged"] = 0
+    if not full:
+        for source in sorted(set(indexed) | set(recorded)):
+            if not is_indexable(source) or not (root / source).is_file():
+                _delete_source(conn, source)
+                indexed.pop(source, None)
+                recorded.pop(source, None)
+                stats["purged"] += 1
+        if stats["purged"]:
+            conn.commit()
+            log.info("Purged %d sources (deleted or excluded)", stats["purged"])
+
+    # ── Determine which files need (re-)indexing ─────────────────────
+    # Each file is stat'ed before it is read, and that stat is what
+    # gets recorded: an edit made after the read leaves the file
+    # newer than its record, so the next run picks it up.
+    to_index: list[tuple[Path, str, os.stat_result]] = []
+    adopted: list[tuple[str, os.stat_result]] = []
+    # A source whose vectors are pending is read and embedded again,
+    # unchanged or not: this run is one of the ways its vectors arrive.
+    # Not without sqlite-vec, where its vectors still couldn't be stored.
+    pending = _pending_sources(conn) if conn.has_vec else set()
+
+    for path in files:
+        rel_source = str(path.relative_to(root_resolved)).replace("\\", "/")
+        try:
+            st = path.stat()
+        except OSError:
+            continue  # gone since the scan; the next run purges it
+        if not full:
+            was = recorded.get(rel_source)
+            if was is not None:
+                if was == (st.st_mtime_ns, st.st_size) and rel_source not in pending:
+                    stats["skipped"] += 1
+                    continue
+            elif rel_source in indexed:
+                # Indexed before sources were recorded: trust the old
+                # mtime test this once, and record the file as it is.
+                prev_dt = datetime.fromisoformat(indexed[rel_source])
+                if datetime.fromtimestamp(st.st_mtime, tz=timezone.utc) <= prev_dt:
+                    adopted.append((rel_source, st))
+                    stats["skipped"] += 1
+                    continue
+        to_index.append((path, rel_source, st))
+
+    if to_index:
+        log.info("Indexing %d files (%d skipped)", len(to_index), stats["skipped"])
+    else:
+        log.info("Nothing to index (all files up to date)")
+    return _Plan(to_index, adopted, recorded)
+
+
+def _embed_files(provider: embedding.EmbeddingProvider, plan: _Plan, root: Path,
+                 staged: _Staged, stats: dict[str, int]) -> list[tuple[str, os.stat_result]]:
+    """Read, chunk and embed the planned files, staging each batch; the sources read.
+
+    With no lock held. A batch closes at every :data:`EMBED_BATCH` chunks of
+    the run, across file boundaries, so the model is called on the same
+    texts as by one call for every chunk.
+    """
+    read_sources: list[tuple[str, os.stat_result]] = []
+    waiting: list[tuple[str, Any, str, int]] = []  # id, chunk, source, trunk distance
+    embedded = 0
+
+    def flush() -> None:
+        nonlocal embedded
+        vectors = embedding.embed(provider, [c.content for _, c, _, _ in waiting]).vectors
+        staged.add([_row(cid, c, src, dist, _serialize_f32(vector))
+                    for (cid, c, src, dist), vector in zip(waiting, vectors, strict=True)])
+        embedded += len(waiting)
+        waiting.clear()
+
+    for fpath, rel_source, st in plan.to_index:
+        try:
+            text = fpath.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            log.warning("Could not read %s: %s", fpath, exc)
+            stats["errors"] += 1
+            continue
+        distance = trunk_distance(fpath, root)
+        for c in chunk_markdown(text, source=rel_source):
+            cid = compute_chunk_id(
+                c.source, c.start_line, c.end_line, c.content_hash, provider.model_name
+            )
+            waiting.append((cid, c, rel_source, distance))
+            if len(waiting) >= EMBED_BATCH:
+                flush()
+        read_sources.append((rel_source, st))
+    if waiting:
+        flush()
+    if embedded:
+        log.info("Embedded %d chunks", embedded)
+    return read_sources
+
+
+def _commit(conn: IndexDB, ours: EmbeddingIdentity, dim: int, full: bool, root: Path,
+            plan: _Plan, read_sources: list[tuple[str, os.stat_result]], staged: _Staged,
+            stats: dict[str, int]) -> None:
+    """Write the run in one transaction, reconciled with what other writers recorded."""
+    # Searches keep seeing the old index until this commits, and a run
+    # that fails anywhere leaves it as it was: a full run used to
+    # commit its delete-everything before the embed (minutes), so
+    # search found nothing meanwhile, and nothing at all if it crashed.
+    now = datetime.now(timezone.utc).isoformat()
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    # Other writers (index_file, behind every smriti_write) may have
+    # published sources while this run embedded. Read under the write
+    # lock. A later commit isn't a later read, so the disk decides: for
+    # a source someone else re-recorded, this run's read replaces theirs
+    # only when it is exactly the file as it is now. Otherwise theirs
+    # stays (it may be newer), and if neither is current the next run,
+    # finding the disk unlike the record, indexes it again.
+    now_recorded = _recorded_sources(conn)
+    ours_read = {src: (st.st_mtime_ns, st.st_size) for src, st in read_sources}
+    keep = {
+        s for s, rec in now_recorded.items()
+        if rec != plan.recorded.get(s)
+        and (s not in ours_read or _disk_record(root / s) != ours_read[s])
+    }
+    # Checked again under the write lock: another writer may have given
+    # the index its first vectors, or migrated it, while this run embedded.
+    migrating = _migrating(conn, ours)
+    if migrating is not None and not full:
+        raise StaleEmbedding(
+            f"the index moved to {migrating.describe()} while this run embedded with "
+            f"{ours.describe()}; nothing was written. Run 'smriti index' again")
+    resize = conn.has_vec and vec_table_dimension(conn) != dim
+    if full and (migrating is not None or resize):
+        # Every stored vector is another model's (or the wrong size), so
+        # everything goes, including what others published meanwhile;
+        # their records go with them, so the next run embeds them again.
+        keep = set()
+        if conn.has_vec:
+            conn.execute("DROP TABLE IF EXISTS chunks_vec")
+            conn.execute(
+                f"CREATE VIRTUAL TABLE chunks_vec USING vec0(embedding float[{dim}])")
+    # The index's identity, recorded in the transaction that writes these vectors.
+    if full and migrating is not None:
+        write_identity(conn, ours)
+    else:
+        bind_identity(conn, ours)
+    if full and not keep:
+        conn.execute("DELETE FROM chunks")
+        if conn.has_vec:
+            conn.execute("DELETE FROM chunks_vec")
+        if conn.has_fts:
+            # The delete trigger already removed each row; this clears
+            # any entries an old crash left without a chunk.
+            conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('delete-all')")
+        conn.execute("DELETE FROM sources")
+    else:
+        replaced = (set(_indexed_files(conn)) | set(now_recorded) if full
+                    else {src for src, _ in read_sources})
+        for src in replaced - keep:
+            _delete_source(conn, src)
+    written = [(src, st) for src, st in plan.adopted + read_sources if src not in keep]
+    for src, st in written:
+        _record_source(conn, src, st)
+    chunks = 0
+    for row in staged.rows():
+        if row[1] not in keep:
+            _insert_row(conn, row, now)
+            chunks += 1
+    if not conn.has_vec:
+        # No vectors were stored: what this run wrote is pending, so the
+        # repairs fill it in once sqlite-vec is installed.
+        for src, _ in written:
+            conn.execute("UPDATE sources SET vectors = 0 WHERE source = ? AND EXISTS "
+                         "(SELECT 1 FROM chunks WHERE source = ?)", (src, src))
+
+    stats["indexed"] = sum(1 for src, _ in read_sources if src not in keep)
+    stats["chunks"] = chunks
+
+    # ── Update metadata ──────────────────────────────────────────────
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_indexed', ?)",
+        (now,),
+    )
+    conn.commit()
 
 
 @dataclass(frozen=True)
