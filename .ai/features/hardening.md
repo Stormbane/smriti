@@ -713,6 +713,74 @@ a recheck.
   (9,478 characters). The nightly's new costs, measured apart: a typical
   day's render 20 ms more, the largest day's 1.3 s more; a digest's or a
   rollup's mask under a millisecond.
+- **H12.6 implemented** (2026-11-06, `hardening/h12c`; not yet reviewed or
+  merged). The writer closes a torn last line before appending (the fragment
+  becomes a line of its own), and the state records each day-file's lines that
+  aren't records and the repairs; `smriti status` shows them. Collect's
+  docstring states the persistence order: append, then fsync the day-files the
+  pass wrote, then save the state by atomic replace, so the saved offsets never
+  lead the log on disk (before, nothing ordered them, and a crash of the machine
+  could lose turns the state had passed). Fault injection runs real capture in
+  a child killed with `os._exit` mid-append, before the state save and during
+  it: every turn readable after the next pass, none twice, none glued. A record
+  longer than one 8 MiB read is skipped once its newline is written, 1 MiB at a
+  time (peak memory one read, tested at 40 MiB), counted as a parse error and
+  recorded (offset, bytes, time); until then it is waited for, and later passes
+  read only what came since. A file that grew in two passes while its offset
+  stayed put is stuck: logged once, and named in `smriti status` with the files
+  waiting on a long record and the records skipped. On the reference install
+  one Codex rollout has been stuck this way since 2026-10-27. Beyond the brief:
+  a pass reads each day-file once (it re-read the whole file for every source
+  file with new turns), which pays for the fsync; the same turn twice in one
+  batch is written once; a malformed state entry is read again from the start
+  instead of failing the load. Not done here: the row's "service's counters are
+  locked" (embedding service), which this branch's brief didn't include.
+- **H12.17 implemented** (same branch). The functional audit's date was late.
+  Every Codex CLI 0.145 session on the reference install was captured; from
+  0.153.2 (installed 2026-09-04 there) no CLI session gave a turn, and the
+  rollouts 0.154 wrote, untouched since, are in the "paginated" history mode:
+  turns are `event_msg`/`item_completed` records carrying a `UserMessage` or an
+  `AgentMessage` item, with no `user_message` or `agent_message` event. The
+  last real Codex turn in the reference log is from 2026-09-10. 0.163
+  (2026-10-22) then rewrote older rollouts into the paginated mode, compressed
+  as `.jsonl.zst`, which the glob doesn't match. The adapter reads both encodings with unchanged ids (on 40
+  rewritten rollouts the reference install had captured, every id matched; the
+  legacy fixture's ids are pinned to `fc27d39`'s), keeps a message written in
+  both once, and gives no turns for a session whose cwd is smriti's
+  llm-workdir: the collector's path exclusion never covered Codex, so the
+  nightly's codex fallback would have fed its digests back. Backfill: `smriti
+  logd --rescan SOURCE` (procedure below). A read-only dry run on the reference
+  install: 316 new turns over 2026-10-15..11-06, 14,490 already held; in the
+  `.zst` archives (2026-09-04..10-15), 690 more in files under 15 MB compressed,
+  and ten larger archives unread. Found on the way, not fixed: Codex Desktop's
+  import of Claude Code sessions put 15,119 turns into 2026-10-22's log, all
+  stamped with the import's minute (629 of them smriti's own llm-workdir
+  sessions; 13% of the rest match a captured Claude turn's text). Writers never
+  rewrite a day-file, so removing them is the maintainer's call.
+- **Capture benchmark** (`scripts/bench_capture.py`, 2026-11-06; 20,000 Claude
+  and 20,000 legacy Codex lines, six alternating rounds, medians; master
+  `fc27d39`, this branch `fdf53db`, pre-hardening `13ac56a`): the pass that
+  finds everything new 3641 / 2941 / 3735 ms; an idle pass 18.5 / 19.0 / 18.5
+  ms (ten rounds at 2,000 lines: 18.9 against 18.5); a pass after 2% more lines
+  1302 / 206 / 1341 ms; the same turns appended by each. The paginated encoding
+  on this branch: 2899 ms, the same turns. No measure slower than master or
+  `13ac56a` beyond noise.
+- **Backfilling Codex turns** (H12.17). After this branch is deployed and logd
+  restarted (a running daemon keeps the old code; `smriti logd --ensure` won't
+  restart it): `smriti logd --rescan codex`. It sets the codex source's offsets
+  in `log/.state.json` to 0 under the writer lock and runs one pass; files over
+  8 MiB finish over the daemon's next passes. It appends only turns the day-log
+  doesn't hold, to the days they belong to, and marks them dirty, so the next
+  nights re-render and re-digest those days (ten digests a night, newest first)
+  and rebuild their weeks and months. Safe to repeat. To see its effect first,
+  run it with `SMRITI_ROOT` on a copy of `log/` and `.smriti/daylog.json`. For
+  the archived sessions (2026-09-04..10-15): decompress copies of the
+  `.jsonl.zst` files, keeping their names and `YYYY/MM/DD` layout, into a
+  scratch directory (`zstd -d`; never in `~/.codex`), add it as `"extra_sources":
+  [{"name": "codex-archive", "kind": "codex_rollout", "glob":
+  "<dir>/*/*/*/rollout-*.jsonl"}]`, run `smriti logd --once` until a pass adds
+  nothing, then remove the source and the copies. Ids match the rewritten
+  records, so what the log holds is dropped.
 - **H11.1, H11.5, H11.10 done** (2026-11-06, merged at `498ce0e` after a Codex diff
   review; its two findings, the capture override and the metrics scrub, fixed). Capture is off unless `daylog.json` says
   `"capture": true` (the default sources; the installer's `--capture` writes it) or

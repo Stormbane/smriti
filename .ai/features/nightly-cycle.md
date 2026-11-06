@@ -19,6 +19,20 @@ introspection work.
 > zone, daylight saving included, unless `SMRITI_DAY_UTC_OFFSET` or daylog.json's
 > `timezone` overrides it. The fixed UTC+10 below was the original contract.
 
+> **Since 2026-11-06 (hardening H12.6, H12.17):** capture recovers from bad input, and
+> says when it can't. The writer closes a torn last line of a day-file before appending,
+> and the day-files a pass wrote reach the disk before the state that covers them is
+> saved. A transcript record longer than one 8 MiB read (a pasted image) is skipped,
+> counted as a parse error and recorded in the file's state, instead of being read again
+> forever; until its newline is written it is waited for. `smriti status` names a file
+> that grows while its offset doesn't move, one waiting for the end of an over-long
+> record, the records skipped, and the day-files' corrupt lines. The Codex adapter reads
+> both encodings Codex has written: the `user_message`/`agent_message` events, and the
+> `item_completed` `UserMessage`/`AgentMessage` items of the "paginated" history mode
+> (Codex CLI 0.153 on), which nothing was captured from until H12.17; a session whose
+> cwd is smriti's own llm-workdir gives no turns. `smriti logd --rescan SOURCE` reads
+> one source's files again from the start, to backfill; dedup drops what the log holds.
+
 ## Goal
 
 Replace the over-ambitious sleep pipeline with a narrow cycle built on a
@@ -164,11 +178,14 @@ modules**, appends to the day-log within seconds.
   time, last append time, parse-error count. Size regression or fingerprint
   mismatch ⇒ treat as a new file and re-read from zero (dedup by turn `id`
   absorbs the overlap). Only complete newline-terminated lines are consumed;
-  a partial tail is left for the next pass.
+  a partial tail is left for the next pass. A line longer than one read is
+  skipped once its newline is written, and counted (H12.6).
 - **Crash safety by dedup, not transactions.** Marks may lag appends;
   re-reads after crash re-emit turns whose `id` already exists and every
   writer drops known IDs (per-day in-memory set, rebuilt from the day-file
-  on start). No fsync choreography needed.
+  on start). Marks never lead appends: a pass fsyncs the day-files it wrote,
+  once each, before saving the state (H12.6; before, nothing ordered them on
+  disk, so a crash of the machine could lose turns the state had passed).
 - Installed as an auto-starting, auto-restarting background task. Takes the
   writer lock per append burst (see Constraints) and releases it between
   passes, so nightly runs complete while the daemon stays up.
