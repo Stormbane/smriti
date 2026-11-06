@@ -245,6 +245,22 @@ def test_cli_explicit_baseline(tmp_path: Path) -> None:
     assert set(report) == {"timestamp", "search"}
 
 
+def test_cli_search_flag_runs_the_default_mode(capsys: Any) -> None:
+    """H12.16: `--search` chose the search cases until the other modes went (H3); it
+    stopped parsing then. It parses again and runs what `smriti eval` runs."""
+    from smriti.cli import main
+
+    def cases(argv: list[str]) -> list[tuple[str, bool]]:
+        assert main(argv) == 0
+        out = capsys.readouterr().out
+        report = json.loads(out[out.index("{"):])
+        return [(case["id"], case["passed"]) for case in report["search"]["cases"]]
+
+    plain = cases(["eval", "--json"])
+    assert len(plain) == len(SEARCH_CASES)
+    assert cases(["eval", "--search", "--json"]) == plain
+
+
 def test_cli_does_not_initialize_live_vault(monkeypatch: pytest.MonkeyPatch) -> None:
     from smriti.cli import main
     from smriti.core import tree

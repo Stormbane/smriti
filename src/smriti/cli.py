@@ -598,6 +598,10 @@ def main(argv: list[str] | None = None) -> int:
     p_eval = sub.add_parser(
         "eval", help="Run the search evaluation cases against a synthetic fixture"
     )
+    # The search cases are the only mode since the others went (H3); the flag that
+    # chose them still parses, so a script written for it runs the same cases.
+    p_eval.add_argument("--search", action="store_true",
+                        help="the search cases (the default and only mode)")
     p_eval.add_argument("--json", action="store_true", help="JSON output")
     p_eval.add_argument(
         "--baseline", nargs="?", const=True, metavar="PATH",
