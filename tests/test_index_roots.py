@@ -20,6 +20,7 @@ import pytest
 from smriti._vendored.memsearch.embeddings.stub import StubEmbedding
 from smriti.embed import provider as embedding
 from smriti.store.indexer import index_file_result, index_tree
+from tests._vec import needs_vec
 
 REAL_EMBEDDER = embedding.embedder
 
@@ -112,6 +113,7 @@ def test_index_file_on_another_root_leaves_this_index_alone(roots: tuple[Path, P
     assert _sources(a) == {"identity.md", "notes/kite.md"}
 
 
+@needs_vec  # the result reports stored vectors
 def test_index_file_embeds_with_the_service_of_its_root(
         roots: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
     """Through the service, a write to root B asks B's service, never A's
