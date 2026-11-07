@@ -1,7 +1,9 @@
 """The private store keeps its key out of git and never loses a write."""
 from __future__ import annotations
 
+import shutil
 import stat
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -216,6 +218,44 @@ def test_a_migration_cut_short_after_the_key_is_finished_by_the_next(
     PrivateStore(tmp_path).init()
     assert (private / "README.md").read_text(encoding="utf-8") == _MIGRATED
     assert (private / LEGACY_KEY_NOTE).exists() and "git history" in caplog.text
+
+
+@pytest.mark.parametrize("first_use", ["write", "read"])
+def test_the_ignore_rule_is_in_place_before_a_moved_key_is_written(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first_use: str) -> None:
+    """Codex review of H13.9: a write or read without init moved the key to .key with no
+    private/.gitignore, so the next backup could commit it."""
+    import os
+
+    from cryptography.fernet import Fernet
+
+    private, key = _legacy(tmp_path)
+    old = private / "2026" / "2026-04-12-001.md.enc"
+    old.parent.mkdir()
+    old.write_bytes(Fernet(key.encode("ascii")).encrypt(b"from the old install"))
+    ignore = private / ".gitignore"
+    real_open = os.open
+    ignored_when_written: list[bool] = []
+
+    def watching(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        if Path(str(path)).name == ".key" and flags & os.O_CREAT:
+            ignored_when_written.append(
+                ignore.exists() and ".key" in ignore.read_text(encoding="utf-8").split())
+        return real_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", watching)
+    store = PrivateStore(tmp_path)  # no init: the first use moves the key
+    if first_use == "write":
+        store.write("new", entity="Ari", session_id="s1")
+    else:
+        consent = store.issue_consent(session_id="s1", reason="test")
+        assert store.read_with_consent(old, consent) == "from the old install"
+    monkeypatch.undo()
+    assert ignored_when_written == [True]
+    if shutil.which("git") is not None:
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        done = subprocess.run(["git", "check-ignore", "-q", "private/.key"], cwd=tmp_path)
+        assert done.returncode == 0, "git would commit the moved key"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes; Windows relies on ACLs")

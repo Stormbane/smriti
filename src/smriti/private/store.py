@@ -205,12 +205,12 @@ class PrivateStore:
         Under the README's edit lock, from finding the key to the README's
         rewrite, and found again once the lock is held: two commands that
         start together migrate once, and the second finds the key gone. The
-        key is written to `.key` as :meth:`init` writes a new one (exclusive
-        create, owner-only on POSIX), and its line is taken out of the
-        README. The README was committed, so the key is still in git
-        history: :data:`LEGACY_KEY_WARNING` is logged, and
-        :data:`LEGACY_KEY_NOTE` left in `private/` (``smriti status`` shows
-        it) until the user has rotated the key and deletes it.
+        `.key` ignore rule goes in first; then the key is written to `.key` as
+        :meth:`init` writes a new one (exclusive create, owner-only on POSIX),
+        and its line is taken out of the README. The README was committed, so
+        the key is still in git history: :data:`LEGACY_KEY_WARNING` is logged,
+        and :data:`LEGACY_KEY_NOTE` left in `private/` (``smriti status``
+        shows it) until the user has rotated the key and deletes it.
 
         A `.key` already there wins: if it holds another key, the README is
         left as it is (and that is logged); if it holds this one (a
@@ -225,6 +225,7 @@ class PrivateStore:
             if found is None:
                 return  # another command moved it while this one waited
             _line, key = found
+            self._ignore_key()
             key_path = self.private_root / _KEY_FILE
             try:
                 fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
