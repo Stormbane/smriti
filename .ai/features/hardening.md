@@ -927,6 +927,96 @@ a recheck.
   meets a replace reads "no service": a spurious throttled spawn, or one "not
   running" without spawn): `read_discovery` could retry a PermissionError
   briefly, in `hardening/h12s`, which owns `smriti/embed`.
+- **H12.3 implemented** (2026-11-07, `hardening/h12s`; not yet reviewed or
+  merged). A query word with a letter or digit outside ASCII is kept whole, less
+  the punctuation at its ends, and every term is matched as a quoted FTS5 phrase,
+  inner quotes doubled (`fts_match`), so unicode61 splits and folds it as it did
+  the indexed text: `café` is `cafe`, `स्मृति` three tokens (its vowel signs and
+  virama are separators to unicode61), `記憶` one. Such a word is a term however
+  short. Past 12 terms the rarest are still kept through fts5vocab: a word outside
+  ASCII is looked up by the tokens SQLite's own tokenizer makes of it, read from a
+  private in-memory FTS5 table (0.6 ms, only then). Every other word is stripped
+  to `[A-Za-z0-9_]` as before, so an ASCII query asks for exactly what it did; a
+  test holds the terms and the MATCH string to the old rule over 500
+  punctuation-heavy and fuzzed queries, and on a copy of the reference index the
+  keyword-only top 10 (sources, headings, scores) of 21 ASCII queries, ten of them
+  punctuation-heavy, are identical to master's. `café naïve résumé` found 1 chunk
+  by keyword there, now 10; `Narada नारद` now finds the mantra pages. Where it
+  differs from the brief: internal ASCII punctuation is still glued as before
+  (`e.g.` is `eg`, `O'Brien` is `obrien`, which FTS5 indexed as `o` and `brien`):
+  quoting those too would change ASCII results, which the brief holds fixed. A
+  word outside ASCII with punctuation inside (`l'été`, `crème"brûlée`) is a phrase.
+- **H12.5 implemented** (same branch). `smriti.embed.provider` is the one
+  embedding API: `embedder()`, `embed()`, `failure_reason()`,
+  `in_process_embeddings(db=, rebuild=)`, `local_provider()`, `forget_provider()`,
+  and `provider_keys()`, the one rule, which the indexer, search and the service
+  all ask. **The rule:** the provider the index records, for everything that
+  serves the existing index (searches, writes, repairs, the service, an
+  incremental `smriti index`); `SMRITI_EMBED_PROVIDER` only for an index that
+  records none, or a rebuild (`index_tree(full=True)`, so `SMRITI_EMBED_PROVIDER=X
+  smriti index --full` migrates to X as before); else the auto order. A rebuild
+  without the override keeps the recorded provider. An incremental run with a
+  different override now indexes with the recorded model and warns once, where it
+  refused ("run 'smriti index --full'") and an in-process search went
+  keyword-only. One model is kept per process, as the cache did. A test holds the
+  service, an in-process search or write and an incremental run to the rule for
+  every pairing of record and override (12), and the migration to the full run
+  alone. No private names across packages: besides the embedding names, the
+  process probe is `smriti.core.procs.pid_alive` (logd and the embedding runtime
+  took it from the day-log lock), `resolve_qmd_cmd`, `ENCODED_RE`, and
+  `metrics.logging_to` for the eval sandbox's logger swap; the CLI's morning
+  imports had gone with H12.2. `tests/test_module_boundaries.py` scans `src` and
+  the profile (AST) for `from smriti.<a>... import _name`, `smriti.<a>..._name`
+  and `m._name` through an alias, across top-level packages. `serverInfo.version`
+  is `smriti.__version__` (a test holds it to pyproject's); `smriti_add_todo`
+  says "whole phrase"; `search_with_status` builds its results and logs once, and
+  its keyword leg fetches through `_fetch_candidate`.
+- **H12.14 implemented** (same branch). `index_tree` is `_scan`, `_plan` (the
+  purge, then what to read), `_embed_files` (read, chunk, embed, no lock held) and
+  `_commit` (the one `BEGIN IMMEDIATE` transaction, reconciled against the disk),
+  with every guarantee `tests/test_store.py` pins kept. It embeds in batches of
+  `EMBED_BATCH = 512` chunks, closed at every 512 chunks of the run across files: a
+  multiple of each in-process provider's own batch (onnx 32, local 512), so the
+  model sees the same texts per call as when a run embedded everything at once.
+  Batches are staged in memory up to one batch (an incremental run's usual few
+  files), then in a temporary SQLite database on disk that SQLite deletes on
+  close; the commit streams them through the one insert path. On 20,000 stub
+  chunks Python's allocations peak at 19 MB (was 270 MB; working set 93 MB, was
+  1.15 GB). `tests/test_index_batches.py`: the cap, a batched index equal to a
+  one-call one, and the reconcile, the free write lock and a failed rebuild on the
+  path that stages on disk; `tests/test_index_memory.py` (slow, about 2 min)
+  indexes 101,000 chunks under a 64 MB ceiling. `smriti index --full` on copies of
+  the reference tree (1,180 files, 19,888 chunks, the `local` model), alternating
+  A B B A: master 163.2 and 81.4 s, this branch 149.2 and 82.6 s (the first pair on
+  a busy machine); peak RSS 1,473-1,476 MB against 1,116-1,119 MB; the two indexes
+  identical, chunks and vector bytes. With H12.5 this drops `NOT_YET` from
+  `tests/test_broad_excepts.py`: the indexer's three re-raising `except
+  BaseException` now give their reason.
+- **The discovery file** (same branch; the follow-up `hardening/h12r` found).
+  `read_discovery` tries a refused read (Windows' PermissionError while
+  `os.replace` swaps the record in) again for up to 50 ms, in waits of 5, 10, 15
+  and 20 ms; only a missing, still refused or malformed file is "no service".
+  Tests simulate one refusal, four, and a lasting one.
+- **Benchmark** (h12s; `scripts/bench.py`, 2026-11-07, the reference tree's copy,
+  17 queries: the 10 before, four punctuation-heavy ASCII ones and three outside
+  ASCII; two alternating rounds; A master `dccdea8`, B `43ffe44`, the last code
+  commit before the rebase). Top 5 the same for all 14 ASCII queries and two of
+  three others (`café naïve résumé` 4/5 shared: its keyword leg now finds
+  something); the wake briefings identical (9,495 characters); 13 tools on both.
+  The run met a busy machine (the reference install's embedding service loading
+  its model, two voice workers and another branch's mypy started while it ran),
+  and B's wake (1.47 and 5.19 s against 0.90 and 0.83), `smriti status` (1.51, 1.62
+  s against 0.32, 0.34), CLI read (37, 45 s against 14, 13) and unchanged index (60,
+  34 s against 21, 19) came out 2-5 times A's: out of all proportion to the changed
+  code they run (the wake none; the unchanged index less than the 5-file index,
+  which came out 22.48 / 22.64 s). So the flagged measures were taken again on the
+  same copies, alternating: wake 895 / 894 ms (8 runs), `smriti status` 313 / 294 ms (8),
+  unchanged index 38.4 / 22.2 s (4; A 49.2 and 27.7), CLI read 14.5 / 13.9 s (12),
+  warm read p50 289 / 173 ms and p90 413 / 195 (4 sessions; A 170 and 408), write
+  p50 163 / 73 ms (A 90 and 236), first query 776 / 774 ms. MCP initialize: 223 /
+  279 ms in the run, 287 / 326 ms median over ten alternating starts each with
+  spreads 172-827 and 175-397 ms, the same 137 modules imported: noise. No
+  measure slower beyond noise.
 - **H11.1, H11.5, H11.10 done** (2026-11-06, merged at `498ce0e` after a Codex diff
   review; its two findings, the capture override and the metrics scrub, fixed). Capture is off unless `daylog.json` says
   `"capture": true` (the default sources; the installer's `--capture` writes it) or
