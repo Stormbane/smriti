@@ -480,6 +480,19 @@ def _newer_versions_first(conn: IndexDB, ranked: list[_Ranked], hits: set[int],
     return order
 
 
+def _scored_down(ranked: list[_Ranked], keep: set[int], factor: float) -> list[_Ranked]:
+    """``ranked`` with every score but ``keep``'s multiplied by ``factor``, sorted again.
+
+    The search's best vector hit isn't close to the query: each score it
+    speaks for falls under the model's mark (and any threshold above it),
+    in the same order (a stable sort). ``keep``: chunks found by keyword
+    whose vectors are pending, which no similarity measured: a write
+    without vectors stays searchable by keyword, so they keep their scores.
+    """
+    return sorted(((rowid, score if rowid in keep else score * factor, cand)
+                   for rowid, score, cand in ranked), key=lambda x: x[1], reverse=True)
+
+
 def _pending_rowids(conn: IndexDB, ranked: list[_Ranked], hits: set[int]) -> set[int]:
     """The ranked chunks no similarity measured: not vector hits, their source's vectors pending.
 
@@ -653,7 +666,22 @@ def search_with_status(
 
         scored.sort(key=lambda x: x[1], reverse=True)
 
-        # ── Rerank (optional), else the top-k by combined score ─────
+        # ── Is anything close? (a calibrated model only) ─────────────
+        # Decided on every candidate, before any cut to top_k: scoring the
+        # unrelated down reorders them, and a keyword match whose vectors are
+        # pending (no similarity measured it) may then come first.
+        calibration = CALIBRATIONS.get(hits.model) if has_vec else None
+        unrelated_below: float | None = None
+        unmeasured: set[int] = set()
+        factor = 1.0
+        if (calibration is not None and hits.best is not None
+                and hits.best < calibration.unrelated_below):
+            unrelated_below = calibration.unrelated_below
+            unmeasured = _pending_rowids(conn, scored, hits.rowids) if pending else set()
+            factor = max(hits.best, 0.0)
+            scored = _scored_down(scored, unmeasured, factor)
+
+        # ── Rerank (optional), else the combined score ───────────────
         ranked: list[_Ranked] | None = None
         if use_reranker and len(scored) > 1:
             try:
@@ -663,33 +691,23 @@ def search_with_status(
                     {"content": s[2]["content"], "_rowid": s[0], "_cand": s[2]}
                     for s in scored[:candidate_k]
                 ]
+                # All of them back, cut to top_k below, once scored down.
                 ranked = [(item["_rowid"], item.get("score", 0.0), item["_cand"])
-                          for item in rerank(query, rerank_input, top_k=top_k)]
+                          for item in rerank(query, rerank_input, top_k=len(rerank_input))]
             except Exception as exc:  # noqa: BLE001 — logged; the combined scores stand
                 log.warning("Reranker failed; using the combined score: %s", exc)
                 ranked = None
         reranked = ranked is not None
-        ranked = (ranked if ranked is not None else scored)[:top_k]
+        if ranked is None:
+            ranked = scored
+        elif unrelated_below is not None:
+            ranked = _scored_down(ranked, unmeasured, factor)
 
-        # ── What the model's similarities say (a calibrated model only) ──
-        calibration = CALIBRATIONS.get(hits.model) if has_vec else None
-        unrelated_below: float | None = None
-        unmeasured: set[int] = set()
+        # ── The later version first (a calibrated model only) ────────
+        # Among the results returned: the scores, and so the cut, are final.
+        ranked = ranked[:top_k]
         if calibration is not None:
             ranked = _newer_versions_first(conn, ranked, hits.rowids, calibration.same_note)
-            if hits.best is not None and hits.best < calibration.unrelated_below:
-                # Nothing with vectors is close: each score the best similarity
-                # speaks for is scaled by it, so it falls under the mark (and
-                # under any threshold above it), in the same order. A chunk found
-                # by keyword whose vectors are pending wasn't measured: a write
-                # without vectors stays searchable by keyword, so it keeps its
-                # score, and may now rank first.
-                unrelated_below = calibration.unrelated_below
-                unmeasured = _pending_rowids(conn, ranked, hits.rowids) if pending else set()
-                factor = max(hits.best, 0.0)
-                ranked = sorted(((rowid, score if rowid in unmeasured else score * factor, cand)
-                                 for rowid, score, cand in ranked),
-                                key=lambda x: x[1], reverse=True)
     results = [_result(cand, score) for _, score, cand in ranked]
 
     from smriti.metrics import get_logger, query_fields

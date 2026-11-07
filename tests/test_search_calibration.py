@@ -277,3 +277,88 @@ def test_a_keyword_match_whose_vectors_are_pending_is_not_scored_down(
     assert after.results[0].source == "notes/quince.md"
     assert after.unrelated_below == 0.99 and after.unmeasured == 1
     assert "pending" in after.notes()[0] and "keep their scores" in after.notes()[0]
+
+
+@pytest.fixture()
+def pending_behind_unrelated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Six embedded notes unrelated to "quince marmalade" (one text, so they
+    score alike: 0.6 each, above the match), and the match, written while the
+    embedder was down: found by keyword only, at 0.4."""
+    from smriti.store.indexer import index_file_result, index_tree
+
+    root = tmp_path / "tree"
+    (root / "notes").mkdir(parents=True)
+    for name in "abcdef":
+        (root / "notes" / f"{name}.md").write_text(
+            "# Kite\n\nThe enclosure uses captive screws.\n", encoding="utf-8")
+    stub = StubEmbedding()
+    monkeypatch.setattr(embedding, "embedder", lambda: stub)
+    db = root / ".smriti" / "index.db"
+    index_tree(root=root, db=db)
+
+    class Down:
+        model_name, dimension = stub.model_name, stub.dimension
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("the embedding service is starting")
+
+    written = root / "notes" / "quince.md"
+    written.write_text("# Quince\n\nSam's quince marmalade sets overnight.\n", encoding="utf-8")
+    monkeypatch.setattr(embedding, "embedder", lambda: Down())
+    assert index_file_result(written, root=root, db=db).vectors_pending
+    monkeypatch.setattr(embedding, "embedder", lambda: stub)
+    return db
+
+
+def _ranks(db: Path, **kw: object) -> list[tuple[str, float]]:
+    conn = open_readonly(db)
+    try:
+        outcome = search_with_status(conn, "quince marmalade", **kw)  # type: ignore[arg-type]
+    finally:
+        conn.close()
+    return [(r.source, round(r.score, 6)) for r in outcome.results]
+
+
+@needs_vec
+def test_a_pending_match_behind_more_than_top_k_unrelated_hits_is_returned(
+        pending_behind_unrelated: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex recheck of dcbb344 (P2): the results were cut to top_k before the
+    unrelated hits were scored down, so a pending match behind five of them
+    was dropped at the default five, and came first when six were asked for."""
+    db = pending_behind_unrelated
+    before = _ranks(db, use_reranker=False, top_k=10)
+    assert before[-1] == ("notes/quince.md", 0.4)  # last of seven, under six at 0.6
+    assert all(score > 0.4 for _, score in before[:-1])
+
+    _calibrate(monkeypatch, unrelated_below=0.99, same_note=1.0)
+    found = _ranks(db, use_reranker=False)  # the default top_k, 5
+
+    assert len(found) == 5
+    assert found[0] == ("notes/quince.md", 0.4)
+    assert all(score < 0.4 for _, score in found[1:])
+    assert _ranks(db, use_reranker=False, top_k=6)[0] == found[0]
+
+
+@needs_vec
+def test_with_the_reranker_a_pending_match_is_kept_too(
+        pending_behind_unrelated: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI reranks. The reranker's own cut at top_k came before the scaling
+    too; and a pending match outside the reranker's input (the first
+    candidate_k by score) never reached it."""
+    def rerank(query: str, items: list[dict[str, object]],
+               top_k: int = 0) -> list[dict[str, object]]:
+        scored = [dict(item, score=0.5 if "quince" in str(item["content"]) else 0.9)
+                  for item in items]
+        scored.sort(key=lambda x: float(x["score"]), reverse=True)  # type: ignore[arg-type]
+        return scored[:top_k] if top_k > 0 else scored
+
+    monkeypatch.setattr("smriti._vendored.memsearch.reranker.rerank", rerank)
+    db = pending_behind_unrelated
+    assert _ranks(db, top_k=10)[-1] == ("notes/quince.md", 0.5)
+
+    _calibrate(monkeypatch, unrelated_below=0.99, same_note=1.0)
+    found = _ranks(db)
+
+    assert len(found) == 5 and found[0] == ("notes/quince.md", 0.5)
+    narrow = _ranks(db, candidate_k=3, top_k=3)  # three vector hits, then the match
+    assert narrow[0] == ("notes/quince.md", 0.5)
