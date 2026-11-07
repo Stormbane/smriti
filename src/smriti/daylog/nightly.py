@@ -167,6 +167,7 @@ class _Scan:
     days: int = 0  # day-files in the tree
     read: int = 0  # day-files read tonight
     full: bool = False  # every day-file read, the marker not trusted
+    unreadable: list[str] = field(default_factory=list)  # days whose file couldn't be read
 
 
 def _scan_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
@@ -186,7 +187,8 @@ def _scan_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
     held when it was last read; otherwise the marker's hash and corrupt-line
     count stand for it. A missing, unreadable or old-version marker, or one
     whose last full scan is a week old, means every file is read, so the
-    result is the full scan's.
+    result is the full scan's. A read that fails isn't recorded, so the next
+    night reads that file again; the scan names it (``unreadable``).
     """
     files = _log_day_files(cfg)
     signalled = {day_key(d) for d in changed} | set(dirty)
@@ -208,8 +210,15 @@ def _scan_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
             scan.read += 1
             current = input_hash(read.turns) if read.turns else ""
             corrupt = read.invalid
-            # Recorded with the stat taken before this read (none: the file isn't listed).
-            entry = None if stat is None else _Checked(stat[0], stat[1], current, corrupt)
+            if not read.complete:
+                log.warning("nightly: could not read %s; it is read again next night",
+                            cfg.day_jsonl(day))
+                scan.unreadable.append(day)
+            # Recorded with the stat taken before this read; not recorded when the
+            # file isn't listed, or the read failed (its stat would stand for turns
+            # never read).
+            entry = (_Checked(stat[0], stat[1], current, corrupt)
+                     if stat is not None and read.complete else None)
         else:
             current, corrupt = entry.hash, entry.corrupt
         if entry is not None:
@@ -361,6 +370,9 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
         if scan.corrupt:
             # Lines the day's readers skip (render, digest): counted, so they're seen.
             render_step["corrupt_lines"] = scan.corrupt
+        if scan.unreadable:
+            # Day-files the scan couldn't read tonight; the next night reads them again.
+            render_step["unreadable"] = scan.unreadable
         steps["render"] = render_step
         # A failed digest is a failed night: the wake briefing must say
         # so, and the CLI must exit nonzero.

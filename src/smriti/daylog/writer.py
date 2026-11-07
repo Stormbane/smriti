@@ -111,6 +111,8 @@ class DayTurns:
 
     turns: list[Turn] = field(default_factory=list)  # deduped by id, sorted by event time
     invalid: int = 0  # non-blank lines that aren't a turn, skipped
+    # False when the file couldn't be read to its end: the turns are what was read before.
+    complete: bool = True
 
 
 def read_day(path: Path) -> DayTurns:
@@ -119,10 +121,16 @@ def read_day(path: Path) -> DayTurns:
     A line is skipped when it isn't JSON, isn't an object, or has no valid
     time or no text; the count is what capture's :attr:`DayScan.invalid`
     counts, plus objects that have an id but aren't a turn. Blank lines and a
-    turn repeated by id aren't counted. A missing file has no turns.
+    turn repeated by id aren't counted.
+
+    A missing file has no turns, which is a whole answer. Any other OSError
+    (a file held open elsewhere, a permission, a failing disk) leaves
+    ``complete`` False, so a caller that remembers what a file held knows
+    not to remember this read.
     """
     turns: dict[str, Turn] = {}
     invalid = 0
+    complete = True
     try:
         with path.open("r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -137,9 +145,11 @@ def read_day(path: Path) -> DayTurns:
                     invalid += 1
                 elif turn.id not in turns:
                     turns[turn.id] = turn
-    except OSError:
+    except FileNotFoundError:
         pass
-    return DayTurns(sorted(turns.values(), key=lambda t: (t.ts, t.id)), invalid)
+    except OSError:
+        complete = False
+    return DayTurns(sorted(turns.values(), key=lambda t: (t.ts, t.id)), invalid, complete)
 
 
 def read_day_turns(path: Path) -> list[Turn]:

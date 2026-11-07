@@ -221,6 +221,59 @@ def test_a_full_scan_runs_weekly_and_finds_what_a_size_and_mtime_hide(
     assert _scan(cfg, TARGET).full  # a target before the last full scan: the clock went back
 
 
+def test_a_day_file_that_could_not_be_read_is_read_again_the_next_night(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reads: list[str]) -> None:
+    """A failed read isn't recorded: its size and mtime would stand for turns never read,
+    and the day would wait for the weekly full scan. The night says which it couldn't read."""
+    cfg = _tree(tmp_path)
+    _seed(cfg, OLD[1], "Sam, a month late")  # changed, and nothing signals it
+    path = cfg.day_jsonl(OLD[1])
+    real_open = Path.open
+
+    def flaky_open(self: Path, *args: object, **kwargs: object) -> object:
+        if self == path:
+            raise PermissionError(13, "held by a scanner", str(self))
+        return real_open(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    with monkeypatch.context() as m:
+        m.setattr(Path, "open", flaky_open)
+        failed = _scan(cfg)
+    assert (failed.stale, failed.unreadable) == ([], [OLD[1]])
+    assert OLD[1] not in json.loads(_marker(cfg).read_text(encoding="utf-8"))["days"]
+
+    reads.clear()
+    recovered = _scan(cfg)  # access is back; the size and mtime haven't changed
+    assert OLD[1] in reads
+    assert (recovered.stale, recovered.unreadable) == ([OLD[1]], [])
+
+
+def test_read_day_says_whether_it_read_the_whole_file(tmp_path: Path) -> None:
+    from smriti.daylog.writer import read_day
+
+    cfg = _cfg(tmp_path)
+    _seed(cfg, OLD[0])
+    whole = read_day(cfg.day_jsonl(OLD[0]))
+    assert whole.complete and len(whole.turns) == 2
+    missing = read_day(tmp_path / "log" / "2026" / "01" / "01.jsonl")
+    assert missing.complete and missing.turns == []  # no file: no turns, a whole answer
+    unreadable = read_day(tmp_path)  # a directory: an OSError other than not-found
+    assert not unreadable.complete and unreadable.turns == []
+
+
+def test_the_status_names_a_day_file_the_night_could_not_read(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from smriti.daylog.writer import DayTurns
+
+    cfg = _tree(tmp_path)
+    real = nightly.read_day
+    monkeypatch.setattr(nightly, "read_day", lambda p: DayTurns(complete=False)
+                        if p == cfg.day_jsonl(RECENT) else real(p))
+    status = nightly.run_nightly(cfg, now=NOW, reindex=False, witness=False)
+    render = status["steps"]["render"]  # type: ignore[index]
+    assert render["unreadable"] == [RECENT]  # type: ignore[index]
+    assert status["ok"] is True
+
+
 def test_a_marker_that_cannot_be_saved_leaves_the_scan_whole(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     cfg = _tree(tmp_path)
