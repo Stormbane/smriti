@@ -17,6 +17,23 @@ no literal scan from the engine: about 1 ms per 50 kB each, 19 ms for
 the lot). For the same reason a pattern that starts with ``\\b`` and a
 literal is written literal first (:func:`_word_start`). ``tests/test_scrub.py``
 holds the result to the scrub's before either change, pattern for pattern.
+
+Assignments to a secret's name come in two forms, each its own rule. A
+bare name (``password = x``, ``token: x``) is the name alone, as a word.
+A quoted key, as JSON, YAML, TOML and Python write one
+(``{"password": "x"}``, ``'token':'x'``, ``\\"secret\\": \\"x\\"`` inside
+escaped JSON), may also end in the name (``access_token``,
+``client-secret``, ``db.password``, ``accessToken``), but a key that only
+begins with one (``password_hint``, ``token_type``) isn't a secret's. A
+quoted value is masked whole, escapes and spaces included, up to its
+closing quote on the same line; an unquoted or unterminated one as far as
+the bare form's characters go. Either form needs a value of at least 8
+characters, so ``"password": ""`` and ``token: none`` are kept. Not
+masked: a secret under a key that isn't a secret's name
+(``{"password": {"value": "x"}}``), and a bare name's quoted value with
+other characters (``password = "p@ss word"``), which the bare form's value
+rule doesn't reach. The two rules share one scan of the text
+(:func:`_assignment_forms`), so ordinary text pays for one hint, not two.
 """
 
 from __future__ import annotations
@@ -38,15 +55,24 @@ def _keep_url_parts(m: re.Match[str]) -> str:
     return f"{m.group(1)}{_MASK}@"
 
 
+def _keep_key_and_quotes(m: re.Match[str]) -> str:
+    """For '"name": "secret"': keep the key and the value's quotes, mask what they enclose."""
+    quote = m.group("vq") or m.group("evq") or ""
+    return f"{m.string[m.start():m.start('value')]}{quote}{_MASK}{quote}"
+
+
 _Replacement = str | Callable[[re.Match[str]], str]
-# A hint gets the text and its lower case, or None for the lower case when
-# lower() can't stand in for IGNORECASE (see _folded).
-_Hint = Callable[[str, str | None], bool]
+# Work that hints share within one scrub: the assignment forms (see
+# _assignment_forms), with the text they were found in.
+_Memo = dict[str, tuple[str, bool, bool]]
+# A hint gets the text, its lower case (or None when lower() can't stand in
+# for IGNORECASE, see _folded) and the scrub's memo.
+_Hint = Callable[[str, str | None, _Memo], bool]
 
 # The only characters outside ASCII that IGNORECASE matches to an ASCII letter
 # (U+0130 and U+0131 to i, U+017F to s, U+212A to k); tests/test_scrub.py
 # checks the list against every code point.
-_FOLDS_TO_ASCII = re.compile("[\u0130\u0131\u017f\u212a]")
+_FOLDS_TO_ASCII = re.compile("[İıſK]")
 
 
 def _folded(text: str) -> str | None:
@@ -59,13 +85,13 @@ def _folded(text: str) -> str | None:
 
 def _has(*literals: str) -> _Hint:
     """The pattern needs one of *literals*, case and all."""
-    return lambda text, _lower: any(lit in text for lit in literals)
+    return lambda text, _lower, _memo: any(lit in text for lit in literals)
 
 
 def _finds(regex: str) -> _Hint:
     """The pattern needs a match of *regex* (which starts with a literal, so is fast)."""
     search = re.compile(regex).search
-    return lambda text, _lower: search(text) is not None
+    return lambda text, _lower, _memo: search(text) is not None
 
 
 def _folded_has(*regexes: str) -> _Hint:
@@ -74,7 +100,7 @@ def _folded_has(*regexes: str) -> _Hint:
     When there is no lower case to search (:func:`_folded`), the pattern runs.
     """
     searches = [re.compile(regex).search for regex in regexes]
-    return lambda _text, lower: lower is None or any(s(lower) for s in searches)
+    return lambda _text, lower, _memo: lower is None or any(s(lower) for s in searches)
 
 
 def _word_start(head: str) -> str:
@@ -84,6 +110,75 @@ def _word_start(head: str) -> str:
     so the matches are the same, and the search about 30 times faster.
     """
     return rf"{head}(?<=\b{head})"
+
+
+# A secret's name, for both assignment forms.
+_SECRET_NAME = r"(?:api[_-]?key|token|secret|password|passwd)"
+
+
+def _ends_in_name() -> str:
+    r"""Look-backs that hold where a quoted key ends in a secret's name.
+
+    The name is the whole key (after its opening quote), or follows ``_``,
+    ``-`` or ``.``, or starts a camel-case hump (``accessToken``: a lower-case
+    letter or a digit, then the name's capital). Its case is ignored, in
+    ASCII only. Each look-back is fixed width, so ``api[_-]?key`` is spelled
+    out three ways.
+    """
+    looks = []
+    for name in ("apikey", "api_key", "api-key", "token", "secret", "password", "passwd"):
+        looks.append(rf"(?<=[\"'_.-](?ai:{name}))")
+        looks.append(rf"(?<=[a-z0-9]{name[0].upper()}(?ai:{name[1:]}))")
+    return "(?:" + "|".join(looks) + ")"
+
+# Every name ends in one of these (lower case), and either form follows it
+# with = or :, a quoted key's closing quote between. Group 1 is that quote.
+# The API key's is "key" with "api" looked back for: the engine scans for a
+# literal's first letter, and an "a" is everywhere (42 us per 50 kB, not 16).
+_ASSIGNMENT_SEARCHES = [
+    re.compile(end + r"(\\?[\"'])?\s*[=:]").search
+    for end in (r"key(?:(?<=apikey)|(?<=api[_-]key))", "token", "secret", r"passw(?:or)?d")
+]
+
+
+def _assignment_forms(text: str, lower: str | None, memo: _Memo) -> tuple[bool, bool]:
+    """Whether *text* may hold a quoted key's assignment, and a bare name's.
+
+    One scan answers both rules; the second rule reuses the answer while the
+    text is the one scanned (the first rule masked nothing).
+    """
+    if lower is None:
+        return True, True
+    seen = memo.get("assignments")
+    if seen is not None and seen[0] is text:
+        return seen[1], seen[2]
+    quoted = bare = False
+    for search in _ASSIGNMENT_SEARCHES:
+        m = search(lower)
+        while m is not None and not (quoted and bare):
+            if m.group(1):
+                quoted = True
+            else:
+                bare = True
+            m = search(lower, m.end())
+        if quoted and bare:
+            break
+    memo["assignments"] = (text, quoted, bare)
+    return quoted, bare
+
+
+def _quoted_key_hint(text: str, lower: str | None, memo: _Memo) -> bool:
+    return _assignment_forms(text, lower, memo)[0]
+
+
+def _bare_name_hint(text: str, lower: str | None, memo: _Memo) -> bool:
+    # The quoted-key rule, which runs between the two hints, never makes a
+    # bare name's assignment (it keeps each key and its closing quote), so a
+    # text that held none before it holds none after.
+    seen = memo.get("assignments")
+    if seen is not None and not seen[2]:
+        return False
+    return _assignment_forms(text, lower, memo)[1]
 
 
 class _Rule(NamedTuple):
@@ -119,17 +214,36 @@ _RULES: list[_Rule] = [
     # doesn't matter to it.
     _Rule(re.compile(r"\b([a-z][a-z0-9+.-]*://[^/\s:@]+:)[^@\s/]+@", re.IGNORECASE),
           _keep_url_parts, _finds(r"://[^/\s:@]+:[^@\s/]+@")),
-    # Bearer headers and explicit assignments of secret-named vars.
+    # Bearer headers.
     _Rule(re.compile(r"(?i)(" + _word_start("b") + r"earer)\s+[A-Za-z0-9._~+/=-]{16,}"),
           _keep_prefix, _folded_has("bearer")),
+    # A quoted key that is, or ends in, a secret's name: the key (its quote,
+    # maybe escaped, and the same one closing it) with = or :, then the value:
+    # quoted (escapes kept inside it), quoted inside escaped JSON, or bare.
+    # Before the bare form, so `token: "password": "x"` masks x, not the key.
+    # For speed, the pattern starts with a bare quote, which the engine scans
+    # for (inside a group, after an optional backslash or under a global
+    # IGNORECASE, it is tried at every position: 0.2-1.1 ms per 50 kB);
+    # which quote, and its escape, are looked back at. The key is taken
+    # whole, without backtracking, and its end looked back at too
+    # (:func:`_ends_in_name`, the only part that ignores case).
     _Rule(
         re.compile(
-            r"(?i)\b((?:api[_-]?key|token|secret|password|passwd)\s*[=:]\s*)"
-            r"[\"']?[A-Za-z0-9._~+/-]{8,}[\"']?"
+            r"[\"'](?<=(?P<kq>[\"']))(?:(?<=(?P<esc>\\)[\"'])|)"
+            r"[A-Za-z0-9_.-]*+(?=(?(esc)\\)(?P=kq)\s*[=:])" + _ends_in_name()
+            + r"(?(esc)\\)(?P=kq)\s*[=:]\s*"
+            r"(?P<value>(?P<vq>[\"'])(?:\\.|(?!(?P=vq))[^\\\n]){8,}(?P=vq)"
+            r"|(?P<evq>\\[\"'])(?:(?!(?P=evq))[^\n]){8,}(?P=evq)"
+            r"|[\"']?[A-Za-z0-9._~+/-]{8,}[\"']?)"
         ),
+        _keep_key_and_quotes,
+        _quoted_key_hint,
+    ),
+    # A bare name: explicit assignments of secret-named vars.
+    _Rule(
+        re.compile(r"(?i)\b(" + _SECRET_NAME + r"\s*[=:]\s*)[\"']?[A-Za-z0-9._~+/-]{8,}[\"']?"),
         _keep_prefix,
-        # Every name ends in one of these, and the name is followed by = or :.
-        _folded_has(r"key\s*[=:]", r"token\s*[=:]", r"secret\s*[=:]", r"passw(?:or)?d\s*[=:]"),
+        _bare_name_hint,
     ),
     # Private key blocks.
     _Rule(re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
@@ -142,10 +256,11 @@ def scrub(text: str) -> str:
     out = text
     folded: str | None = None
     fresh = False  # whether ``folded`` is the lower case of ``out``
+    memo: _Memo = {}
     for pattern, replacement, hint in _RULES:
         if not fresh:
             folded, fresh = _folded(out), True
-        if not hint(out, folded):
+        if not hint(out, folded, memo):
             continue
         out, count = pattern.subn(replacement, out)
         fresh = fresh and not count
