@@ -16,6 +16,8 @@ from typing import Any
 import pytest
 
 from smriti.eval import cases as case_module
+from smriti.eval import digests as digests_module
+from smriti.eval import quality as quality_module
 from smriti.eval.cases import SEARCH_CASES, SearchCase
 from smriti.store.search import SearchResult
 
@@ -81,9 +83,10 @@ def test_sandbox_is_indexed_and_removed_on_exit() -> None:
 
 def test_fixture_is_synthetic() -> None:
     files = list(FIXTURE_ROOT.rglob("*.md"))
-    assert 15 <= len(files) <= 25
+    assert 25 <= len(files) <= 40
     corpus = "\n".join(p.read_text(encoding="utf-8") for p in files)
-    corpus += Path(case_module.__file__).read_text(encoding="utf-8")
+    for module in (case_module, quality_module, digests_module):
+        corpus += Path(module.__file__).read_text(encoding="utf-8")
     for forbidden in ("Narada", "Suti", "bija", "viveka"):
         assert forbidden.lower() not in corpus.lower()
     assert "Ari" in corpus and "Sam" in corpus
@@ -171,7 +174,10 @@ def test_explicit_search_index_is_readonly(tmp_path: Path, monkeypatch: pytest.M
         )
         writer.commit()
         before = snapshot(tmp_path)
-        case = SearchCase("wal", "Committed WAL content", "snapshotwalneedle", ["identity.md"])
+        # k=10: the word-hash vectors put other notes of the corpus first; what
+        # matters is that the text only the WAL holds is searched at all.
+        case = SearchCase("wal", "Committed WAL content", "snapshotwalneedle", ["identity.md"],
+                          k=10)
         assert run_search_cases(cases=[case], db_path=db)[0].passed
         assert snapshot(tmp_path) == before
     finally:
@@ -240,7 +246,7 @@ def test_cli_explicit_baseline(tmp_path: Path) -> None:
     assert main(["eval", "--baseline", str(path)]) == 0
     report = json.loads(path.read_text(encoding="utf-8"))
     assert report["search"]["total"] == len(SEARCH_CASES)
-    assert set(report) == {"timestamp", "search"}
+    assert set(report) == {"timestamp", "search", "quality"}
 
 
 def test_cli_search_flag_runs_the_default_mode(capsys: Any) -> None:

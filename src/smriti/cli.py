@@ -442,20 +442,33 @@ def _cmd_tasks(args: argparse.Namespace) -> int:
 
 def _cmd_eval(args: argparse.Namespace) -> int:
     from smriti.eval.metrics import compute_metrics, enrich_from_metrics_log
-    from smriti.eval.report import json_report, terminal_report
+    from smriti.eval.quality import run_quality_set
+    from smriti.eval.report import json_report, markdown_report, terminal_report
     from smriti.eval.runner import eval_sandbox, run_search_cases
 
     with eval_sandbox() as sandbox:
-        print("Running SEARCH cases...")
+        if not (args.json or args.markdown):
+            print("Running SEARCH cases and the quality set...")
         search_results = run_search_cases()
+        quality = run_quality_set(sandbox)
+        digests = None
+        if args.llm:
+            from smriti.eval.digests import run_digest_quality
+
+            if not (args.json or args.markdown):
+                print("Digesting the synthetic days with the nightly's LLM...")
+            digests = run_digest_quality(sandbox / "digest-eval")
 
         metrics = compute_metrics(search_results)
         metrics = enrich_from_metrics_log(metrics)
 
         if args.json:
-            print(json_report(metrics, search_results))
+            print(json_report(metrics, search_results, quality=quality, digests=digests))
+        elif args.markdown:
+            print(markdown_report(metrics, quality))
         else:
-            print(terminal_report(metrics, search_results, verbose=args.verbose))
+            print(terminal_report(metrics, search_results, verbose=args.verbose,
+                                  quality=quality, digests=digests))
 
         if args.baseline:
             baseline_path = (
@@ -463,12 +476,16 @@ def _cmd_eval(args: argparse.Namespace) -> int:
                 if args.baseline is True else Path(args.baseline).resolve()
             )
             baseline_path.parent.mkdir(parents=True, exist_ok=True)
-            baseline_path.write_text(json_report(metrics, search_results), encoding="utf-8")
-            print(f"Baseline saved: {baseline_path}")
+            baseline_path.write_text(json_report(metrics, search_results, quality=quality,
+                                                 digests=digests), encoding="utf-8")
+            # Beside JSON or Markdown on stdout, the note goes to stderr.
+            note = sys.stderr if args.json or args.markdown else sys.stdout
+            print(f"Baseline saved: {baseline_path}", file=note)
             if args.baseline is True:
-                print("Temporary baseline is removed on exit; use --baseline PATH to keep it.")
+                print("Temporary baseline is removed on exit; use --baseline PATH to keep it.",
+                      file=note)
 
-        return 0
+        return 1 if digests is not None and digests.errors else 0
 
 
 def _cmd_metrics(args: argparse.Namespace) -> int:
@@ -598,13 +615,18 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── eval ─────────────────────────────────────────────────────────
     p_eval = sub.add_parser(
-        "eval", help="Run the search evaluation cases against a synthetic fixture"
+        "eval", help="Run the search cases and the quality set against a synthetic fixture"
     )
-    # The search cases are the only mode since the others went (H3); the flag that
-    # chose them still parses, so a script written for it runs the same cases.
+    # The search cases have run by default since the other modes went (H3); the
+    # flag that chose them still parses, so a script written for it runs the same.
     p_eval.add_argument("--search", action="store_true",
-                        help="the search cases (the default and only mode)")
+                        help="the search cases and the quality set (the default)")
+    p_eval.add_argument("--llm", action="store_true",
+                        help="also digest synthetic days with the nightly's LLM (a real model, "
+                             "one call a day) and score their coverage and factuality")
     p_eval.add_argument("--json", action="store_true", help="JSON output")
+    p_eval.add_argument("--markdown", action="store_true",
+                        help="the scores as Markdown tables (CI's job summary)")
     p_eval.add_argument(
         "--baseline", nargs="?", const=True, metavar="PATH",
         help="Save baseline to PATH (default: disposable sandbox)",
