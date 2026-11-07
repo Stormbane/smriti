@@ -186,3 +186,25 @@ def test_only_a_rebuild_migrates_to_the_override(
     monkeypatch.setenv("SMRITI_EMBED_PROVIDER", "local")
     _load_provider(db)
     assert asked[-1] == "onnx"  # the service follows the index it serves
+
+
+def test_a_model_is_chosen_by_the_index_of_the_root_it_embeds_for(
+        asked: list[str], tmp_path: Path) -> None:
+    """The kept model serves the index it was chosen for. Asked to embed for
+    another root (``embedding_root``, as ``index_file`` does) whose index
+    records another provider, the process loads that one; one model is kept,
+    so going back loads the first again. Before, the first model served every
+    root, and its vectors were refused by the other index."""
+    other = tmp_path / "other"
+    _record(smriti_db_path(), "local")
+    _record(other / ".smriti" / "index.db", "onnx")
+
+    assert embedding.local_provider().model_name == DEFAULT_MODELS["local"]
+    with embedding.embedding_root(other):
+        assert embedding.local_provider().model_name == DEFAULT_MODELS["onnx"]
+        assert embedding.local_provider().model_name == DEFAULT_MODELS["onnx"]
+    assert asked == ["local", "onnx"]
+    with embedding.embedding_root(tree_root()):
+        assert embedding.local_provider().model_name == DEFAULT_MODELS["local"]
+    assert embedding.local_provider().model_name == DEFAULT_MODELS["local"]
+    assert asked == ["local", "onnx", "local"]

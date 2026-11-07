@@ -210,6 +210,18 @@ def get_logger(path: Path | None = None) -> MetricsLogger:
     return _instance
 
 
+def logger_for(root: Path) -> MetricsLogger:
+    """The logger for an event of the memory root ``root``: into its own metrics file.
+
+    This process's logger when it already logs there (the usual case: the
+    root is the environment's, or :func:`logging_to` points at it); else
+    one for ``root``, so work on another root never lands in this one's log.
+    """
+    current = get_logger()
+    path = root / ".smriti" / "metrics.jsonl"
+    return current if current.path == path else MetricsLogger(path)
+
+
 @contextmanager
 def logging_to(path: Path) -> Iterator[MetricsLogger]:
     """Log this process's metrics to ``path`` for the block, then as before it."""

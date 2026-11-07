@@ -176,6 +176,23 @@ class _Scope:
 
 _IN_PROCESS: ContextVar[_Scope | None] = ContextVar("smriti_in_process_embeddings",
                                                     default=None)
+_ROOT: ContextVar[Path | None] = ContextVar("smriti_embedding_root", default=None)
+
+
+@contextmanager
+def embedding_root(root: Path) -> Iterator[None]:
+    """Embed for the memory root ``root`` for the block, whatever the environment's is.
+
+    :func:`embedder` is then ``root``'s embedding service, or a model chosen
+    by the provider ``root``'s index records. ``index_file`` runs this way,
+    so a write to another root never embeds with, or starts, the service of
+    the root in ``SMRITI_ROOT``.
+    """
+    token = _ROOT.set(root)
+    try:
+        yield
+    finally:
+        _ROOT.reset(token)
 
 
 @contextmanager
@@ -210,17 +227,23 @@ def embedder() -> EmbeddingProvider:
     In a long-lived process (the MCP server, ``smriti read``, hooks) that
     is the memory root's shared embedding service, so no process but the
     service loads a model (``smriti.embed``). ``SMRITI_EMBED_SERVICE=0``,
-    or :func:`in_process_embeddings`, loads one here instead.
+    or :func:`in_process_embeddings`, loads one here instead. The memory
+    root is the environment's, or the one :func:`embedding_root` names.
     """
     if embeds_through_service():
-        from smriti.core.tree import tree_root
         from smriti.embed.client import service_provider
 
-        return service_provider(tree_root())
+        root = _ROOT.get()
+        if root is None:
+            from smriti.core.tree import tree_root
+
+            root = tree_root()
+        return service_provider(root)
     return local_provider()
 
 
 _loaded: InProcess | None = None
+_checked: set[Path | None] = set()  # the indexes _loaded's provider was chosen for
 _load_lock = threading.Lock()
 
 
@@ -230,18 +253,27 @@ def local_provider() -> EmbeddingProvider:
     Building the provider costs 5-18 s (model load); embedding a chunk
     costs ~0.02 s warm. Without the cache every write paid the build
     cost again: the bulk of smriti_write latency in long-lived MCP
-    servers. One model is kept, and the keys are worked out again only
-    for a rebuild, which loads another when the rule now names one.
+    servers. One model is kept. The keys are worked out again for a
+    rebuild, which loads another when the rule now names one, and for an
+    index the model wasn't chosen for (another root's), which loads
+    another when that index records a different provider.
     """
     global _loaded
     scope = _IN_PROCESS.get()
     rebuild = scope is not None and scope.rebuild
+    db = scope.db if scope is not None else None
+    if db is None and (root := _ROOT.get()) is not None:
+        from smriti.core.tree import index_db_path
+
+        db = index_db_path(root)
     with _load_lock:
-        if _loaded is not None and not rebuild:
+        if _loaded is not None and not rebuild and db in _checked:
             return _loaded
-        keys = provider_keys(scope.db if scope is not None else None, rebuild=rebuild)
+        keys = provider_keys(db, rebuild=rebuild)
         if _loaded is None or _loaded.identity.provider not in keys:
             _loaded = load_provider(keys)
+            _checked.clear()
+        _checked.add(db)
         return _loaded
 
 
@@ -254,6 +286,7 @@ def forget_provider() -> None:
     global _loaded
     with _load_lock:
         _loaded = None
+        _checked.clear()
 
 
 def embed(provider: EmbeddingProvider, texts: list[str], kind: str = "write") -> Embedded:

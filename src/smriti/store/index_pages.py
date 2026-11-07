@@ -16,7 +16,7 @@ from pathlib import Path
 from smriti.core.files import edit_lock
 from smriti.core.memwrite import mask, write_memory
 from smriti.core.tree import tree_root
-from smriti.metrics import get_logger
+from smriti.metrics import logger_for
 
 log = logging.getLogger(__name__)
 
@@ -88,7 +88,7 @@ def update_index_pages(path: Path, root: Path | None = None) -> list[Path]:
 
         current = current.parent
 
-    get_logger().log(
+    logger_for(root).log(
         "index_pages_updated",
         trigger_path=str(path.relative_to(root)),
         indexes_updated=len(updated),

@@ -224,8 +224,8 @@ def write_entry_result(
     _append_entry(entry_path, entry_block)
 
     log.info("Wrote entry: %s", entry_path)
-    from smriti.metrics import get_logger
-    get_logger().log(
+    from smriti.metrics import logger_for
+    logger_for(root).log(
         "write_entry",
         path=str(entry_path.relative_to(root)),
         branch=branch,

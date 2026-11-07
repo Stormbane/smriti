@@ -65,9 +65,14 @@ def tree_root_warning() -> str:
     return ""
 
 
+def index_db_path(root: Path) -> Path:
+    """The index database of the memory root ``root``."""
+    return root / ".smriti" / "index.db"
+
+
 def smriti_db_path() -> Path:
-    """Return the path to the smriti index database."""
-    return tree_root() / ".smriti" / "index.db"
+    """Return the path to the smriti index database (of :func:`tree_root`)."""
+    return index_db_path(tree_root())
 
 
 def trunk_distance(path: Path, root: Path | None = None) -> int:

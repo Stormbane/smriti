@@ -20,7 +20,7 @@ from typing import Any
 
 from smriti._vendored.memsearch.chunker import chunk_markdown, compute_chunk_id
 from smriti._vendored.memsearch.scanner import scan_paths
-from smriti.core.tree import smriti_db_path, tree_root, trunk_distance
+from smriti.core.tree import index_db_path, smriti_db_path, tree_root, trunk_distance
 from smriti.embed import provider as embedding
 from smriti.embed.identity import (
     Embedded,
@@ -250,7 +250,7 @@ def index_tree(
     root:
         Tree root (defaults to ``tree_root()``).
     db:
-        Database path (defaults to ``smriti_db_path()``).
+        Database path (defaults to the root's, ``<root>/.smriti/index.db``).
     verbose:
         Log progress at INFO level.
 
@@ -259,14 +259,16 @@ def index_tree(
     dict with keys: scanned, skipped, indexed, chunks, errors, purged
     """
     import time as _time
-    from smriti.metrics import get_logger
+    from smriti.metrics import logger_for
 
     t0 = _time.monotonic()
 
+    # Everything follows the root: its index, the provider that index records,
+    # and its metrics. Never the environment's root, when another is given.
     if root is None:
         root = tree_root()
     if db is None:
-        db = smriti_db_path()
+        db = index_db_path(root)
 
     stats = {"scanned": 0, "skipped": 0, "indexed": 0, "chunks": 0, "errors": 0}
 
@@ -333,7 +335,7 @@ def index_tree(
         stats["chunks"],
         provider.model_name,
     )
-    get_logger().log(
+    logger_for(root).log(
         "index_completed",
         **stats,
         elapsed_ms=int((_time.monotonic() - t0) * 1000),
@@ -588,11 +590,15 @@ def index_file_result(path: Path, *, root: Path | None = None,
     (the service off), a successful write fills small pending sources
     itself, within :data:`WRITE_REPAIR_CHUNKS` chunks; a larger one is left
     to the nightly.
+
+    The database, and the embedder (the root's service, or the provider its
+    index records), are the root's: ``root`` when given, else the
+    environment's. ``db`` overrides the database only.
     """
     if root is None:
         root = tree_root()
     if db is None:
-        db = smriti_db_path()
+        db = index_db_path(root)
 
     rel_source = str(path.resolve().relative_to(root.resolve())).replace("\\", "/")
     if not is_indexable(rel_source):
@@ -602,25 +608,26 @@ def index_file_result(path: Path, *, root: Path | None = None,
     chunks = chunk_markdown(text, source=rel_source)
     texts = [c.content for c in chunks]
 
-    embedded, reason = _try_embed(texts)
-    try:
-        result = _commit_file(db, path, root, rel_source, st, chunks, embedded, reason)
-    except StaleEmbedding as exc:
-        # The vectors are of a model the index no longer records (or never
-        # did): stale work. Embed once more, with a freshly loaded model.
-        log.info("index_file %s: %s; embedding again", rel_source, exc)
-        embedding.forget_provider()
+    with embedding.embedding_root(root):
         embedded, reason = _try_embed(texts)
         try:
             result = _commit_file(db, path, root, rel_source, st, chunks, embedded, reason)
-        except StaleEmbedding as again:
-            log.warning("index_file %s: %s; indexed for keyword search, vectors pending",
-                        rel_source, again)
-            result = _commit_file(db, path, root, rel_source, st, chunks, None,
-                                  f"the embedder doesn't match the index: {again}")
-    if (result.others_pending and embedded is not None and not result.vectors_pending
-            and not embedding.embeds_through_service()):
-        _fill_some_pending(db)
+        except StaleEmbedding as exc:
+            # The vectors are of a model the index no longer records (or never
+            # did): stale work. Embed once more, with a freshly loaded model.
+            log.info("index_file %s: %s; embedding again", rel_source, exc)
+            embedding.forget_provider()
+            embedded, reason = _try_embed(texts)
+            try:
+                result = _commit_file(db, path, root, rel_source, st, chunks, embedded, reason)
+            except StaleEmbedding as again:
+                log.warning("index_file %s: %s; indexed for keyword search, vectors pending",
+                            rel_source, again)
+                result = _commit_file(db, path, root, rel_source, st, chunks, None,
+                                      f"the embedder doesn't match the index: {again}")
+        if (result.others_pending and embedded is not None and not result.vectors_pending
+                and not embedding.embeds_through_service()):
+            _fill_some_pending(db)
     return result
 
 

@@ -34,9 +34,10 @@ if sys.platform == "win32":
 def _cmd_index(args: argparse.Namespace) -> int:
     from smriti.store.indexer import index_tree
 
+    # A root given here is indexed into its own index, not SMRITI_ROOT's.
     stats = index_tree(
         full=args.full,
-        root=Path(args.root) if args.root else None,
+        root=Path(args.root).expanduser().resolve() if args.root else None,
         verbose=args.verbose,
     )
     print(
