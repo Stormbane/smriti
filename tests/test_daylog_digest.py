@@ -417,3 +417,45 @@ def test_long_part_notes_are_cut_to_fit_the_merge(tmp_path: Path,
     meta = _frontmatter(out)
     assert meta["notes_cut"] == "4"
     assert meta["cut"] == "false"  # every character of the log reached a part call
+
+
+def test_a_digest_records_its_own_days_offset_in_a_named_zone(
+        tmp_path: Path, llm: NotesProvider, monkeypatch: pytest.MonkeyPatch) -> None:
+    """H14.5 (Opus, review #7): ``tz_offset`` was ``tz.utcoffset(None)``: None for a
+    named zone, and today's offset, not the day's, for the system's. London moves to
+    summer time on 2026-03-29: the day before is at +0, the day after at +1."""
+    import json
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    from smriti.daylog.render import render_day
+
+    try:
+        ZoneInfo("Europe/London")
+    except ZoneInfoNotFoundError:
+        pytest.skip("no tz database here (Windows without tzdata)")
+    monkeypatch.delenv("SMRITI_DAY_UTC_OFFSET")
+    (tmp_path / ".smriti").mkdir()
+    (tmp_path / ".smriti" / "daylog.json").write_text(
+        json.dumps({"timezone": "Europe/London"}), encoding="utf-8")
+    cfg = DaylogConfig(root=tmp_path, sources=[], user_name="Sam", agent_name="Ari")
+    offsets = {}
+    for day in ("2026-03-28", "2026-03-30"):
+        path = cfg.day_jsonl(day)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"id": f"voice:{day}", "ts": f"{day}T12:00:00Z",
+                                    "channel": "voice", "who": "user",
+                                    "text": f"Sam on {day}"}) + "\n", encoding="utf-8")
+        assert render_day(cfg, day) is not None
+        out = digest_mod.digest_day(cfg, day, [])
+        assert out is not None
+        offsets[day] = _frontmatter(out)["tz_offset"]
+    assert offsets == {"2026-03-28": "0:00:00", "2026-03-30": "1:00:00"}
+
+
+def test_an_offset_behind_utc_is_written_with_its_sign() -> None:
+    from datetime import timedelta, timezone
+
+    new_york = timezone(timedelta(hours=-5))
+    assert digest_mod._offset_text(digest_mod._day_offset(DAY, new_york)) == "-5:00:00"
+    assert digest_mod._offset_text(timedelta(hours=10)) == "10:00:00"  # as digests wrote it
+    assert digest_mod._offset_text(timedelta(hours=5, minutes=30)) == "5:30:00"

@@ -27,6 +27,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta, tzinfo
 from pathlib import Path
 
 from smriti.core.memwrite import write_memory
@@ -218,6 +219,23 @@ def compose(
             last_error = exc
             log.warning("digest provider %s failed: %s", name, exc)
     raise LLMError(f"all providers failed: {last_error}")
+
+
+def _day_offset(day: str, tz: tzinfo) -> timedelta:
+    """*tz*'s offset from UTC on *day* (YYYY-MM-DD), at its local noon.
+
+    The digested day's, not today's: a named zone's offset differs either
+    side of a daylight-saving change, and ``tz.utcoffset(None)`` is None for
+    one (and today's for the system's zone). Noon, because changes happen at night.
+    """
+    noon = datetime.combine(date.fromisoformat(day), time(12), tzinfo=tz)
+    return noon.utcoffset() or timedelta(0)
+
+
+def _offset_text(offset: timedelta) -> str:
+    """*offset* as digests write it: ``str(timedelta)`` (``10:00:00``), with a
+    sign for a zone behind UTC (``-5:00:00``, not ``-1 day, 19:00:00``)."""
+    return str(offset) if offset >= timedelta(0) else "-" + str(-offset)
 
 
 def _autonomous_sample(turns: list[Turn]) -> str:
@@ -487,7 +505,7 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]], 
         f"date: {day}",
         f"input_hash: {digested}",
         f"prompt_fp: {fingerprint}",
-        f"tz_offset: {tz.utcoffset(None)}",
+        f"tz_offset: {_offset_text(_day_offset(day, tz))}",
         f"parts: {coverage.parts}",
         f"chars_seen: {coverage.chars_seen}",
         f"chars_total: {coverage.chars_total}",
