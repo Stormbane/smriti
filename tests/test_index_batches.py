@@ -25,6 +25,7 @@ from smriti._vendored.memsearch.chunker import chunk_markdown
 from smriti._vendored.memsearch.embeddings.stub import StubEmbedding
 from smriti.embed import provider as embedding
 from smriti.store.indexer import index_file, index_tree
+from tests._vec import needs_vec
 
 CAP = 8
 
@@ -94,9 +95,9 @@ def test_batches_never_exceed_the_cap(
     assert provider.calls == [CAP] * (total // CAP) + ([total % CAP] if total % CAP else [])
 
 
+@needs_vec
 def test_a_batched_run_writes_what_one_call_would(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    pytest.importorskip("sqlite_vec")
     _tree(tmp_path / "tree")
     _use(monkeypatch, Recording(), cap=10_000)  # one call, staged in memory
     index_tree(root=tmp_path / "tree", db=tmp_path / "one.db")

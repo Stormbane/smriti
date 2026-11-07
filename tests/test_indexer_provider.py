@@ -21,6 +21,7 @@ from smriti.core.tree import smriti_db_path, tree_root
 from smriti.embed import provider as embedding
 from smriti.embed.identity import provider_for_model
 from smriti.embed.provider import recorded_provider
+from tests._vec import needs_vec
 
 
 def _legacy_index(path: Path, model: str) -> Path:
@@ -137,6 +138,7 @@ def test_the_service_and_a_process_serving_the_index_follow_one_rule(
     assert len(asked) == 2  # one model kept: an incremental run loads nothing new
 
 
+@needs_vec  # the recorded identity comes with the first vectors
 def test_only_a_rebuild_migrates_to_the_override(
         asked: list[str], monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture) -> None:
