@@ -649,7 +649,7 @@ a recheck.
   findings are H12.
 - **H12**: done (merged by 5323e58; H12.8 dropped). H12.10: outside review #6 at `5323e58`; its findings are H13.
 - **H13**: done (merged by 32ebc04; all CI green). H13.7 (fsync) measured and not kept: it slowed writes beyond noise. H13.13: outside review #7 at `9247509`; its findings are H14.
-- **H14**: approved. H14.7 and H14.8 merged by `46e4b11`; H14.1-H14.6 implemented on `hardening/h14a` (not yet reviewed or merged). H14.9, outside review #8, follows.
+- **H14**: done (H14.7 and H14.8 merged by `46e4b11`, H14.1-H14.6 by `4504f98`; Codex's diff reviews found nothing to fix; all CI green). H14.9: outside review #8 at the commit that records this.
 - **H14.7 done** (2026-11-08, `hardening/h14b`; not yet reviewed or merged). Three
   removals, each its own commit with its tests; the code is in the git history.
   - The private store: `smriti.private`, the CLI's init on every command,
