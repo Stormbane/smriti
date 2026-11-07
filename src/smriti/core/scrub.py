@@ -22,11 +22,12 @@ Assignments to a secret's name come in two forms, each its own rule. A
 bare name (``password = x``, ``token: x``) is the name alone, as a word.
 A quoted key, as JSON, YAML, TOML and Python write one
 (``{"password": "x"}``, ``'token':'x'``, ``\\"secret\\": \\"x\\"`` inside
-escaped JSON), may also end in the name (``access_token``,
+escaped JSON, and deeper), may also end in the name (``access_token``,
 ``client-secret``, ``db.password``, ``accessToken``), but a key that only
 begins with one (``password_hint``, ``token_type``) isn't a secret's. A
-quoted value is masked whole, escapes and spaces included, up to its
-closing quote on the same line; an unquoted or unterminated one as far as
+quoted value is masked whole, escapes, quotes and spaces included, up to
+the quote that closes it at its own level of escaping, on the same line;
+an unquoted or unterminated one as far as
 the bare form's characters go. Either form needs a value of at least 8
 characters, so ``"password": ""`` and ``token: none`` are kept. Not
 masked: a secret under a key that isn't a secret's name
@@ -57,7 +58,7 @@ def _keep_url_parts(m: re.Match[str]) -> str:
 
 def _keep_key_and_quotes(m: re.Match[str]) -> str:
     """For '"name": "secret"': keep the key and the value's quotes, mask what they enclose."""
-    quote = m.group("vq") or m.group("evq") or ""
+    quote = (m.group("vesc") or "") + m.group("vq") if m.group("vq") else ""
     return f"{m.string[m.start():m.start('value')]}{quote}{_MASK}{quote}"
 
 
@@ -132,11 +133,12 @@ def _ends_in_name() -> str:
     return "(?:" + "|".join(looks) + ")"
 
 # Every name ends in one of these (lower case), and either form follows it
-# with = or :, a quoted key's closing quote between. Group 1 is that quote.
+# with = or :, a quoted key's closing quote between (after its level's
+# backslashes). Group 1 is that quote.
 # The API key's is "key" with "api" looked back for: the engine scans for a
 # literal's first letter, and an "a" is everywhere (42 us per 50 kB, not 16).
 _ASSIGNMENT_SEARCHES = [
-    re.compile(end + r"(\\?[\"'])?\s*[=:]").search
+    re.compile(end + r"(\\*[\"'])?\s*[=:]").search
     for end in (r"key(?:(?<=apikey)|(?<=api[_-]key))", "token", "secret", r"passw(?:or)?d")
 ]
 
@@ -227,13 +229,26 @@ _RULES: list[_Rule] = [
     # which quote, and its escape, are looked back at. The key is taken
     # whole, without backtracking, and its end looked back at too
     # (:func:`_ends_in_name`, the only part that ignores case).
+    #
+    # A value's escaping has a level: JSON is 0, JSON in a JSON string 1, and
+    # so on. The value opens with its level's run of backslashes (``vesc``,
+    # none at level 0) and its quote, and ends with the same. Inside it, a
+    # run of backslashes is read as escaped backslashes (the run and a
+    # backslash, twice), then an escaped quote (the run, a backslash, the
+    # run, the quote), or, before any other character, as the value's
+    # (``\n``, an outer level's ``\u00e9``); then any character but the
+    # quote. None of these reaches the end, and each is tried in that order,
+    # so the value is read once, without backtracking (the pairs first, or a
+    # long run was scanned again at every pair), and a quote inside it, at
+    # any level, never ends it.
     _Rule(
         re.compile(
-            r"[\"'](?<=(?P<kq>[\"']))(?:(?<=(?P<esc>\\)[\"'])|)"
-            r"[A-Za-z0-9_.-]*+(?=(?(esc)\\)(?P=kq)\s*[=:])" + _ends_in_name()
-            + r"(?(esc)\\)(?P=kq)\s*[=:]\s*"
-            r"(?P<value>(?P<vq>[\"'])(?:\\.|(?!(?P=vq))[^\\\n]){8,}(?P=vq)"
-            r"|(?P<evq>\\[\"'])(?:(?!(?P=evq))[^\n]){8,}(?P=evq)"
+            r"[\"'](?<=(?P<kq>[\"']))"
+            r"[A-Za-z0-9_.-]*+(?=\\*(?P=kq)\s*[=:])" + _ends_in_name()
+            + r"\\*(?P=kq)\s*[=:]\s*"
+            r"(?P<value>(?P<vesc>\\*)(?P<vq>[\"'])"
+            r"(?:(?P=vesc)\\(?P=vesc)\\|(?P=vesc)\\(?P=vesc)(?P=vq)"
+            r"|\\++(?!(?P=vq))(?=[^\\\n])|(?!(?P=vq))[^\\\n]){8,}+(?P=vesc)(?P=vq)"
             r"|[\"']?[A-Za-z0-9._~+/-]{8,}[\"']?)"
         ),
         _keep_key_and_quotes,

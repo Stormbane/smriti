@@ -16,6 +16,7 @@ them for real ones.
 
 from __future__ import annotations
 
+import json
 import random
 import re
 import sys
@@ -81,6 +82,8 @@ _FRAGMENTS = [
     '"api_key"', '\\"secret\\"', "access_", "client-", "db.", "access", "Token", "SECRET",
     "_hint", "_type", "apikey", "x-api-key", "{", "}", ", ", "ApiKey", "Passwd", "x9", "API_",
     "api", "Api-Key",
+    # Deeper escaping: JSON in a JSON string, and in one more.
+    "\\\\", '\\\\\\"', '\\\\\\\\"', '\\\\\\"password\\\\\\"', '\\\\\\\\\\\\\\"', "\\\\n",
 ]
 
 
@@ -108,20 +111,25 @@ _BEFORE: list[tuple[re.Pattern[str], object]] = [
 ]
 
 # The quoted-key rule (H13.4) as first written, and where it runs: before the bare
-# names'. The scrub's takes the key whole and looks back at its end, for speed.
+# names'. The scrub's takes the key whole and looks back at its end, and reads the
+# value without backtracking, for speed. A value at any level of escaping (its run of
+# backslashes, `vesc`) ends at that run and its quote; inside it, a run of backslashes
+# before another character is the value's, and one before the quote is escaped
+# backslashes, then an escaped quote or the end (Codex review of H13.4).
 _QUOTED_KEY = re.compile(
-    r"(?P<key>(?P<kq>\\?[\"'])"
+    r"(?P<key>\\*(?P<kq>[\"'])"
     r"(?:[A-Za-z0-9_.-]*(?:[_.-]|[a-z0-9](?=[A-Z])))?"
-    r"(?ai:api[_-]?key|token|secret|password|passwd)(?P=kq)\s*[=:]\s*)"
-    r"(?:(?P<vq>[\"'])(?:\\.|(?!(?P=vq))[^\\\n]){8,}(?P=vq)"
-    r"|(?P<evq>\\[\"'])(?:(?!(?P=evq))[^\n]){8,}(?P=evq)"
+    r"(?ai:api[_-]?key|token|secret|password|passwd)\\*(?P=kq)\s*[=:]\s*)"
+    r"(?:(?P<vesc>\\*)(?P<vq>[\"'])"
+    r"(?:(?P=vesc)\\(?P=vesc)\\|(?P=vesc)\\(?P=vesc)(?P=vq)"
+    r"|\\+(?!(?P=vq))(?=[^\\\n])|(?!(?P=vq))[^\\\n]){8,}(?P=vesc)(?P=vq)"
     r"|[\"']?[A-Za-z0-9._~+/-]{8,}[\"']?)"
 )
 _AT = 13
 
 
 def _keep_key(m: re.Match[str]) -> str:
-    quote = m.group("vq") or m.group("evq") or ""
+    quote = (m.group("vesc") or "") + m.group("vq") if m.group("vq") else ""
     return f"{m.group('key')}{quote}[redacted]{quote}"
 
 
@@ -237,14 +245,67 @@ def test_what_quoted_keys_keep(text: str) -> None:
     assert scrub(text) == text
 
 
+# Values that hold what ends a quoted value at one level of escaping or another.
+_TRICKY = [
+    'abcdefgh"secret-tail',  # a quote inside (Codex's review: the tail survived)
+    'back\\slash"secret-tail',  # a backslash, then a quote
+    "ends-in-a-backslash-secret\\",  # a backslash just before the closing quote
+    "it's 'single' and \"double\" secret-tail",
+    '\\"looks-closed\\" secret-tail',  # backslash-quote pairs in the value itself
+    "two\nlines secret-tail",  # escaped as \n
+    "tab\tand é secret-tail",  # \t, and é under json.dumps
+]
+
+
+@pytest.mark.parametrize("levels", [0, 1, 2, 3])
+@pytest.mark.parametrize("value", _TRICKY)
+def test_a_json_value_is_masked_whole_at_every_level_of_escaping(value: str,
+                                                                 levels: int) -> None:
+    """JSON, JSON in a JSON string (a tool call's arguments, a log line), and deeper.
+    Codex review of H13.4: in escaped JSON, the value's first escaped quote was taken
+    for its end, so ``json.dumps(json.dumps({"password": 'abcdefgh"secret-tail'}))``
+    kept ``secret-tail``. The masked text must still decode, level by level, to the
+    same object with only the secret replaced."""
+    text = json.dumps({"password": value, "user": "sam"})
+    for _ in range(levels):
+        text = json.dumps(text)
+    masked = scrub(text)
+    assert "secret" not in masked and "tail" not in masked
+    assert scrub(masked) == masked
+    decoded: object = masked
+    for _ in range(levels):
+        assert isinstance(decoded, str)
+        decoded = json.loads(decoded)
+    assert isinstance(decoded, str)
+    assert json.loads(decoded) == {"password": "[redacted]", "user": "sam"}
+
+
+def test_an_outer_levels_escape_inside_an_escaped_value_is_part_of_it() -> None:
+    """Inner JSON written with its non-ASCII as is, then escaped by the outer level:
+    the value holds ``\\u00e9``, one backslash where its own escapes have two."""
+    inner = json.dumps({"password": "café-secret-tail", "user": "sam"}, ensure_ascii=False)
+    masked = scrub(json.dumps(inner))
+    assert "secret" not in masked
+    assert json.loads(json.loads(masked)) == {"password": "[redacted]", "user": "sam"}
+
+
+def test_a_python_repr_with_both_quotes_is_masked_whole() -> None:
+    text = repr({"password": "it's a \"quoted\" secret-tail", "user": "sam"})
+    assert scrub(text) == "{'password': '[redacted]', 'user': 'sam'}"
+
+
 def test_a_long_quoted_value_is_masked_whole() -> None:
     value = "abcdefghij" * 2000
     masked = scrub(f'{{"token": "{value}", "user": "sam"}}')
     assert masked == '{"token": "[redacted]", "user": "sam"}'
     # Unterminated, or all escapes: no closing quote to find, and no long backtracking.
+    # A run of escapes is read once: scanned again at each escaped backslash, 200,000
+    # backslashes took seconds.
     start = time.perf_counter()
     assert scrub('"password": "' + value) == '"password": [redacted]'
-    scrub('"password": "' + "\\" * 20_000)
+    scrub('"password": "' + "\\" * 200_000)
+    scrub('\\"password\\": \\"' + "\\" * 200_000)
+    scrub('\\"password\\": \\"' + '\\\\\\"' * 50_000)
     scrub('\\"password\\": \\"' + value)
     assert time.perf_counter() - start < 1.0
 
