@@ -568,6 +568,27 @@ Not doing: the codex fallback stays opt-in and documented (both reviewers
 call it a design risk, not a default); team and multi-user use is out of
 scope; the bus factor isn't a code change.
 
+## H14. From outside review #7 (at `9247509`)
+
+Both reviewers ran at high effort on a tree with no history; every claim
+below was checked against the code. Items marked *(decision)* wait on Suti.
+
+| # | Change | Acceptance |
+|---|---|---|
+| H14.1 | The nightly status is masked like the morning's: `llm_attempts` and every other string in it go through the scrub before `_write_status` writes it (it is under `log/` and pushed). (Codex 1) | A synthetic credential in a provider error doesn't reach the status file. |
+| H14.2 | The nightly's run lock fails closed: when no lock file can be opened, the run is skipped and says why, instead of running without exclusion. (Codex 3) | The unavailable-lock test now expects a skip. |
+| H14.3 | A partial read is never published: `read_day_turns` callers that publish (render, digest) take `read_day` and refuse an incomplete read, leaving the old artefact and a status line. (Codex 4) | An incomplete read leaves the previous render and digest in place. |
+| H14.4 | A new install has an identity section: the wake falls back to the identity files when `.smriti/wake-context.md` is missing. (Opus 4) | A fresh root's wake shows its identity. |
+| H14.5 | Small items: `NARADA_CLAUDE_TIMEOUT` becomes `SMRITI_CLAUDE_TIMEOUT` (the old name still read); a digest records the digested day's offset, for named zones too; the FTS vocab docstring matches the schema; the handoff's overwrite check moves inside its lock; `_serialize_f32` is one function; ruff checks whitespace and style (`E2`, `E3`, `W`); the private store is set up only by commands that use it. (Opus 2, 4, 5) | Tests where behaviour changes; ruff clean with the new rules. |
+| H14.6 | *(decision)* Durability: memory text written through `smriti.core.memwrite` (journal, notes, todos, findings, the handoff) and the morning ledger are fsynced; index and state files aren't. Both reviewers rank it; measured before: about 0.75 ms a write at the median, with rare stalls. | The bench's write measure, and Suti's say on the cost. |
+| H14.7 | *(decision)* Remove what nothing uses: the private store (the reference install has no `private/`), the qmd recall backend and the ambient-recall hook (off). Hermes (its config references smriti) and the PreCompact hook (live) stay. | Removed with their tests; the reference install unchanged. |
+| H14.8 | *(decision)* End the lock transition (H11.9): drop the shared temp-dir lock files once no process older than H11.9 runs. Three sessions from before it still run MCP servers. | `LEGACY_LOCKS = False`, and the dual-lock code removed. |
+| H14.9 | Outside review #8, each reviewer run twice to see the variance. | Grades recorded. |
+
+Not doing: the codex fallback stays opt-in; privacy by design (capture and a
+pushed tree) is the product, documented; the cost of one maintainer isn't a
+code change.
+
 ## Status
 
 Updated as phases land. Each phase had a Codex diff review, fixes for every
@@ -627,7 +648,8 @@ a recheck.
 - **H11**: done. H11.8: outside review #5 at `bcec9a2`; its
   findings are H12.
 - **H12**: done (merged by 5323e58; H12.8 dropped). H12.10: outside review #6 at `5323e58`; its findings are H13.
-- **H13**: done (merged by 32ebc04; all CI green). H13.7 (fsync) measured and not kept: it slowed writes beyond noise. H13.13: outside review #7.
+- **H13**: done (merged by 32ebc04; all CI green). H13.7 (fsync) measured and not kept: it slowed writes beyond noise. H13.13: outside review #7 at `9247509`; its findings are H14.
+- **H14**: planned, awaiting approval.
 - **H13.8, the nightly's part, implemented** (2026-11-07, `hardening/h13c`;
   not yet reviewed or merged). Opus's three findings held.
   - The stale-day scan read every day-file in the history every night to
