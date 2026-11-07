@@ -40,7 +40,7 @@ from smriti.daylog.config import DaylogConfig, load_config
 from smriti.daylog.digest import _NO_TOOLS_ARGS, compose, nightly_fallback
 from smriti.daylog.model import day_key, day_tz
 from smriti.daylog.notify import notify_user
-from smriti.daylog.scrub import scrub
+from smriti.core.scrub import scrub
 from smriti.llm import LLMError
 
 log = logging.getLogger(__name__)

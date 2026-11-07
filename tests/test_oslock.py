@@ -118,7 +118,7 @@ def test_the_shared_file_is_exactly_where_old_code_locks(tmp_path: Path) -> None
 
 
 def test_a_named_lock_is_taken_in_the_runtime_directory(tmp_path: Path) -> None:
-    from smriti.embed.runtime import runtime_dir
+    from smriti.core.rundir import runtime_dir
 
     key = lock_path("edit", str(tmp_path / "tree"))
     with _held(key):
@@ -129,7 +129,7 @@ def test_a_named_lock_is_taken_in_the_runtime_directory(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes; Windows relies on ACLs")
 def test_private_lock_files_are_the_owners_alone(tmp_path: Path) -> None:
-    from smriti.embed.runtime import runtime_dir
+    from smriti.core.rundir import runtime_dir
 
     key = lock_path("edit", str(tmp_path / "tree"))
     with _held(key):
@@ -262,7 +262,7 @@ def test_contending_takers_complete_and_never_overlap(tmp_path: Path) -> None:
 
 
 def _refuse_runtime_dir(monkeypatch: pytest.MonkeyPatch) -> None:
-    import smriti.embed.runtime as runtime
+    import smriti.core.rundir as runtime
 
     def refuse(*, create: bool = True) -> Path:
         raise runtime.RuntimeDirError("refusing the runtime directory: other users can write")

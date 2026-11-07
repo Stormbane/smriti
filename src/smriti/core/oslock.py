@@ -6,7 +6,7 @@ no takeover to race. Separate opens conflict even within one process, so
 threads are serialised too. The lock file itself is never deleted.
 
 Use it for short critical sections. A named lock (:func:`lock_path`) lives in
-the private per-user runtime directory (``smriti.embed.runtime``, the one the
+the private per-user runtime directory (``smriti.core.rundir``, the one the
 embedding service uses), in ``<runtime>/locks``: never in a directory another
 user can write to, and never inside a git-tracked tree (a locked byte range
 would make ``git add`` fail on Windows).
@@ -94,10 +94,10 @@ def private_lock_dir() -> Path:
     """``<runtime>/locks``, created and checked; raises OSError when it can't be used.
 
     The runtime directory's own checks (owner, mode, created 0700) come from
-    ``smriti.embed.runtime``, which refuses one that isn't safe with a
+    ``smriti.core.rundir``, which refuses one that isn't safe with a
     ``RuntimeDirError`` (an OSError).
     """
-    from smriti.embed.runtime import RuntimeDirError, private_dir_problem, runtime_dir
+    from smriti.core.rundir import RuntimeDirError, private_dir_problem, runtime_dir
 
     path = runtime_dir() / _PRIVATE_DIR
     path.mkdir(mode=0o700, exist_ok=True)

@@ -57,7 +57,7 @@
 - **Runtime state outside the tree**: what a process shares with others of the
   same user (the embedding service's key, lock, discovery file, log; the named
   `oslock` locks, in `locks/`) lives in the private runtime directory
-  (`smriti.embed.runtime`), never in the memory root, which git tracks and
+  (`smriti.core.rundir`), never in the memory root, which git tracks and
   pushes, and never in a directory other users can write to.
 - **No config files** in v0.1. Env vars only.
 - **`root: Path | None = None`** parameter pattern -- most functions accept an

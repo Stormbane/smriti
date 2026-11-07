@@ -31,7 +31,7 @@ the memory template's `.gitignore`, that is:
   Then `log/YYYY/MM/DD.jsonl` and its render `DD.md` hold every message
   you typed and every reply the agent wrote in Claude Code, Codex and the
   voice channel. Tool calls,
-  tool output and thinking are dropped. `daylog/scrub.py` masks strings
+  tool output and thinking are dropped. `core/scrub.py` masks strings
   shaped like credentials (provider API keys and tokens, JWTs, bearer
   headers, `password=` style assignments, passwords in URLs, private key
   blocks); everything else stays, including names, pasted file contents

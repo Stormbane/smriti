@@ -178,7 +178,7 @@ def write_entry_result(
 
     # Use local time for file paths and dates (journal entries are human-facing).
     # Store UTC in frontmatter for precision.
-    from smriti.daylog.model import day_tz
+    from smriti.core.dayzone import day_tz
 
     now_utc = datetime.now(timezone.utc)
     # The day-log's clock, so a journal entry and that moment's turns fall on

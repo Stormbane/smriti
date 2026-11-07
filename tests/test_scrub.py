@@ -23,8 +23,8 @@ import time
 
 import pytest
 
-from smriti.daylog import scrub as scrub_mod
-from smriti.daylog.scrub import scrub
+from smriti.core import scrub as scrub_mod
+from smriti.core.scrub import scrub
 
 _SAMPLES = [
     "sk-ant-api03-abcdefghijklmnop1234",

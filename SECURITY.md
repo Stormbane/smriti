@@ -77,7 +77,7 @@ security backport series or guaranteed response time.
   (`profiles-*.json`, where other users can't write), keyed on the import
   path's entries and their modification times; a missing, corrupt or stale
   cache means a fresh scan.
-- `daylog/scrub.py` masks recognised credential patterns before captured turns
+- `core/scrub.py` masks recognised credential patterns before captured turns
   are persisted, and `smriti.core.memwrite` applies it to every write of memory
   text into the tree: entries, the project tools' files, the handoff, the
   reference profile's outbox, rendered days, digests, rollups and `index.md`

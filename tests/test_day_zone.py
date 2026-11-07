@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from smriti.core import dayzone
 from smriti.core.tree import tree_root
 from smriti.daylog import model
 from smriti.daylog.model import SYSTEM_TIME, day_tz, local_day
@@ -67,7 +68,7 @@ class Clock:
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self.now = 1000.0
-        monkeypatch.setattr(model, "_clock", lambda: self.now)
+        monkeypatch.setattr(dayzone, "_clock", lambda: self.now)
 
 
 def test_a_config_change_is_seen_without_a_restart(
@@ -84,7 +85,7 @@ def test_a_config_change_is_seen_without_a_restart(
     os.utime(path, (later, later))  # a new mtime even on coarse clocks
     clock.now += 0.5
     assert day_tz().utcoffset(None) == timedelta(hours=-4)  # within the second: as last read
-    clock.now += model.ZONE_RECHECK_S
+    clock.now += dayzone.ZONE_RECHECK_S
     assert day_tz().utcoffset(None) == timedelta(hours=3)  # seen once the second is up
 
 
@@ -113,7 +114,7 @@ def test_ten_thousand_lookups_cost_a_handful_of_stats(
     took = time.perf_counter() - t0
 
     assert days == {datetime(2026, 11, 6).date()}  # 20:00 UTC is the next day at +5.5
-    assert len(stats) <= 1 + int(took / model.ZONE_RECHECK_S) + 1  # one a second at most
+    assert len(stats) <= 1 + int(took / dayzone.ZONE_RECHECK_S) + 1  # one a second at most
     assert len(stats) <= 5
 
 
@@ -135,15 +136,15 @@ def test_a_changed_zone_is_seen_after_the_interval_and_only_then(
     path.write_text(json.dumps({"timezone": "-7"}), encoding="utf-8")  # another size
     start = clock.now
     for i in range(100):
-        clock.now = start + model.ZONE_RECHECK_S * i / 100
+        clock.now = start + dayzone.ZONE_RECHECK_S * i / 100
         assert day_tz().utcoffset(None) == timedelta(hours=2)
     assert len(looked) == 1  # nothing looked at the file within the second
-    clock.now = start + model.ZONE_RECHECK_S
+    clock.now = start + dayzone.ZONE_RECHECK_S
     assert day_tz().utcoffset(None) == timedelta(hours=-7)
     assert len(looked) == 2
 
     path.unlink()  # no config: the system's zone, within a second as well
-    clock.now += model.ZONE_RECHECK_S
+    clock.now += dayzone.ZONE_RECHECK_S
     assert day_tz() is SYSTEM_TIME
 
 

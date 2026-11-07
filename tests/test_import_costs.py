@@ -72,7 +72,8 @@ def test_listing_the_tools_does_not_import_the_day_log_writer() -> None:
     imported = _imported_by(
         "from smriti.mcp.server import handle_message\n"
         "handle_message({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})",
-        ["smriti.daylog.writer", "smriti.daylog.scrub", "importlib.metadata"])
+        ["smriti.daylog.writer", "smriti.daylog.scrub", "smriti.core.scrub",
+         "importlib.metadata"])
     assert not any(imported.values()), imported
 
 

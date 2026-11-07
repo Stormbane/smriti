@@ -38,7 +38,7 @@ from typing import BinaryIO
 from smriti.daylog.config import DaylogConfig
 from smriti.daylog.lock import writer_lock
 from smriti.daylog.model import Turn, day_key
-from smriti.daylog.scrub import scrub
+from smriti.core.scrub import scrub
 
 log = logging.getLogger(__name__)
 

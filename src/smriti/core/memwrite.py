@@ -6,7 +6,7 @@ and their status changes, todos, the handoff, the reference profile's
 outbox, rendered day logs, digests, rollups and ``index.md`` listings. The
 tree is committed and pushed, and an agent writes down whatever it was
 shown (a model can be made to copy a key into a digest, too), so credential
-shapes are masked first (:func:`smriti.daylog.scrub.scrub`) in the whole
+shapes are masked first (:func:`smriti.core.scrub.scrub`) in the whole
 text: the body, and the titles and metadata that land in the file with it.
 A name that goes into a path is masked by its caller with :func:`mask`.
 The write itself goes through :mod:`smriti.core.files`.
@@ -22,7 +22,7 @@ import os
 from pathlib import Path
 
 from smriti.core.files import create_new, edit_lock, write_atomic
-from smriti.daylog.scrub import scrub
+from smriti.core.scrub import scrub
 
 # How much of a file is read to learn its line ending: its first line ends
 # well inside this (frontmatter, or a heading).
