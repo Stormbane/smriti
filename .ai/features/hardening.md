@@ -996,7 +996,11 @@ a recheck.
   `read_discovery` tries a refused read (Windows' PermissionError while
   `os.replace` swaps the record in) again for up to 50 ms, in waits of 5, 10, 15
   and 20 ms; only a missing, still refused or malformed file is "no service".
-  Tests simulate one refusal, four, and a lasting one.
+  Tests simulate one refusal, four, and a lasting one. The other half of the same
+  window, met once by the full suite (`test_one_service_however_many_clients_hold_it`):
+  Windows refuses to delete the record while a client has it open to read, so an
+  exiting service left a "draining" record with a dead pid; `clear_discovery`
+  tries a refused removal again the same way.
 - **Benchmark** (h12s; `scripts/bench.py`, 2026-11-07, the reference tree's copy,
   17 queries: the 10 before, four punctuation-heavy ASCII ones and three outside
   ASCII; two alternating rounds; A master `dccdea8`, B `43ffe44`, the last code

@@ -48,7 +48,8 @@ All notable changes to this project are documented here, following
   searches for exactly what it did.
 - On Windows a client could read the embedding service as not running while the
   service replaced its discovery file (a refused open), and start a second one or
-  fail a query; a refused read is now tried again for up to 50 ms.
+  fail a query; a refused read is now tried again for up to 50 ms. An exiting
+  service's removal of the file, refused while a client read it, is too.
 
 - A manual `smriti nightly` and the scheduled one could run at once. One run holds
   a lock for the memory root; a second waits 10 seconds, then skips without
