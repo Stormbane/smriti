@@ -206,10 +206,11 @@ none of them built.
   is captured into the day-log like any other turn, and pushed with it.
 - **The key is the only copy.** Git can't restore it: back it up outside the
   tree, or the notes are lost with it. An older store kept its key in
-  `private/README.md`, which is committed; it is still read from there when
-  `.key` is absent. If that README was ever pushed, the key is in the remote's
-  history: move it to `.key`, re-encrypt the notes under a new key (smriti has
-  no tool for that yet) and rewrite the history.
+  `private/README.md`, which is committed; smriti moves such a key to `.key`,
+  takes it out of the README and warns (in the log, and in `smriti status`
+  until `private/KEY-WAS-COMMITTED.txt` is deleted). The key is still in the
+  history: re-encrypt the notes under a new key (smriti has no tool for that
+  yet; `docs/PRIVACY.md` has the steps) and rewrite the history.
 
 ## The embedding service
 

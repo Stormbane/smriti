@@ -335,9 +335,49 @@ and the ciphertext are committed.
 - **Back the key up yourself** (a password manager or an offline copy):
   git can't restore it, and without it the files can't be decrypted
 - Older installs kept the key in a fenced `key:` block in
-  `private/README.md`; smriti still reads it from there when `.key` is
-  absent. Move it to `.key` and rewrite that history if the repo was ever
-  pushed
+  `private/README.md`, which is committed. smriti moves such a key to
+  `.key` (the same key, so nothing becomes unreadable), takes its line out
+  of the README, logs a warning, and leaves
+  `private/KEY-WAS-COMMITTED.txt`; `smriti status` shows the warning until
+  you delete that file. The key is still in the repository's history, so
+  rotate it (below)
+
+### If the key was ever committed
+
+smriti can't rotate the key itself yet (see section 9). Anyone with a copy
+of the repository has the old key and every file encrypted under it, so:
+
+1. Copy `private/.key` somewhere safe outside the memory tree, for
+   recovery while you rotate.
+2. With no session open, run this from the memory root. It saves the new
+   key outside the tree first, so it can be run again if it stops part
+   way; files already re-encrypted are read with either key:
+
+   ```python
+   import os
+   from pathlib import Path
+   from cryptography.fernet import Fernet, MultiFernet
+
+   private = Path("private")
+   key_file = private / ".key"
+   pending = Path.home() / "smriti-new-private.key"  # outside the tree: never committed
+   if not pending.exists():
+       pending.write_bytes(Fernet.generate_key())
+   new, old = pending.read_bytes().strip(), key_file.read_bytes().strip()
+   both = MultiFernet([Fernet(new), Fernet(old)])  # writes with the new key, reads either
+   for path in private.rglob("*.md.enc"):
+       tmp = path.with_name(path.name + ".tmp")
+       tmp.write_bytes(both.rotate(path.read_bytes()))
+       os.replace(tmp, path)
+   key_file.write_bytes(new + b"\n")
+   print(f"done: back up private/.key, then delete {pending}")
+   ```
+
+3. Back up the new `private/.key`, delete the pending key file and
+   `private/KEY-WAS-COMMITTED.txt`.
+4. The old ciphertext is still in the history, and the old key opens it:
+   rotate to a fresh remote, or rewrite the history and force-push (as for
+   a tree pushed in plaintext, above).
 
 ### Audit log
 
@@ -536,7 +576,7 @@ stable, not to replace it.
 ## 9. Open design questions
 
 1. **Key rotation**: Phase 1 has no rotation (the key is written
-   once). Phase 2+ should support rotation. How do we
+   once; section 4 has the manual steps). Phase 2+ should support rotation. How do we
    re-encrypt existing files under a new key without a window where
    both old and new keys are live on disk?
 2. **Cross-entity privacy**: if two Narada instances share a memory

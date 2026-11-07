@@ -14,6 +14,7 @@ Layout:
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -25,15 +26,27 @@ from smriti.private.audit import AuditLog
 if TYPE_CHECKING:
     from cryptography.fernet import Fernet
 
+log = logging.getLogger(__name__)
 
 # The contract template shipped with smriti, copied to private/README.md on
 # PrivateStore.init(). The key goes to private/.key, which private/.gitignore
 # keeps out of git: a key committed beside its ciphertext protects nothing
 # from anyone who can clone the remote. Older installs kept the key in a
-# README code block; it is still read from there when .key is absent.
+# README code block; found there, it is moved to .key (see
+# PrivateStore._migrate_legacy_key).
 _TEMPLATE_PATH = Path(__file__).parent / "README.template.md"
 _KEY_FILE = ".key"
 _GITIGNORE = ".key\n"
+# Left in private/ when a key is moved out of the README, until the user has
+# rotated the key and deletes it; `smriti status` shows it meanwhile.
+LEGACY_KEY_NOTE = "KEY-WAS-COMMITTED.txt"
+LEGACY_KEY_WARNING = (
+    "The private store's key was in private/README.md, which git tracks. smriti moved it to "
+    "private/.key (kept out of git) and took it out of the README, but the key is still in "
+    "the repository's git history: anyone with a copy of the repository can decrypt what is "
+    "encrypted under it. smriti can't rotate the key itself yet: see 'If the key was ever "
+    "committed' in docs/PRIVACY.md, then delete private/" + LEGACY_KEY_NOTE + "."
+)
 
 
 @dataclass
@@ -92,8 +105,9 @@ class PrivateStore:
 
         Idempotent and never destructive:
 
-        - an existing key (in `.key`, or in an older install's README) is
-          kept, because replacing it would orphan every encrypted file;
+        - an existing key is kept, because replacing it would orphan every
+          encrypted file; an older install's, in the README, is moved to
+          `.key` (:meth:`_migrate_legacy_key`);
         - a store that already holds ciphertext but has no key (a repo
           restored from git, where `.key` was never committed) gets no new
           key: writes then fail until `.key` is restored from backup, rather
@@ -111,10 +125,10 @@ class PrivateStore:
         readme = self.private_root / "README.md"
         if not readme.exists():
             readme.write_text(_TEMPLATE_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+        self._migrate_legacy_key()
         key_path = self.private_root / _KEY_FILE
         has_ciphertext = any(self.private_root.rglob("*.md.enc"))
-        if (not key_path.exists() and self._legacy_readme_key() is None
-                and not has_ciphertext):
+        if not key_path.exists() and not has_ciphertext:
             # The key first: if it can't be made (no cryptography), no empty
             # .key may be left behind to stop every later init from making one.
             key = self._generate_key()
@@ -138,15 +152,14 @@ class PrivateStore:
     # ---- key loading -------------------------------------------------------
 
     def _load_fernet(self) -> "Fernet":
-        """Return a Fernet for this store's key: `.key`, else a legacy README key."""
+        """Return a Fernet for this store's key, in `.key` (moved there from a legacy README)."""
         from cryptography.fernet import Fernet
 
         key_path = self.private_root / _KEY_FILE
+        if not key_path.exists():
+            self._migrate_legacy_key()
         if key_path.exists():
             return Fernet(key_path.read_text(encoding="ascii").strip().encode("ascii"))
-        legacy = self._legacy_readme_key()
-        if legacy is not None:
-            return Fernet(legacy.encode("ascii"))
         raise RuntimeError(
             f"no key at {key_path} (and no legacy key in private/README.md). "
             "Call PrivateStore.init() first, or restore .key from your backup."
@@ -154,22 +167,80 @@ class PrivateStore:
 
     def _legacy_readme_key(self) -> str | None:
         """The key from an older install's README (`key: ...` in a code block)."""
+        found = self._legacy_key_line()
+        return found[1] if found is not None else None
+
+    def _legacy_key_line(self) -> tuple[int, str] | None:
+        """The README's ``key:`` line in a fenced code block: (its index, the key)."""
         readme = self.private_root / "README.md"
         if not readme.exists():
             return None
-        text = readme.read_text(encoding="utf-8")
-
-        # Find a line starting with "key:" inside any fenced code block.
         in_fence = False
-        for line in text.splitlines():
+        for i, line in enumerate(readme.read_bytes().decode("utf-8").splitlines()):
             stripped = line.strip()
             if stripped.startswith("```"):
                 in_fence = not in_fence
                 continue
             if in_fence and stripped.startswith("key:"):
                 key = stripped.split(":", 1)[1].strip()
-                return key if key and not key.startswith("{{") else None
+                return (i, key) if key and not key.startswith("{{") else None
         return None
+
+    def _migrate_legacy_key(self) -> None:
+        """Move an older install's key from the committed README to `.key`, and say so.
+
+        The key is written to `.key` as :meth:`init` writes a new one
+        (exclusive create, owner-only on POSIX), then its line is taken out
+        of the README. The README was committed, so the key is still in git
+        history: :data:`LEGACY_KEY_WARNING` is logged, and
+        :data:`LEGACY_KEY_NOTE` left in `private/` (``smriti status`` shows
+        it) until the user has rotated the key and deletes it. A `.key`
+        that holds another key wins, as before; the README is then left as
+        it is, and that is logged too.
+        """
+        found = self._legacy_key_line()
+        if found is None:
+            return
+        line_no, key = found
+        key_path = self.private_root / _KEY_FILE
+        try:
+            fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass  # there already (another process, mid-migration, or an older .key)
+        else:
+            try:
+                with os.fdopen(fd, "w", encoding="ascii") as f:
+                    f.write(key + "\n")
+            except BaseException:  # noqa: BLE001 — no half-written key survives; re-raised
+                key_path.unlink(missing_ok=True)
+                raise
+        if key_path.read_text(encoding="ascii").strip() != key:
+            log.warning("private/README.md holds a key that isn't the one in private/.key; "
+                        "the store uses .key's, and the README is left as it is")
+            return
+        self._remove_readme_line(line_no)
+        note = self.private_root / LEGACY_KEY_NOTE
+        if not note.exists():
+            note.write_text(LEGACY_KEY_WARNING + "\n", encoding="utf-8")
+        log.warning(LEGACY_KEY_WARNING)
+
+    def _remove_readme_line(self, line_no: int) -> None:
+        """Take line *line_no* out of the README, and its code block if nothing else is in it."""
+        from smriti.core.files import write_atomic  # only here: a migration is rare
+
+        readme = self.private_root / "README.md"
+        # Its own line endings kept: bytes in, bytes out.
+        lines = readme.read_bytes().decode("utf-8").splitlines(keepends=True)
+        del lines[line_no]
+        start = line_no - 1
+        while start >= 0 and not lines[start].strip().startswith("```"):
+            start -= 1
+        end = line_no
+        while end < len(lines) and not lines[end].strip().startswith("```"):
+            end += 1
+        if start >= 0 and end < len(lines) and not "".join(lines[start + 1:end]).strip():
+            del lines[start:end + 1]  # the block held the key alone
+        write_atomic(readme, "".join(lines).encode("utf-8"))
 
     # ---- consent tokens ----------------------------------------------------
 
