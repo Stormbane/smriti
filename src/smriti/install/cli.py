@@ -189,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if projects.note:
         print(f"[mirrors] {projects.note}")
-    if projects.to_record and projects.path is not None:
+    if projects.to_record:
         try:
             record_projects_root(memory_root, projects.path)
         except OSError as exc:

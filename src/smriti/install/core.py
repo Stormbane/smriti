@@ -107,8 +107,13 @@ class ProjectsRoot:
 
     @property
     def to_record(self) -> bool:
-        """Whether this run should record it: chosen now, not read from the record."""
-        return self.path is not None and self.how != "recorded"
+        """Whether this run should record it: chosen now, not read from the record.
+
+        "none" is recorded too, so a rerun keeps it: without the record, the
+        rerun would find the scripts this run deployed and take the install
+        for one made before the record.
+        """
+        return self.how != "recorded"
 
 
 def install_record_path(memory_root: Path) -> Path:
@@ -124,17 +129,20 @@ def read_install_record(memory_root: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def record_projects_root(memory_root: Path, projects_root: Path) -> Path | None:
+def record_projects_root(memory_root: Path, projects_root: Path | None) -> Path | None:
     """Record *projects_root* for the next run, keeping the record's other keys.
 
-    Returns the record's path, or None when it held this root already.
+    None records the choice of no projects root (``"projects_root": null``),
+    which a rerun keeps; a record without the key is an install from before
+    it. Returns the record's path, or None when it held this already.
     """
     from smriti import __version__
 
     data = read_install_record(memory_root)
-    if data.get("projects_root") == str(projects_root):
+    value = None if projects_root is None else str(projects_root)
+    if "projects_root" in data and data["projects_root"] == value:
         return None
-    data["projects_root"] = str(projects_root)
+    data["projects_root"] = value
     data["recorded_by"] = __version__
     data["at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     path = install_record_path(memory_root)
@@ -186,23 +194,29 @@ def resolve_projects_root(memory_root: Path, given: str | None) -> ProjectsRoot:
     """The projects root this run links mirrors from.
 
     1. ``--projects-root`` when given (recorded for next time).
-    2. The one ``install.json`` records.
-    3. An install made before it was recorded: the root its mirrors link
-       into, when they agree; else ``C:/Projects``, the old default, when
-       that directory exists. Either is recorded, so later runs link the
-       same projects.
+    2. The one ``install.json`` records, a directory or none (``null``).
+    3. An install made before it was recorded (its record has no
+       ``projects_root``): the root its mirrors link into, when they agree;
+       else ``C:/Projects``, the old default, when that directory exists.
     4. Else none: a new install links no projects until it is told where
        they are.
+
+    Whatever 1, 3 and 4 choose is recorded, so later runs link the same
+    projects, or none, until a flag says otherwise.
     """
     if given:
         return ProjectsRoot(Path(given).expanduser().absolute(), "flag")
-    recorded = read_install_record(memory_root).get("projects_root")
-    if isinstance(recorded, str) and recorded.strip():
-        return ProjectsRoot(Path(recorded), "recorded")
+    record = read_install_record(memory_root)
+    unset = ("no projects root, so no project mirrors are linked (recorded for the next "
+             "run): pass --projects-root DIR to link them")
+    if "projects_root" in record:
+        recorded = record["projects_root"]
+        if recorded is None:
+            return ProjectsRoot(None, "recorded", unset)
+        if isinstance(recorded, str) and recorded.strip():
+            return ProjectsRoot(Path(recorded), "recorded")
     from smriti.install.privacy import is_existing_install
 
-    unset = ("no projects root is recorded, so no project mirrors are linked: "
-             "pass --projects-root DIR to link them")
     if not is_existing_install(memory_root):
         return ProjectsRoot(None, "none", unset)
     inferred = projects_root_from_mirrors(memory_root)

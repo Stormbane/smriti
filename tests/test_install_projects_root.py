@@ -224,3 +224,44 @@ def test_the_install_record_is_json(root: Path, tmp_path: Path) -> None:
     assert path == core.install_record_path(root)
     assert json.loads(path.read_text(encoding="utf-8"))["projects_root"] == str(tmp_path / "code")
     assert core.record_projects_root(root, tmp_path / "code") is None
+
+
+def test_a_new_installs_choice_of_no_projects_is_kept(
+        root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex review of H12.4 (P2): a new install without --projects-root linked
+    nothing and recorded nothing, so its rerun found the wake.py it had deployed,
+    took itself for an install from before the record, and linked C:/Projects
+    unasked. The choice of none is recorded, and a rerun keeps it."""
+    old_default = tmp_path / "old-default"
+    project(old_default, "kite")
+    monkeypatch.setattr(core, "LEGACY_PROJECTS_ROOT", old_default)
+
+    assert install(root, monkeypatch) == 0
+    assert mirrors(root) == []
+    record = core.read_install_record(root)
+    assert "projects_root" in record and record["projects_root"] is None
+
+    assert install(root, monkeypatch) == 0  # now an existing install, with C:/Projects there
+    assert mirrors(root) == []
+    assert core.resolve_projects_root(root, None).how == "recorded"
+
+    assert install(root, monkeypatch, "--projects-root", str(old_default)) == 0  # told: links
+    assert mirrors(root) == ["kite"] and recorded(root) == str(old_default)
+
+
+def test_only_a_record_without_the_key_predates_it(
+        root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A record holding other keys but no projects root is an install from before
+    the record: the old default still applies to it, and is then recorded."""
+    old_default = tmp_path / "old-default"
+    project(old_default, "kite")
+    monkeypatch.setattr(core, "LEGACY_PROJECTS_ROOT", old_default)
+    (root / ".smriti").mkdir(parents=True)
+    (root / ".smriti" / "wake.py").write_text('"""smriti wake"""\n', encoding="utf-8")
+    core.install_record_path(root).write_text('{"note": "kept"}', encoding="utf-8")
+
+    found = core.resolve_projects_root(root, None)
+    assert (found.path, found.how) == (old_default, "legacy")
+    assert install(root, monkeypatch) == 0
+    assert core.read_install_record(root)["note"] == "kept"
+    assert recorded(root) == str(old_default)
