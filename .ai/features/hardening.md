@@ -858,6 +858,16 @@ a recheck.
   still fails: results are scored down, not withheld. The needs_model test
   holds bge-m3's floors (corrections and abstention at least 50%, no
   answerable query under the mark).
+- **Codex diff review of `hardening/h13a`** (2026-11-07): one P2, fixed with a
+  regression test that fails without the fix. The best similarity measures
+  only chunks with vectors, so a write whose vectors were pending, found by an
+  exact keyword, was scored down with the unrelated notes (0.4 to about 0)
+  under a note that nothing was close: against the promise that a write
+  without vectors stays searchable by keyword. When a search is under the
+  mark, a keyword-found chunk whose source's vectors are pending (one indexed
+  `sources` query, only then and only with pending sources) keeps its score
+  and may rank first; the rest is scaled as before, and the note says so
+  (`SearchOutcome.unmeasured`). The quality set's numbers are unchanged.
 - **Benchmark** (h13a; `scripts/bench.py`, 2026-11-07, the reference tree's
   copy, 10 queries, two alternating rounds; A master `af9321e`, B `8586aef`):
 
