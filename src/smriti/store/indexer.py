@@ -235,6 +235,7 @@ def index_tree(
     root: Path | None = None,
     db: Path | None = None,
     verbose: bool = False,
+    busy_ms: int | None = None,
 ) -> dict[str, int]:
     """Index the narada tree: scan, plan, embed, commit.
 
@@ -255,6 +256,9 @@ def index_tree(
         Database path (defaults to the root's, ``<root>/.smriti/index.db``).
     verbose:
         Log progress at INFO level.
+    busy_ms:
+        How long the write waits for another writer's lock; by default
+        ``SMRITI_DB_BUSY_TIMEOUT_MS`` or 10 s (see :func:`ensure_schema`).
 
     Returns
     -------
@@ -285,7 +289,7 @@ def index_tree(
     log.info("Embedding provider: %s (dimension=%d)", provider.model_name, dim)
 
     # ── Open / create database ───────────────────────────────────────
-    conn = ensure_schema(db, dim)
+    conn = ensure_schema(db, dim, busy_ms=busy_ms)
     staged = _Staged(EMBED_BATCH)
     try:
         # Identity guard: vectors from two models can't share an index.

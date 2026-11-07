@@ -525,23 +525,26 @@ def test_index_step_retries_through_transient_lock(
     import smriti.store.indexer as indexer_mod
     from smriti.daylog.nightly import _index_with_retries
 
-    calls = {"n": 0}
+    import os
+
+    calls: list[dict[str, object]] = []
+    before = dict(os.environ)
 
     def flaky(**kwargs: object) -> dict[str, int]:
-        calls["n"] += 1
-        if calls["n"] < 3:
+        calls.append(kwargs)
+        # The longer wait is the indexer's argument; the environment is untouched.
+        assert dict(os.environ) == before
+        if len(calls) < 3:
             raise sqlite3.OperationalError("database is locked")
-        # The step must run with the raised busy timeout in effect.
-        import os
-        assert os.environ["SMRITI_DB_BUSY_TIMEOUT_MS"] == "60000"
         return {"scanned": 5, "indexed": 2}
 
     monkeypatch.setattr(indexer_mod, "index_tree", flaky)
     monkeypatch.setattr("smriti.daylog.nightly.time.sleep", lambda s: None)
     result = _index_with_retries(_cfg(tmp_path))
     assert result["ok"] is True and result["attempts"] == 3 and result["indexed"] == 2
-    import os
-    assert "SMRITI_DB_BUSY_TIMEOUT_MS" not in os.environ  # restored
+    assert [c["busy_ms"] for c in calls] == [60_000] * 3
+    assert all(c["root"] == tmp_path for c in calls)
+    assert dict(os.environ) == before
 
 
 def test_index_step_fails_visibly_when_wedged(
@@ -561,6 +564,39 @@ def test_index_step_fails_visibly_when_wedged(
     assert result["ok"] is False
     assert result["attempts"] == len(_INDEX_RETRY_DELAYS_S)
     assert "locked" in str(result["error"])
+
+
+def test_the_index_step_waits_longer_without_touching_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real indexer gets the nightly's wait as an argument; the process environment
+    (which other threads and child processes read) never changes."""
+    import os
+
+    import smriti.store.indexer as indexer_mod
+    from smriti._vendored.memsearch.embeddings.stub import StubEmbedding
+    from smriti.daylog.nightly import _index_with_retries
+    from smriti.embed import provider as embedding
+
+    (tmp_path / "identity.md").write_text("# Ari\n\nAri keeps the notes.\n", encoding="utf-8")
+    stub = StubEmbedding()
+    monkeypatch.setattr(embedding, "embedder", lambda: stub)
+    monkeypatch.delenv("SMRITI_DB_BUSY_TIMEOUT_MS", raising=False)
+    before = dict(os.environ)
+    waits: list[int] = []
+    real_schema = indexer_mod.ensure_schema
+
+    def spy(db: Path, dimension: int | None, **kw: object) -> object:
+        conn = real_schema(db, dimension, **kw)  # type: ignore[arg-type]
+        waits.append(conn.execute("PRAGMA busy_timeout").fetchone()[0])
+        assert dict(os.environ) == before
+        return conn
+
+    monkeypatch.setattr(indexer_mod, "ensure_schema", spy)
+    result = _index_with_retries(_cfg(tmp_path))
+    assert result["ok"] is True and result["indexed"] == 1
+    assert waits == [60_000]
+    assert dict(os.environ) == before
 
 
 # ---------------------------------------------------------------- morning

@@ -263,33 +263,27 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
 # hold index.db's write lock for minutes. Waits between attempts ride out
 # a transient hold; a truly wedged writer still surfaces as a failed step.
 _INDEX_RETRY_DELAYS_S = (0.0, 30.0, 90.0)
-_INDEX_BUSY_TIMEOUT_MS = "60000"
+# The index step's wait for that lock, longer than an interactive writer's.
+# Passed to the indexer, never set in the process environment.
+_INDEX_BUSY_TIMEOUT_MS = 60_000
 
 
 def _index_with_retries(cfg: DaylogConfig) -> dict[str, object]:
     from smriti.store.indexer import index_tree
 
-    previous = os.environ.get("SMRITI_DB_BUSY_TIMEOUT_MS")
-    os.environ["SMRITI_DB_BUSY_TIMEOUT_MS"] = _INDEX_BUSY_TIMEOUT_MS
-    try:
-        last_error = ""
-        for attempt, delay in enumerate(_INDEX_RETRY_DELAYS_S, start=1):
-            if delay:
-                time.sleep(delay)
-            try:
-                stats = index_tree(root=cfg.root)
-                return {"ok": True, "attempts": attempt,
-                        **{k: int(v) for k, v in stats.items()}}
-            except Exception as exc:  # noqa: BLE001 — logged, retried, then in the status
-                last_error = str(exc)[:300]
-                log.warning("index attempt %d failed: %s", attempt, last_error)
-        return {"ok": False, "error": last_error,
-                "attempts": len(_INDEX_RETRY_DELAYS_S)}
-    finally:
-        if previous is None:
-            os.environ.pop("SMRITI_DB_BUSY_TIMEOUT_MS", None)
-        else:
-            os.environ["SMRITI_DB_BUSY_TIMEOUT_MS"] = previous
+    last_error = ""
+    for attempt, delay in enumerate(_INDEX_RETRY_DELAYS_S, start=1):
+        if delay:
+            time.sleep(delay)
+        try:
+            stats = index_tree(root=cfg.root, busy_ms=_INDEX_BUSY_TIMEOUT_MS)
+            return {"ok": True, "attempts": attempt,
+                    **{k: int(v) for k, v in stats.items()}}
+        except Exception as exc:  # noqa: BLE001 — logged, retried, then in the status
+            last_error = str(exc)[:300]
+            log.warning("index attempt %d failed: %s", attempt, last_error)
+    return {"ok": False, "error": last_error,
+            "attempts": len(_INDEX_RETRY_DELAYS_S)}
 
 
 def _clear_dirty(cfg: DaylogConfig, dirty: set[str], digest_errors: dict[str, str]) -> None:
