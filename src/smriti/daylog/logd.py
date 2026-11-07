@@ -66,10 +66,9 @@ def _ensure_qmd_daemon() -> None:
 
     The ambient recall hook fires on every Read/Edit/Write in every
     session; with the daemon up it answers over HTTP in under a second,
-    and with it down every fire pays a 10-24s cold `qmd` CLI subprocess
-    (observed in recall.jsonl, 2026-09-06 — including 20s timeouts that
-    returned nothing). Nothing restarted the daemon after a crash or
-    reboot; this 10-minute keepalive tick is the natural supervisor.
+    and with it down every fire pays a 10-24s cold `qmd` CLI subprocess,
+    whose timeouts return nothing. Nothing else restarts the daemon after a
+    crash or reboot; this 10-minute keepalive tick is its supervisor.
     """
     try:
         from smriti.recall.backends import qmd
@@ -103,8 +102,8 @@ def ensure_running(cfg: DaylogConfig | None = None) -> bool:
     if sys.platform == "win32":  # not hasattr: type checkers narrow sys.platform on every OS
         flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     # Keep a diagnosable trail: the daemon's output goes to a capped log
-    # file, not DEVNULL — a 39-hour run that died silently on 2026-09-06
-    # left nothing to autopsy. Truncate at spawn if it has grown large.
+    # file, not DEVNULL, so a daemon that dies leaves its last words behind.
+    # Truncate at spawn if it has grown large.
     log_path = cfg.log_dir / ".logd.log"
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)

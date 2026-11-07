@@ -152,8 +152,8 @@ def _insert_row(conn: IndexDB, row: _Row, indexed_at: str) -> None:
     # rowid without any trigger cleaning its chunks_vec row (vec0 has no
     # triggers), and crash-era partial commits left such orphans behind.
     # When SQLite recycles one of those rowids the plain INSERT hits "UNIQUE
-    # constraint failed on chunks_vec" — which crashed every incremental
-    # index from mid-July until 2026-09-06. Delete-then-insert is idempotent.
+    # constraint failed on chunks_vec" and the whole incremental index fails.
+    # Delete-then-insert is idempotent.
     conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
     if blob is not None:
         conn.execute("INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)", (rowid, blob))
@@ -314,9 +314,8 @@ def index_tree(
     except BaseException:  # noqa: BLE001 — rolled back and closed on any exit; re-raised
         # Never leak an open write transaction from a long-lived
         # process: a mid-index crash with the connection left open
-        # wedged every writer fleet-wide (2026-08-28, and again via
-        # zombie MCP servers on 2026-09-06). Roll back and close on
-        # ANY failure, then re-raise.
+        # wedges every other writer of the index. Roll back and close
+        # on ANY failure, then re-raise.
         try:
             conn.rollback()
         finally:

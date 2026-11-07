@@ -14,7 +14,7 @@ text lacks (hardening H12.11).
 Autonomous sessions (zero human turns in this day) collapse to one
 marker line — derived here at render time, never written into the
 captured record, so a human turn arriving later simply changes the
-render (spec: review round 1, finding 4).
+render.
 """
 
 from __future__ import annotations

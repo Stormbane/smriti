@@ -8,8 +8,7 @@ persisted offset) and returns an :class:`ExtractResult`:
   complete, newline-terminated lines are consumed; a partial tail is
   left for the next pass;
 - ``errors`` — count of malformed/unknown records skipped. Never raises
-  on bad input: unknown schemas are counted and skipped, not fatal
-  (spec: review round 1, finding 4);
+  on bad input: unknown schemas are counted and skipped, not fatal;
 - ``carry`` — what the adapter needs back with the next read of the same
   file, kept in that file's capture state and saved with its offset; None
   leaves what was carried unchanged. It lets an adapter decide the same

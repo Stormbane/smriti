@@ -77,7 +77,7 @@ def clear_stale_lock(root: Path, *, max_age_s: float = _STALE_LOCK_S) -> bool:
 
     Memory commits take seconds, so a lock this old *probably* belongs to a
     git that died mid-commit. Left alone it silently blocks every later
-    backup (one from 2026-09-07 did, for six weeks). Age alone isn't proof,
+    backup, for as long as it stays. Age alone isn't proof,
     though: it is removed only when no git process is running and the lock
     is still the one that was inspected, the same rule ``backup.py`` uses.
     """

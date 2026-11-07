@@ -90,8 +90,8 @@ def _has_fts5(conn: sqlite3.Connection) -> bool:
 def open_readonly(db_path: Path, *, vectors: bool = True) -> IndexDB:
     """Read-only connection for search paths.
 
-    Readers must never be failed by writers ("database is locked" under
-    seven concurrent MCP servers, 2026-08-27): mode=ro cannot take a
+    Readers must never be failed by writers ("database is locked" while
+    several MCP servers write): mode=ro cannot take a
     write lock, busy_timeout rides out checkpoints, and no schema work
     happens — the indexer owns the schema, searchers just read it.
     Capability flags come from *what exists in the index*, not from
@@ -106,7 +106,7 @@ def open_readonly(db_path: Path, *, vectors: bool = True) -> IndexDB:
         raise FileNotFoundError(f"no index at {db_path}")
     # Percent-encode the path: '#'/'?' are legal in directory names but
     # URI-reserved, and a raw interpolation would silently truncate the
-    # path SQLite opens (Codex review P2).
+    # path SQLite opens.
     from urllib.parse import quote
     uri = "file:" + quote(str(db_path).replace("\\", "/"), safe="/:") + "?mode=ro"
     conn = sqlite3.connect(uri, uri=True, timeout=10.0)
@@ -149,8 +149,8 @@ def ensure_schema(
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     # Writer busy timeout, overridable for batch contexts: a live
-    # session's MCP server can hold the write lock for minutes (observed
-    # 2026-09-04), so the 03:00 nightly indexes with a much longer wait
+    # session's MCP server can hold the write lock for minutes, so the
+    # 03:00 nightly indexes with a much longer wait
     # while interactive writers keep the snappier default.
     if busy_ms is None:
         try:
@@ -165,12 +165,11 @@ def ensure_schema(
         conn.execute("PRAGMA foreign_keys=ON")
         return _ensure_schema_inner(conn, dimension)
     except BaseException:  # noqa: BLE001 — rolled back and closed on any exit; re-raised
-        # Leak-proofing (2026-08-28 lock cascade): a throw mid-schema
-        # left this connection's implicit write transaction OPEN in a
-        # long-lived process, wedging every other writer — and their
-        # own ensure_schema throws then leaked more open transactions,
-        # a self-sustaining fleet-wide deadlock. Roll back and close on
-        # any failure; never leak a connection holding a write lock.
+        # Leak-proofing: a throw mid-schema would leave this connection's
+        # implicit write transaction OPEN in a long-lived process, wedging
+        # every other writer, whose own ensure_schema throws would leak
+        # more: a self-sustaining deadlock. Roll back and close on any
+        # failure; never leak a connection holding a write lock.
         try:
             conn.rollback()
         finally:

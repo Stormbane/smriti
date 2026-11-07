@@ -4,7 +4,7 @@ Internal ``claude -p`` / ``codex exec`` calls must not run from an
 arbitrary cwd: Claude Code writes a session transcript under
 ``~/.claude/projects/<encoded-cwd>/``, and the day-log daemon would
 capture the digest prompt as a user turn and the output as the agent's —
-feeding derived text back into future digests (diff review P1). Running
+feeding derived text back into future digests. Running
 from this dedicated empty directory namespaces those transcripts where
 the collector's ``llm-workdir`` exclusion drops them, and gives
 sandboxed fallbacks an empty view of the filesystem.

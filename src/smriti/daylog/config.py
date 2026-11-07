@@ -210,7 +210,7 @@ def _sources(raw: dict[str, object]) -> tuple[list[SourceSpec], str]:
         return [], f'{_FILE} says "capture": false'
     listed = raw.get("sources")
     # Key presence, not truthiness: an explicit "sources": [] disables
-    # every default source (diff review P2).
+    # every default source.
     if isinstance(listed, list):
         sources = _parse(listed)
     elif capture is True:

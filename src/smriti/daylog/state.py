@@ -7,8 +7,7 @@ whose ids the writer already holds, and dedup absorbs them — that is
 the at-least-once/exactly-once contract.
 
 Health is defined by *scan* recency, not append recency, so a
-legitimately quiet channel is distinguishable from a stalled tail
-(spec: review round 1, finding 9).
+legitimately quiet channel is distinguishable from a stalled tail.
 
 The day-log's own health rides along: how many lines of each day-file
 aren't records, as the writer last read it (a torn append leaves one),
@@ -112,8 +111,8 @@ class DaylogState:
         self.path = path
         self.sources: dict[str, SourceState] = {}
         # Days changed by capture but not yet repaired by a nightly run.
-        # Persisted so a historical change the daemon captured survives
-        # until nightly consumes it (diff review P1).
+        # Persisted so a past day the daemon changed survives until a
+        # nightly consumes it.
         self.dirty_days: set[str] = set()
         # Lines of each day-file that aren't records, as the writer last read it.
         self.corrupt_lines: dict[str, int] = {}
@@ -196,7 +195,7 @@ class DaylogState:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # PID-unique temp name: concurrent savers (daemon + nightly, when
         # not lock-serialized, e.g. crash recovery) must never collide on
-        # the same temp path (diff review P2).
+        # the same temp path.
         tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(payload, indent=1), encoding="utf-8")
         tmp.replace(self.path)

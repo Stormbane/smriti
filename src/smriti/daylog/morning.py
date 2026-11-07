@@ -4,8 +4,8 @@ At most one message per local day, fail-closed. A run claims the day
 before it composes, by an exclusive create of the day's ledger entry, so
 of two overlapping runs one composes and sends and the other stops. The
 entry moves from "claimed" to "sending" BEFORE the send attempt, so a
-crash mid-send means a silent morning, never a double send (spec: review
-round 1, finding 5). A failed compose gives the day back for a later run;
+crash mid-send means a silent morning, never a double send. A failed
+compose gives the day back for a later run;
 a claim a crashed run left behind is taken over once it is
 ``_CLAIM_STALE_S`` old (see :func:`_claim_day`). The
 LLM composes from the digest with no tools, or with web search and
@@ -105,7 +105,7 @@ _SYSTEM_DIGEST_ONLY = (
 # With morning_web_search on, web search only: no MCP servers, no file/exec
 # tools (`smriti morning --dry-run` uses this set too). --tools removes every
 # other built-in tool; --allowedTools alone only permits WebSearch and leaves
-# file tools in reach of a malicious search result (Codex, 2026-11-05). The
+# file tools in reach of a malicious search result. The
 # values are attached for the reason digest._NO_TOOLS_ARGS gives, and
 # tests/test_llm_tool_boundary.py checks the set against the installed CLI.
 _COMPOSE_ARGS = ["--strict-mcp-config", "--tools=WebSearch", "--allowedTools=WebSearch",
@@ -146,7 +146,7 @@ def _scrubbed(value: object) -> object:
     """Secret-scrub every string in a JSON-shaped value, BEFORE
     serialization: JSON escaping would hide a quoted credential from
     the patterns, and a match at a string's end would eat the closing
-    quote (recheck)."""
+    quote."""
     if isinstance(value, str):
         return scrub(value)
     if isinstance(value, dict):
@@ -320,10 +320,10 @@ def run_morning(
     attempts: list[dict[str, str]] = []
     result["llm_attempts"] = attempts
     # The scheduled task's stdout is lost with its console; the status
-    # file is the only trace of a bad morning (2026-09-08). It is
-    # written on every exit from here on, and holds no argv and no
-    # exception text: a notify_cmd or timeout error string can carry a
-    # bearer token, and the log tree is backed up (review).
+    # file is the only trace of a bad morning. It is written on every
+    # exit from here on, and holds no argv and no exception text: a
+    # notify_cmd or timeout error string can carry a bearer token, and
+    # the log tree is backed up.
     try:
         message = compose_message(
             cfg, f"Yesterday's digest ({yesterday}):\n\n{digest_text[:20_000]}", attempts)

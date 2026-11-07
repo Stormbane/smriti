@@ -297,7 +297,7 @@ def set_capture(root: Path, enabled: bool) -> str | None:
     if enabled:
         if isinstance(sources, list) and sources:
             # The file's own sources stay; but "capture": false outranks them,
-            # so on must clear it (Codex review of H11.1).
+            # so on must clear it.
             if data.get("capture") is False:
                 del data["capture"]
                 _write_json(path, data)

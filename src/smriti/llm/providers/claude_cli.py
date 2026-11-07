@@ -80,12 +80,8 @@ class ClaudeCliProvider:
 
         # ALWAYS pipe the prompt via stdin. On Windows ``claude`` resolves
         # to npm's ``claude.cmd`` shim, and cmd.exe ends a command at the
-        # first newline: an argv prompt was cut to its first line AND
-        # every flag after it vanished (2026-09-08 07:00 morning run —
-        # system text only, no digest, --allowedTools gone, WebSearch
-        # denied; the "I could not compose" apology then went out as the
-        # morning message and paged Suti). Long prompts already used
-        # stdin, which is why big days worked and small ones broke.
+        # first newline: a prompt in argv is cut to its first line, and
+        # every flag after it is lost with it (the tool limits included).
         cmd = [cli, "-p", "--output-format", "json"]
         stdin_text: str | None = prompt
         if request.model:
@@ -101,11 +97,10 @@ class ClaudeCliProvider:
         # Run from the dedicated LLM workdir: claude -p writes a session
         # transcript under ~/.claude/projects/<encoded-cwd>/, and the
         # day-log collector excludes the llm-workdir namespace so
-        # internal calls never pollute the day-log (diff review P1).
+        # internal calls never pollute the day-log.
         # Fail CLOSED if the workdir can't be created: running from the
         # ambient cwd would recreate the writeback path, so surface an
-        # LLMError and let the caller's fallback chain take over
-        # (recheck finding 2).
+        # LLMError and let the caller's fallback chain take over.
         from smriti.llm.workdir import llm_workdir
 
         try:

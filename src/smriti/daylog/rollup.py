@@ -2,7 +2,7 @@
 
 Rollups are found by SCANNING for closed periods that are missing or
 stale, never by boundary-triggering — a missed night can't permanently
-skip a week (spec: review round 1, finding 6).
+skip a week.
 
 Staleness follows what made a rollup (hardening H12.12). Its frontmatter
 records ``members_hash``, a manifest of its members' content, taken from

@@ -29,9 +29,9 @@ so it can tell what its own run did.
 
 Git is never killed. A git process killed mid-operation leaves
 ``.git/index.lock`` or a ref lock behind, and every later git call then fails
-quietly: that stopped or misreported backups three times in 2026. On a
-timeout, git is left to finish on its own; locks older than LOCK_STALE_S are
-cleared only when no git process is running.
+quietly, so backups stop or misreport without saying so. On a timeout, git is
+left to finish on its own; locks older than LOCK_STALE_S are cleared only when
+no git process is running.
 """
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ RUN_LOCK_INIT_GRACE_S = 60
 # CREATE_NO_WINDOW: a hidden console the child (and every git it runs)
 # inherits. Without it, a console-less parent's git calls each get a fresh
 # visible console -- with Windows Terminal as the default terminal, a blank
-# window that steals focus for half a second (2026-11-05).
+# window that steals focus for half a second.
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 

@@ -136,7 +136,7 @@ def append_turns_unlocked(cfg: DaylogConfig, turns: list[Turn],
 
     The caller MUST hold the writer lock. Returns ``(appended_count,
     changed_days)`` — changed days drive the nightly repair pass
-    regardless of age (spec: review round 2, finding 2). Without
+    regardless of age. Without
     *batch*, each day-file is read for this call and flushed before it
     returns; with one, the pass's reading is reused, and the caller
     flushes with ``batch.sync()`` before it saves any offset.

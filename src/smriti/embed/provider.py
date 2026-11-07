@@ -86,7 +86,7 @@ def recorded_provider(db: Path | None = None) -> str | None:
             # Indexes built before the provider was recorded (< e8d98c2)
             # still name their model: infer the provider from it rather
             # than let the auto order pick a different one and strand
-            # the vectors behind the dimension guard (review).
+            # the vectors behind the dimension guard.
             row = conn.execute("SELECT value FROM meta WHERE key = 'model'").fetchone()
             return provider_for_model(row[0]) if row and row[0] else None
         finally:

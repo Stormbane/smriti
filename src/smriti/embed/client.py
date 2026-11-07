@@ -95,7 +95,7 @@ HOLD_MIN_S = 0.05  # the shortest interval between holds, whatever the service s
 HOLD_DEADLINE_S = 2.0  # for one hold, from connecting to its answer
 # While a service comes up (started, starting, not yet answering) the next hold
 # comes soon, doubling to the cap, so the new instance is held, and its idle_s
-# learnt, before it can idle out (Codex review of H12.0b).
+# learnt, before it can idle out.
 HOLD_RETRY_S = 2.0
 HOLD_RETRY_MAX_S = 30.0
 _HOLD_COMING_UP = ("gone", "starting", "took no connection", "went away", "unavailable")

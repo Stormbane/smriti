@@ -5,7 +5,7 @@ subscription seats only, no per-token billing; opt-in since hardening
 H12.2). ``codex exec`` runs one non-interactive turn and prints the final
 message to stdout.
 
-Isolation (diff review P1s), and what it doesn't cover:
+Isolation, and what it doesn't cover:
 
 - ``--ephemeral``: the call persists no rollout for capture to ingest.
 - ``-c mcp_servers={}``: none of the user's MCP servers load.

@@ -2,8 +2,7 @@
 
 One exclusive lock guards every write to the day-log or its state file.
 It is held per append burst, never for a process's lifetime, so the
-nightly task interleaves with a healthy running daemon (spec: review
-round 2, finding 1).
+nightly task interleaves with a healthy running daemon.
 
 It is an OS-level lock (``smriti.core.oslock``): the kernel releases it
 when its holder exits or crashes, so there is no stale lock to break and

@@ -64,8 +64,8 @@ def _stale_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
     """Days needing render/digest.
 
     Candidates: reconcile-changed dates (any age), persisted dirty-day
-    markers from daemon passes (diff review P1 — a historical change
-    captured by logd before nightly ran must not be lost), the 7-day
+    markers from daemon passes (a past day logd changed before this run
+    is repaired, not lost), the 7-day
     window, and — because staleness is a cheap hash compare — every day
     file in the tree, so no drift can ever survive a night unnoticed.
     """
@@ -200,8 +200,8 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
             del snapshot  # one day's turns in memory at a time
         rendered.sort()
         steps["render"] = {"ok": True, "days": rendered}
-        # A failed digest is a failed night (diff review P1): the wake
-        # briefing must say so, and the CLI must exit nonzero.
+        # A failed digest is a failed night: the wake briefing must say
+        # so, and the CLI must exit nonzero.
         steps["digest"] = {"ok": not digest_errors, "days": digested,
                            "errors": digest_errors,
                            "deferred": max(0, len(stale) - len(digest_days))}
@@ -224,10 +224,9 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
     except Exception as exc:  # noqa: BLE001 — recorded in the status; the night goes on
         steps["rollups"] = {"ok": False, "error": str(exc)[:300]}
 
-    # 6. Reindex (smriti index, incremental). The qmd refresh that used to
-    # follow was dropped on 2026-11-04: qmd's index had been frozen since
-    # 09-06, `qmd embed` crashed silently on 7 nights, and its only consumer,
-    # the ambient-recall hook, is disabled (plan item 0.1).
+    # 6. Reindex (smriti index, incremental). No qmd refresh follows: its
+    # only consumer, the ambient-recall hook, is off (plan item 0.1), and
+    # `qmd embed` could fail without saying so.
     if reindex:
         steps["index"] = _index_with_retries(cfg)
 
@@ -261,9 +260,8 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
 
 
 # Retry schedule for the index step: a live session's MCP server can
-# hold index.db's write lock for minutes (first live nightly, 2026-09-06,
-# failed on exactly this). Waits between attempts ride out a transient
-# hold; a truly wedged writer still surfaces as a failed step.
+# hold index.db's write lock for minutes. Waits between attempts ride out
+# a transient hold; a truly wedged writer still surfaces as a failed step.
 _INDEX_RETRY_DELAYS_S = (0.0, 30.0, 90.0)
 _INDEX_BUSY_TIMEOUT_MS = "60000"
 
@@ -300,7 +298,7 @@ def _clear_dirty(cfg: DaylogConfig, dirty: set[str], digest_errors: dict[str, st
     A marker is cleared only when, under the writer lock, the day's
     CURRENT input hash still matches both derived artifacts — so a turn
     logd appended mid-digest renews the marker instead of being silently
-    swallowed for a cycle (recheck finding 1).
+    swallowed for a cycle.
     """
     if not dirty:
         return

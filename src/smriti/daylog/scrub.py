@@ -5,8 +5,8 @@ agent writes to memory: it writes down what it was shown. The tree lives
 in a backed-up git repo, so credential shapes are masked at capture
 (``smriti.daylog.writer``) and on every write of memory text into the
 tree (``smriti.core.memwrite``). This is a targeted scrub for
-high-confidence credential patterns, not a PII framework (spec: review
-round 1, finding 7): anything it doesn't recognise is kept.
+high-confidence credential patterns, not a PII framework: anything it
+doesn't recognise is kept.
 
 Each pattern has a hint: a cheap test that holds wherever the pattern can
 match (a literal it requires, or a short search that starts with one). A

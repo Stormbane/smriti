@@ -1,11 +1,11 @@
 """The daily digest — one read-compose-emit LLM call per day, a few for a long day.
 
-Primary seat: ``claude_cli`` (the maintainer's ruling, 2026-09-04). A
+Primary seat: ``claude_cli``, a subscription seat. A
 fallback seat, usually ``codex_cli``, only when configured
 (:func:`nightly_fallback`; opt-in since hardening H12.2). The subprocess
 is constrained to no tools/MCP — it holds no ``smriti_write`` license;
 anything notable belongs in the digest file itself, which lives in the
-tree and gets indexed (spec: review round 1, finding 6).
+tree and gets indexed.
 
 A day whose rendered log fits in one call (``_MAX_LOG_CHARS``) gets one
 call. A longer day is split at turn boundaries into time-ordered parts
@@ -189,8 +189,8 @@ def compose(
     constraint for the claude_cli seat (the morning call allows web
     search). Such a call runs on claude_cli ONLY: the fallback seat can't
     be held to the same tool boundary (codex_cli keeps its shell), and a
-    call that reads untrusted web results must not fall through to it
-    (Codex, 2026-11-05). ``providers`` names the chain outright (the
+    call that reads untrusted web results must not fall through to it.
+    ``providers`` names the chain outright (the
     morning's fallback call, :func:`smriti.daylog.morning.compose_message`);
     a seat other than claude_cli gets no flags of smriti's, so its own
     isolation is all it has.

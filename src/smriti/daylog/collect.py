@@ -5,7 +5,7 @@ reconcile sweep (backstop). Discovers files by glob, tails each from
 its persisted offset through the source's adapter, appends the
 extracted turns, then persists state.
 
-Concurrency (diff review P2): the ENTIRE pass runs under the writer
+Concurrency: the ENTIRE pass runs under the writer
 lock, and the state is re-loaded from disk inside the lock — so a logd
 pass and the nightly reconcile can interleave but never race a
 read-modify-write, clobber each other's saves, or regress offsets.
@@ -113,9 +113,8 @@ def collect_once(cfg: DaylogConfig, *, lock_timeout_s: float = 60.0) -> CollectR
         batch = AppendPass()
         report = _collect_locked(cfg, state, batch)
         batch.sync()  # the day-log on disk before the offsets that cover it
-        # Persist dirty-day markers so historical changes captured by the
-        # daemon survive until the next nightly repair pass (diff review
-        # P1) — nightly consumes and clears them.
+        # Persist dirty-day markers, so a past day the daemon changed is
+        # repaired by the next nightly, which consumes and clears them.
         state.mark_dirty(report.changed_days)
         state.note_days(batch.invalid, batch.repaired)
         report.repaired_days = batch.repaired
