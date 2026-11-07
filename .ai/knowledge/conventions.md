@@ -49,7 +49,8 @@
 
 - **Environment variables** for all config overrides: SMRITI_ROOT (or the legacy
   NARADA_ROOT; unset, the root is `~/.narada` where it exists, else `~/.smriti`), SMRITI_LLM_PROVIDER, SMRITI_MODEL, SMRITI_EXECUTOR_MODEL,
-  ANTHROPIC_API_KEY, SMRITI_EMBED_PROVIDER, and for the embedding service
+  ANTHROPIC_API_KEY, SMRITI_EMBED_PROVIDER (for a new index or `smriti index
+  --full` only: `smriti.embed.provider.provider_keys`), and for the embedding service
   SMRITI_EMBED_SERVICE (0 turns it off), SMRITI_EMBED_IDLE_S and
   SMRITI_RUNTIME_DIR; SMRITI_LEGACY_LOCKS (0 ends the lock transition, see
   `smriti.core.oslock`).
@@ -71,6 +72,9 @@
 - **Lazy imports** where needed to avoid circular deps or loading heavy optional
   modules (e.g. the writer imports the indexer inside `_reindex_one`).
 - **Singletons** for MetricsLogger and embedding provider (via factory function).
+- **No private names across packages**: a name used outside its top-level package
+  (`smriti.store`, `smriti.embed`, `smriti.cli`...) is public there; embedding goes
+  through `smriti.embed.provider`. `tests/test_module_boundaries.py` enforces it.
 
 ## CLI
 

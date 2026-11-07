@@ -60,7 +60,7 @@ src/smriti/
   cli.py                 the `smriti` command
   mcp/                   MCP server over stdio, no dependencies: protocol, tool table, tools by group
   store/                 writer, index pages (index.md upkeep), indexer, index policy, schema, search
-  embed/                 embedding identity; the embedding service, its client, protocol and runtime dir
+  embed/                 embedding identity; the provider rule and embedding API; the service, its client, protocol, runtime dir
   daylog/                capture adapters, logd, render, digest, rollups, nightly, morning, schedule
   wake/                  briefing.py: the wake briefing, with a hook for a profile's sections
   profiles/              the profile seam: installed profiles, found by entry point (tools, wake sections, morning prompt)

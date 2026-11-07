@@ -27,8 +27,28 @@ All notable changes to this project are documented here, following
   records them as a `backup` step that fails the night, and `smriti backup` prints
   what it did (still exiting 0). A push with nowhere to go isn't a failure. The
   deployed `backup.py` tags its log lines with the caller's run; reinstall to get it.
+- One rule chooses the embedding provider, for the indexer, search and the
+  embedding service alike: the provider the index records, for everything that
+  serves the index; `SMRITI_EMBED_PROVIDER` only for an index that records none,
+  or for `smriti index --full`, which migrates the index to it as before. An
+  incremental `smriti index`, a search or a write with a different override set
+  now uses the recorded model and warns once, where the index run refused and an
+  in-process search went keyword-only.
+- `smriti index` embeds in batches of 512 chunks and stages them on disk until
+  its one write transaction, so a full index's memory stays flat (20,000 chunks:
+  a 93 MB working set, was 1.15 GB). The index it writes is the same.
+- The MCP server reports the package's version in `serverInfo` (it said 0.1.0).
 
 ### Fixed
+
+- Keyword search dropped every letter outside ASCII from a query: `café` searched
+  for `caf`, and a Devanagari or CJK word for nothing, so a query of such words
+  found nothing by keyword, and nothing at all in keyword-only mode. Such a word
+  is now kept and matched as FTS5 tokenizes the indexed text. An ASCII query
+  searches for exactly what it did.
+- On Windows a client could read the embedding service as not running while the
+  service replaced its discovery file (a refused open), and start a second one or
+  fail a query; a refused read is now tried again for up to 50 ms.
 
 - A manual `smriti nightly` and the scheduled one could run at once. One run holds
   a lock for the memory root; a second waits 10 seconds, then skips without
