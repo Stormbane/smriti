@@ -13,8 +13,10 @@ The actual install logic lives in:
     smriti/install/core.py                          (core)
     smriti/integrations/<harness>/install.py        (per-harness)
 
-Run on a fresh machine after ``pip install smriti[read]`` (or ``pip
-install -e .`` in a checkout)::
+Run on a fresh machine after installing smriti (``pip install
+"smriti[read] @ git+https://github.com/Stormbane/smriti.git"``, a release's
+wheel, or ``pip install -e .`` in a checkout; ``smriti`` on PyPI is another
+project)::
 
     python -m smriti.install
     python -m smriti.install --harness none

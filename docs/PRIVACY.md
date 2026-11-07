@@ -65,7 +65,8 @@ git-crypt was set up stays readable in the remote's history.
 
 ### The installer's questions
 
-`scripts/install.py` asks before it changes anything:
+The installer (`python -m smriti.install`, or `scripts/install.py` in a checkout) asks
+before it changes anything:
 
 1. *Capture conversations into the day-log?* Yes writes `"capture": true`
    into `<root>/.smriti/daylog.json`, no writes `"sources": []`; either

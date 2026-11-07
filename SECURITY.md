@@ -285,7 +285,7 @@ Capture is off until it is configured, and is chosen at install.
 `<memory-root>/.smriti/daylog.json` turns it on with `"capture": true` (the default
 sources: Claude Code transcripts, Codex rollouts, and voice transcript files) or a
 `"sources"` list of its own; without either, or without the file, nothing is
-captured, and `smriti logd` and `smriti status` say so. `scripts/install.py` asks
+captured, and `smriti logd` and `smriti status` say so. The installer asks
 whether to capture conversations, or takes `--capture` (which writes
 `"capture": true`) / `--no-capture` (which writes `"sources": []`); with neither a
 terminal nor a flag, a new memory root captures nothing, and an existing one keeps

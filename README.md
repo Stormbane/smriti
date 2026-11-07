@@ -99,7 +99,7 @@ The wake briefing is the *working self*: the part of memory present without a to
 
 ## Privacy
 
-**Capture is off until you turn it on.** Capture copies every message you type and every reply the agent writes, from Claude Code transcripts, Codex rollouts and voice transcripts, into `<root>/log/`. The backup commits that with the rest of the memory tree and pushes it to the tree's git remote, in plaintext unless you set up git-crypt. Only a scrubber that masks strings shaped like credentials stands in between. So nothing is captured until `<root>/.smriti/daylog.json` says `"capture": true` (those default sources) or lists `"sources"` of its own; without either, `smriti logd` captures nothing and says so, as does `smriti status`. `scripts/install.py` asks two questions before it changes anything:
+**Capture is off until you turn it on.** Capture copies every message you type and every reply the agent writes, from Claude Code transcripts, Codex rollouts and voice transcripts, into `<root>/log/`. The backup commits that with the rest of the memory tree and pushes it to the tree's git remote, in plaintext unless you set up git-crypt. Only a scrubber that masks strings shaped like credentials stands in between. So nothing is captured until `<root>/.smriti/daylog.json` says `"capture": true` (those default sources) or lists `"sources"` of its own; without either, `smriti logd` captures nothing and says so, as does `smriti status`. The installer asks two questions before it changes anything:
 
 1. **Capture conversations into the day-log?** Yes sets `"capture": true` in `daylog.json`; no sets `"sources": []`. Either keeps the file's other keys.
 2. **Is the backup remote private?** Asked about the remote the backup pushes to (the current branch's upstream remote, or `origin`), when there is one. smriti doesn't set up git-crypt; when the remote isn't confirmed private, the installer prints the steps.
@@ -120,29 +120,36 @@ Flags answer them without a terminal: `--capture` or `--no-capture`, and `--remo
 
 **Prerequisites:**
 - Python 3.11 or later, and git.
-- Windows 10 or 11 is the most-tested platform. On Linux and macOS, project mirrors are symlinks (the installer still prints an outdated Windows-only warning), project discovery assumes Windows paths, `smriti tasks install` only prints crontab lines, and none of it is tested.
+- Windows 10 or 11 is the most-tested platform. On Linux and macOS, project mirrors are symlinks and `smriti tasks install` only prints crontab lines; CI installs the wheel and runs it on Ubuntu, but no install there runs day to day.
 - Claude Code or Codex, if you want the session hooks and MCP tools; `--harness none` skips them.
 - For the nightly digest: the `claude` CLI, logged in; `codex` as a fallback only if you set `"nightly_fallback": "codex_cli"` in `daylog.json` (see [PRIVACY.md](docs/PRIVACY.md#what-goes-to-an-llm) for what it can read).
 
 ```bash
-git clone https://github.com/Stormbane/smriti.git
-cd smriti
-pip install -e ".[read]"      # search and embeddings; add codex, witness or dev, e.g. ".[read,codex]"
-python scripts/install.py     # two privacy questions, then memory root, wake files, hooks, MCP server, agent doc
+pip install "smriti[read] @ git+https://github.com/Stormbane/smriti.git"   # read: search, embeddings
+python -m smriti.install      # two privacy questions, then memory root, wake files, hooks, MCP server, agent doc
 smriti index                  # the first run downloads the embedding model (about 560 MB)
 smriti write "Sam prefers the command first, then the explanation." --branch people/sam
 smriti read "how does Sam like answers"
 smriti status
 ```
 
+`pip install smriti` is not this project: that name on PyPI belongs to another one, so install from the repository (above) or from a release's wheel. To work on smriti, or to run it from a checkout as the maintainer does:
+
+```bash
+git clone https://github.com/Stormbane/smriti.git
+cd smriti
+pip install -e ".[read]"      # e.g. ".[read,codex]" or ".[read,dev]"
+python scripts/install.py     # the same installer, with the same flags
+```
+
 Then start a new Claude Code session. The briefing appears in the opening context, and `smriti_read`, `smriti_write` and `smriti_status` are among the tools.
 
 **The embedding model.** With the `read` extra, the first index, search or write that needs a model downloads `gpahal/bge-m3-onnx-int8` from the Hugging Face Hub into its cache (`~/.cache/huggingface/hub`, or under `HF_HOME`); no memory text is sent, and later loads make no request. Set `HF_HUB_OFFLINE=1` to forbid any request: a model not yet cached is then an error instead of a download, and search and writes fall back to keywords. That holds for the default `onnx` provider; an index made with the `local` provider (sentence-transformers) can't load even its cached model under `HF_HUB_OFFLINE=1` (sentence-transformers 4.1), so leave it unset there. [`docs/PRIVACY.md`](docs/PRIVACY.md#other-network-requests) lists what else leaves the machine.
 
-**`scripts/install.py`:**
+**The installer** (`python -m smriti.install`, or `python scripts/install.py` in a checkout):
 - **Asks the two [privacy](#privacy) questions** first, or takes the answers from `--capture`/`--no-capture` and `--remote-is-private`/`--remote-not-private`, and ends by saying what is captured, committed and pushed.
 - **Creates the memory root** (`~/.smriti` unless `--memory-root` or `SMRITI_ROOT` says otherwise, or `~/.narada` where that already exists; it must be inside your home directory) from [`memory_template/`](memory_template/). It never overwrites existing files.
-- **Copies** `wake.py`, `backup.py` and `narada-p.sh` into `<root>/.smriti/`, and links project mirrors for each project it finds under `--projects-root` (default `C:/Projects`).
+- **Copies** `wake.py`, `backup.py` and `narada-p.sh` into `<root>/.smriti/`, and links a mirror for each project it finds under `--projects-root` (one with an `.ai/` directory or Claude Code memory). It records that directory in `<root>/.smriti/install.json` and reuses it on the next run; a new install links no projects until given one, and an install made before the record keeps the directory its mirrors point into.
 - **For `--harness claude_code`** (the default), also:
   - adds SessionStart, UserPromptSubmit and PostToolUse hooks to `~/.claude/settings.json`;
   - registers the MCP server in `~/.claude.json`;
@@ -152,7 +159,7 @@ Then start a new Claude Code session. The briefing appears in the opening contex
 - **Is idempotent**; run it again after adding projects.
 
 Notes:
-- **Install editable.** The installer copies templates from the checkout, and a wheel doesn't ship them.
+- **The wheel carries what the installer copies** (the memory template and the three scripts), so no checkout is needed. An editable install copies the checkout's own files, and the installer upgrades a deployed script when the checkout's changes. `smriti --version` prints the version.
 - **The root is `SMRITI_ROOT`, default `~/.smriti`.** An existing `~/.narada` (the default before 0.2) is used instead when no variable is set, even if a `~/.smriti` appears beside it; `smriti status` shows which root is in use and why, and warns when both exist. If you use another root, pass `--memory-root` to the installer and also set `SMRITI_ROOT` in your user environment. The wake hook carries the root, but the CLI and the MCP server read only the environment.
 - **An existing `~/.claude/CLAUDE.md` without smriti's markers** makes the installer stop before changing anything. Run it once with `--migrate-agent-doc` to convert the file; a `.pre-migrate.bak` copy is kept.
 - **The installer also wires the PostToolUse ambient-recall hook.** It is being retired (see Status and limits); remove the `associative_recall.py` entry from `~/.claude/settings.json` if you don't want it.
@@ -182,7 +189,7 @@ The embedding service reads three environment variables: `SMRITI_EMBED_SERVICE=0
 - **CLI:** 15 `smriti` subcommands: `backup`, `doctor`, `embed`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `recall`, `status`, `tasks`, `witness`, `write`. Nested: `embed` has `serve`, `status`, `stop`; `recall` has `query`, `status`, `stats`, `index`, `daemon`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 920 test functions in 80 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 962 test functions in 85 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 **CLI.** `smriti --help` lists the commands; each takes `--help`.

@@ -1021,6 +1021,75 @@ a recheck.
   279 ms in the run, 287 / 326 ms median over ten alternating starts each with
   spreads 172-827 and 175-397 ms, the same 137 modules imported: noise. No
   measure slower beyond noise.
+- **H12.4 implemented** (2026-11-07, `hardening/h12w`; not yet reviewed or merged).
+  `smriti.install.templates` is the one resolver: the package's copies under
+  `smriti/_data/` (pyproject's force-include maps `narada/.smriti`,
+  `memory_template` and `docs/PRIVACY.md` there), read through
+  `importlib.resources`, else the checkout's own files, and those only when the
+  package sits in a checkout's `src/`; nothing moved, so the editable reference
+  install's auto-upgrade still compares against the checkout. The dispatcher moved
+  into the package (`python -m smriti.install`; `scripts/install.py` is a shim). The
+  build reads the version from `smriti.__version__` (pyproject's version is
+  dynamic); `smriti --version` and the installer's `--version` and first line print
+  it. The projects root is recorded in `<root>/.smriti/install.json`, a file of its
+  own (privacy.json holds the two privacy answers, daylog.json the runtime config
+  every process reads), and resolved: the flag; the record; for an install made
+  before the record, the root its mirrors' `ai` and `knowledge` links point into
+  when they agree, else `C:/Projects` when it exists; else none, and a new install
+  links no mirrors until told. A read-only check on the reference install resolves
+  `C:\Projects` from its mirrors. Claude Code's directory for a project is named as
+  Claude Code names it (every character outside `[A-Za-z0-9]` made `-`, from the
+  whole path), which for `C:/Projects` gives the old names but for `gpu_tests`: **a
+  rerun there links one more project, `gpu_tests`, whose memory the literal
+  `C--Projects-gpu_tests` never found.** `test_stub` (`smriti.llm.providers.stub`)
+  gives canned answers, never auto-detected or listed, and raises unless
+  `SMRITI_ALLOW_TEST_STUB=1`. CI's `wheel` job (Ubuntu, Windows) runs
+  `scripts/wheel_smoke.py`: the built wheel with `[read]` in a fresh venv, run from
+  the runner's temp directory without PYTHONPATH, home, root and runtime directory
+  there; it checks the import location and version, the installer's template,
+  scripts, mirror and record, write/read/status with the stub embedder, and a
+  nightly that captures a planted transcript and digests it with `test_stub`.
+  Locally (a venv from anaconda's Python): every step passes. **`pip install smriti`
+  installs another project**: the name on PyPI is taken (project-vajra's smriti
+  0.0.1), so the README installs from the repository (`pip install "smriti[read] @
+  git+https://github.com/Stormbane/smriti.git"`). `project_template/` stays out of
+  the wheel: only `scripts/setup_project.py`, a checkout script, uses it.
+- **H12.9 implemented** (same branch). `smriti eval` runs a versioned quality set
+  (`smriti.eval.quality`, version 1) beside the search cases: 26 cases over the
+  synthetic corpus, which gains ten notes (now 30): 6 direct, 7 paraphrases (no word
+  shared with their notes), 6 irrelevant (none of three letters or more shared with
+  the corpus), 3 contradictions and 4 corrections; tests hold each rule. It reports
+  hit@1/3/5 and MRR by kind, whether the newer of two notes is found (and first),
+  and abstention: at the recall hook's 0.45 on the search score, and the
+  threshold-free AUROC of the best search score and of the raw cosine between the
+  query and its first result. With the real model here (onnx bge-m3 int8):
+  answerable hit@1 70%, hit@3 and hit@5 100%, MRR 0.83; direct 100%; paraphrase
+  hit@1 71%, hit@3 100%; contradictions resolved 3/3, newer first 2/3; **corrections
+  resolved 1/4** (search has no notion of "later": an original usually outranks its
+  correction); **no irrelevant query scores under 0.45** (each leg is normalised
+  within its candidates, so the best result scores high whatever the query), score
+  AUROC 0.85, raw-similarity AUROC 0.99: a threshold on raw similarity would
+  abstain. The 14 search cases are unchanged by the larger corpus (13/14, MRR 0.96).
+  `smriti eval --llm` digests two synthetic days through the nightly's own digest
+  code and provider chain and scores coverage, facts stated and sentences traceable
+  (lexical proxies, `smriti.eval.digests`); tested with a fake model, not run here
+  against a real one. The weekly workflow (`.github/workflows/quality.yml`, Ubuntu,
+  Mondays and on demand) caches the model, runs the needs_model tests (failing if
+  one is skipped), and writes the scores to the job summary and an artifact. The
+  wiring test's real model was `local` only, which the read extra doesn't install;
+  it now takes the first installed one. Both needs_model tests pass here with onnx.
+- **H12.16, the last of it, implemented** (same branch). Python 3.13 joins the
+  matrix: every extra has 3.13 wheels on all three OSes (PyPI, 2026-11-07), and the
+  sources compile under 3.13 with warnings as errors, so no job is
+  continue-on-error. Branch coverage (`pytest-cov` in the dev extra,
+  `[tool.coverage]`: `src/smriti`, vendored code left out) is reported on every job.
+  The suite run the CI way on Windows, Python 3.12, gives 81.8% (lines 83.6%,
+  branches 75.7%), and that job alone holds a floor of 79: each OS and Python takes
+  other branches and skips other tests. The comments pass: in the day-log, embed,
+  store, the LLM providers, the installer's privacy check, the witness and the
+  deployed `backup.py`, comments that told an incident ("diff review P1", "recheck
+  finding 2", "spec: review round 1, finding 6", "2026-09-06 ...") state the rule,
+  with dates kept only for measurements that still stand; one named the maintainer.
 - **H11.1, H11.5, H11.10 done** (2026-11-06, merged at `498ce0e` after a Codex diff
   review; its two findings, the capture override and the metrics scrub, fixed). Capture is off unless `daylog.json` says
   `"capture": true` (the default sources; the installer's `--capture` writes it) or

@@ -5,6 +5,31 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### Added
+
+- A wheel installs and sets itself up without a checkout: it carries the memory
+  template and the scripts the installer deploys (under `smriti/_data/`), and the
+  installer runs as `python -m smriti.install` (`scripts/install.py` in a checkout
+  runs the same). Install from the repository, `pip install "smriti[read] @
+  git+https://github.com/Stormbane/smriti.git"`: `smriti` on PyPI is another
+  project. CI builds the wheel, installs it in a fresh venv and runs the installer,
+  write, read, status and one nightly from it, on Ubuntu and Windows.
+- `smriti --version` and `python -m smriti.install --version`. The build reads the
+  version from `smriti.__version__`, the one place it is written.
+- `smriti eval` reports a versioned quality set over its synthetic corpus (version
+  1, 26 cases): retrieval by kind of question (direct, paraphrase, contradiction,
+  correction; hit@1/3/5, MRR), whether the newer of two disagreeing notes wins, and
+  abstention on irrelevant queries (at the recall threshold, and threshold-free).
+  `--markdown` prints the scores as tables. `smriti eval --llm` also digests
+  synthetic days with the nightly's LLM and scores each digest's coverage of its
+  turns, the facts it states and the share of its sentences traceable to the turns;
+  it calls a real model, so it runs locally only.
+- A weekly CI workflow runs the `needs_model` tests and the quality set with the
+  real embedding model, cached between runs, and puts the scores in the job summary.
+- `test_stub`, an LLM provider with canned answers for tests and the CI smoke run;
+  it refuses to run unless `SMRITI_ALLOW_TEST_STUB=1`.
+- CI runs Python 3.13 too, and measures branch coverage, with a floor.
+
 ### Changed
 
 - The nightly's codex fallback is opt-in: `"nightly_fallback": "codex_cli"` in
@@ -38,9 +63,19 @@ All notable changes to this project are documented here, following
   its one write transaction, so a full index's memory stays flat (20,000 chunks:
   a 93 MB working set, was 1.15 GB). The index it writes is the same.
 - The MCP server reports the package's version in `serverInfo` (it said 0.1.0).
+- The installer's projects root is recorded in `<root>/.smriti/install.json` and
+  reused, instead of defaulting to `C:/Projects` on every run. A new install links
+  no project mirrors until given `--projects-root`; an install made before the
+  record keeps the directory its mirrors point into (or `C:/Projects`, the old
+  default, when it has no mirrors and that directory exists), and records it.
 
 ### Fixed
 
+- The installer looked for a project's Claude Code memory as `C--Projects-<name>`;
+  it now names the directory as Claude Code does, from the project's whole path
+  with every character outside `[A-Za-z0-9]` made `-`, so a project under any root,
+  or with `_` or `.` in its name, has its memory linked. Nor does it warn any more
+  that POSIX symlinks aren't implemented: they are.
 - Keyword search dropped every letter outside ASCII from a query: `café` searched
   for `caf`, and a Devanagari or CJK word for nothing, so a query of such words
   found nothing by keyword, and nothing at all in keyword-only mode. Such a word

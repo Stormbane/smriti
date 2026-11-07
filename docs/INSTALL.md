@@ -46,9 +46,8 @@ it prepends the wake output and forwards to `claude -p`.
 ### Prerequisites
 
 - Windows 10/11 is the most-tested platform. On Linux/macOS, mirrors are
-  symlinks (the installer still prints an outdated Windows-only warning),
-  project discovery assumes Windows paths, `smriti tasks install` only
-  prints crontab lines, and none of it is tested.
+  symlinks and `smriti tasks install` only prints crontab lines; CI installs
+  the wheel and runs it on Ubuntu, but no install there runs day to day.
 - Python 3.11+ on PATH, and git
 - Claude Code (or Codex, with `--harness codex`)
 - Optionally, an existing memory root restored from backup; otherwise the
@@ -57,10 +56,14 @@ it prepends the wake output and forwards to `claude -p`.
 ### Install steps
 
 ```bash
-# 1. Clone smriti and install the package
-git clone https://github.com/Stormbane/smriti.git
-cd smriti
-pip install -e ".[read]"      # add ,codex / ,witness / ,dev as needed
+# 1. Install the package: from the repository (the name `smriti` on PyPI is
+#    another project), or a release's wheel. The wheel carries the memory
+#    template and the scripts the installer deploys.
+pip install "smriti[read] @ git+https://github.com/Stormbane/smriti.git"
+#    Or from a checkout, to work on smriti (then `python scripts/install.py`
+#    runs the same installer as `python -m smriti.install` below):
+#    git clone https://github.com/Stormbane/smriti.git && cd smriti
+#    pip install -e ".[read]"      # add ,codex / ,witness / ,dev as needed
 
 # 2. The memory root. Default: ~/.smriti/ (env SMRITI_ROOT), or ~/.narada/
 #    where that already exists (the default before 0.2); it must be
@@ -74,11 +77,13 @@ pip install -e ".[read]"      # add ,codex / ,witness / ,dev as needed
 #    copies wake.py, backup.py and narada-p.sh into <root>/.smriti/,
 #    creates mirrors/ junctions, registers the smriti MCP server,
 #    patches ~/.claude/settings.json, writes the managed block in
-#    ~/.claude/CLAUDE.md.
-python scripts/install.py
+#    ~/.claude/CLAUDE.md. --projects-root names the directory whose
+#    projects get mirrors; it is recorded in <root>/.smriti/install.json
+#    and reused by every later run (a new install links none without it).
+python -m smriti.install --projects-root ~/code
 # or for a different entity (then also set SMRITI_ROOT in your user
 # environment: the CLI and the MCP server read only the environment):
-python scripts/install.py --memory-root ~/.ari
+python -m smriti.install --memory-root ~/.ari
 
 # 4. Build the index and check the round trip.
 smriti index
@@ -91,7 +96,10 @@ smriti read "how does Sam like answers"
 ```
 
 The installer is idempotent — re-run any time after adding a new project
-or after the smriti repo's `narada/` templates change.
+or after the smriti repo's `narada/` templates change. An install made
+before the projects root was recorded keeps the directory its mirrors
+point into (or `C:/Projects`, the old default, when it has no mirrors and
+that directory exists), and records it.
 
 ### Privacy: capture and the backup remote
 
@@ -204,7 +212,8 @@ python scripts/install.py --harness none  # core memory setup only
 | Copy `wake.py`, `backup.py` | `<entity>/.smriti/` | Wake shim; backup script. smriti-managed copies are upgraded, keeping a `.pre-upgrade.bak` |
 | Copy `narada-p.sh` | `<entity>/.smriti/narada-p.sh` | Wake-injecting wrapper for headless `claude -p` |
 | Ensure `.smriti/` dir | `<entity>/.smriti/` | Smriti runtime state (index, metrics, wake) |
-| Create junctions | `<entity>/mirrors/{project}/auto-memory`, `/knowledge`, `/ai` | Per-project memory and knowledge access |
+| Create junctions | `<entity>/mirrors/{project}/auto-memory`, `/knowledge`, `/ai` | Per-project memory and knowledge access, for each project under the projects root |
+| Record the projects root | `<entity>/.smriti/install.json` | The next run links the same projects without `--projects-root` |
 | Register MCP server | `~/.claude.json` | Exposes `smriti_read` / `smriti_write` / `smriti_status` |
 | Patch settings.json | `~/.claude/settings.json` | SessionStart → `wake.py`; UserPromptSubmit → touch `last-activity`; PostToolUse → ambient recall (legacy, being retired) |
 | Write CLAUDE.md | `~/.claude/CLAUDE.md` | Managed block: the memory contract from `src/smriti/templates/AGENT.md` |

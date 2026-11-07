@@ -48,7 +48,7 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 - **CLI:** 15 `smriti` subcommands: `backup`, `doctor`, `embed`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `recall`, `status`, `tasks`, `witness`, `write`. Nested: `embed` has `serve`, `status`, `stop`; `recall` has `query`, `status`, `stats`, `index`, `daemon`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 920 test functions in 80 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 962 test functions in 85 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 Regenerate with `python scripts/doc_facts.py --write`; `tests/test_doc_facts.py` fails when this block drifts from the code.
@@ -65,15 +65,16 @@ src/smriti/
   wake/                  briefing.py: the wake briefing, with a hook for a profile's sections
   profiles/              the profile seam: installed profiles, found by entry point (tools, wake sections, morning prompt)
   witness.py, backup.py  tamper-evidence; the backup trigger
+  install/               the installer (python -m smriti.install): core steps, privacy questions, templates
   integrations/          claude_code, codex, hermes installers; shared hooks; the managed agent-doc block
-  llm/                   providers: claude_cli, codex_cli, anthropic_api, openai_api, ollama
+  llm/                   providers: claude_cli, codex_cli, anthropic_api, openai_api, ollama; test_stub (tests only)
   recall/                ambient-recall hook backends (smriti, qmd)
   private/               encrypted private store
-  eval/                  search evaluation: cases, runner, synthetic fixture
+  eval/                  evaluation: search cases, the quality set, digest measures, synthetic fixture
   _vendored/memsearch/   vendored MIT code (see NOTICE.md)
-scripts/                 install.py, setup_project.py, doc_facts.py, bench.py
-memory_template/         skeleton for a new memory root
-narada/                  wake.py, backup.py, narada-p.sh, copied into <root>/.smriti/ by the installer
+scripts/                 install.py, setup_project.py, doc_facts.py, bench.py, wheel_smoke.py
+memory_template/         skeleton for a new memory root (a wheel carries it, under smriti/_data/)
+narada/                  wake.py, backup.py, narada-p.sh, copied into <root>/.smriti/ by the installer (and the wheel)
 project_template/        skeleton for a project that uses smriti
 tests/                   pytest; conftest.py points SMRITI_ROOT at a temp dir
 profiles/reference/      the reference profile (the maintainer's installation): its own package, smriti-reference, with its tests
@@ -85,6 +86,9 @@ profiles/reference/      the reference profile (the maintainer's installation): 
 pip install -e ".[read,dev]"                      # editable install: the installer reads templates from the checkout
 pip install -e profiles/reference                 # the reference profile, for its own tests (the core runs without it)
 python -m pytest -q --ignore=tests/test_perf.py tests profiles/reference/tests  # perf guards are marked slow and excluded by default
+python -m pytest -q --ignore=tests/test_perf.py --cov tests profiles/reference/tests  # with branch coverage, as CI measures it
+python -m pytest -q -m needs_model tests          # with the real embedding model (unset SMRITI_EMBED_PROVIDER), as the weekly job runs
+python scripts/wheel_smoke.py <wheel> --work <new dir>  # the built wheel in a fresh venv, as CI's wheel job runs it
 ruff check <files>                                # line length 100, bugbear, blind excepts
 mypy <files>                                      # strict
 python scripts/doc_facts.py --write               # refresh the generated counts in README.md, CLAUDE.md, AGENTS.md
