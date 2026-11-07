@@ -2,11 +2,15 @@
 
 - ``%LOCALAPPDATA%\\smriti\\run`` on Windows, private to the user by the
   profile's ACLs;
-- ``$XDG_RUNTIME_DIR/smriti``, or else ``~/.cache/smriti/run``, elsewhere:
-  created 0700, and refused when another user owns it or others can write
-  to it.
+- ``~/.cache/smriti/run`` elsewhere: created 0700, and refused when another
+  user owns it or others can write to it.
 
-``SMRITI_RUNTIME_DIR`` overrides it (tests use temporary directories).
+Every process of the user resolves the same directory, whatever its
+environment: smriti's locks are files in it, and two processes that took
+different files wouldn't exclude each other. So it doesn't follow
+``XDG_RUNTIME_DIR``, which a desktop session's processes have and a cron
+job's don't. ``SMRITI_RUNTIME_DIR`` overrides it (tests use temporary
+directories); set it for every process of the user, or for none.
 
 It holds the embedding service's key and files (:mod:`smriti.embed.runtime`,
 which re-exports these names), smriti's private locks
@@ -34,9 +38,6 @@ def default_runtime_dir() -> Path:
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA")
         return (Path(base) if base else Path.home() / "AppData" / "Local") / "smriti" / "run"
-    xdg = os.environ.get("XDG_RUNTIME_DIR")
-    if xdg:
-        return Path(xdg) / "smriti"
     return Path.home() / ".cache" / "smriti" / "run"
 
 

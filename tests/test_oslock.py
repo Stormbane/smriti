@@ -1,13 +1,10 @@
 """The OS-level exclusive lock: exclusive across opens, released on exit.
 
-Named locks moved from the shared temp directory to the private runtime
-directory (H11.9) through a transition that takes both files, the private one
-first. "Old code" below is what releases before the move ran: one file,
-``<tempdir>/smriti-locks/<sha1(scope)[:16]>-<name>.lock``, locked alone.
+A named lock is one file in the private runtime directory, and fails closed
+when that directory can't be used (H11.9, H14.8).
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import subprocess
@@ -28,22 +25,15 @@ from smriti.core.oslock import exclusive_lock, lock_path
 
 @pytest.fixture(autouse=True)
 def _isolated_locks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A temp directory standing in for the shared one, here and in child processes."""
+    """A runtime directory of its own, and a temp directory to show nothing lands there."""
     shared = tmp_path / "shared-tmp"
     shared.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(shared))
     for var in ("TMPDIR", "TEMP", "TMP"):
         monkeypatch.setenv(var, str(shared))
     monkeypatch.setenv("SMRITI_RUNTIME_DIR", str(tmp_path / "run"))
-    monkeypatch.delenv(oslock.LEGACY_LOCKS_ENV, raising=False)
     monkeypatch.setattr(oslock, "_warned", set())
     return shared
-
-
-def _old_lock_file(name: str, scope: str) -> Path:
-    """Where old code locked: computed here, independently of oslock."""
-    digest = hashlib.sha1(scope.encode("utf-8")).hexdigest()[:16]
-    return Path(tempfile.gettempdir()) / "smriti-locks" / f"{digest}-{name}.lock"
 
 
 @contextmanager
@@ -88,7 +78,6 @@ def test_unopenable_lock_path_yields_false(tmp_path: Path) -> None:
 
 
 def test_try_lock_says_whether_a_lock_is_busy_or_cannot_be_had(tmp_path: Path) -> None:
-    """The nightly skips a busy run lock, but runs when no lock file can be opened."""
     path = tmp_path / "x.lock"
     blocker = tmp_path / "file"
     blocker.write_text("not a dir", encoding="utf-8")
@@ -106,25 +95,31 @@ def test_lock_path_is_outside_the_tree_and_stable(tmp_path: Path) -> None:
     tree = tmp_path / "tree"
     a = lock_path("handoff", str(tree))
     assert a == lock_path("handoff", str(tree))
-    assert tree not in a.private().parents and tree not in a.legacy.parents
+    assert tree not in a.private().parents
+
+
+def test_two_holders_of_a_named_lock_exclude_each_other(tmp_path: Path) -> None:
+    key = lock_path("edit", str(tmp_path / "tree"))
+    with _held(key):
+        with exclusive_lock(key, wait_s=0.3) as second:
+            assert not second
+    with exclusive_lock(key, wait_s=0.3) as again:
+        assert again
 
 
 # -------------------------------------------------------------- where
 
 
-def test_the_shared_file_is_exactly_where_old_code_locks(tmp_path: Path) -> None:
-    scope = str(tmp_path / "tree")
-    assert lock_path("edit", scope).legacy == _old_lock_file("edit", scope)
-
-
-def test_a_named_lock_is_taken_in_the_runtime_directory(tmp_path: Path) -> None:
+def test_a_named_lock_is_one_file_in_the_runtime_directory(
+        tmp_path: Path, _isolated_locks: Path) -> None:
     from smriti.core.rundir import runtime_dir
 
     key = lock_path("edit", str(tmp_path / "tree"))
     with _held(key):
         assert key.private().parent == runtime_dir() / "locks"
-        assert not _free(key.private()) and not _free(key.legacy)  # both held
-    assert _free(key.private()) and _free(key.legacy)
+        assert not _free(key.private())
+    assert _free(key.private())
+    assert list(_isolated_locks.iterdir()) == [], "nothing in the shared temp directory"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes; Windows relies on ACLs")
@@ -142,81 +137,46 @@ def test_private_lock_files_are_the_owners_alone(tmp_path: Path) -> None:
     assert key.private().stat().st_uid == os.getuid()
 
 
-# --------------------------------------------------------- old and new
+def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A home of its own, and no SMRITI_RUNTIME_DIR: the default runtime directory."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.delenv("SMRITI_RUNTIME_DIR", raising=False)
+    for var in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(var, str(home))
+    monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
+    return home
 
 
-def test_a_new_lock_excludes_an_old_holder(tmp_path: Path) -> None:
-    key = lock_path("edit", str(tmp_path / "tree"))
-    with _held(_old_lock_file(key.name, key.scope)):  # old code: the shared file alone
-        with exclusive_lock(key, wait_s=0.3) as held:
-            assert not held
-        assert _free(key.private()), "a failed attempt holds nothing"
-
-
-def test_an_old_lock_excludes_a_new_holder(tmp_path: Path) -> None:
-    key = lock_path("edit", str(tmp_path / "tree"))
-    with _held(key):
-        with exclusive_lock(_old_lock_file(key.name, key.scope), wait_s=0.3) as old:
-            assert not old
-
-
-@pytest.mark.parametrize("legacy", ["1", "0"])
-def test_two_new_holders_exclude_each_other(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                            legacy: str) -> None:
-    monkeypatch.setenv(oslock.LEGACY_LOCKS_ENV, legacy)
-    key = lock_path("edit", str(tmp_path / "tree"))
-    with _held(key):
-        with exclusive_lock(key, wait_s=0.3) as second:
-            assert not second
-
-
-def test_dropping_the_shared_file_takes_only_the_private_one(
+def test_the_runtime_directory_does_not_follow_xdg_runtime_dir(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Why the transition exists: without the shared file, old code isn't excluded.
-    monkeypatch.setenv(oslock.LEGACY_LOCKS_ENV, "0")
-    key = lock_path("edit", str(tmp_path / "tree"))
-    with _held(_old_lock_file(key.name, key.scope)):
-        with exclusive_lock(key, wait_s=0.3) as held:
-            assert held  # beside an old holder: the shared file wasn't taken
+    """A cron job has no XDG_RUNTIME_DIR where a desktop session has one: both
+    resolve one directory, so they take the same lock files."""
+    from smriti.core.rundir import default_runtime_dir
+
+    home = _home(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys, "platform", "linux")  # the POSIX rule, on every OS
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    without = default_runtime_dir()
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "xdg"))
+    assert default_runtime_dir() == without == home / ".cache" / "smriti" / "run"
 
 
-# ---------------------------------------------------------------- order
-
-
-def test_the_private_file_is_taken_before_the_shared_one(tmp_path: Path) -> None:
-    key = lock_path("edit", str(tmp_path / "tree"))
-    results: list[bool] = []
-
-    def take() -> None:
-        with exclusive_lock(key, wait_s=10) as held:
-            results.append(held)
-
-    # An old holder has the shared file: a new taker waits holding the private one.
-    with _held(key.legacy):
-        t = threading.Thread(target=take)
-        t.start()
-        deadline = time.monotonic() + 5
-        while _free(key.private()) and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert not _free(key.private())
-    t.join(timeout=15)
-    assert results == [True]
-
-    # The private file is busy: a new taker waits without touching the shared one.
-    results.clear()
-    with _held(key.private()):
-        t = threading.Thread(target=take)
-        t.start()
-        for _ in range(10):
-            time.sleep(0.03)
-            assert _free(key.legacy)
-    t.join(timeout=15)
-    assert results == [True]
+def test_a_process_without_xdg_runtime_dir_excludes_one_with_it(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _home(tmp_path, monkeypatch)
+    target = tmp_path / "tree" / "journal.md"
+    target.parent.mkdir()
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "xdg"))
+    with _process_holding("edit", target):  # a desktop session's process
+        monkeypatch.delenv("XDG_RUNTIME_DIR")  # this one: a cron job
+        assert not _try_in_this_process("edit", target)
+    assert _try_in_this_process("edit", target)
 
 
 def test_contending_takers_complete_and_never_overlap(tmp_path: Path) -> None:
-    """Two new takers each take two named locks in opposite orders, in a loop,
-    beside an old-code taker of both; all finish, one holder at a time."""
+    """Two takers each take two named locks in opposite orders, in a loop; both
+    finish, one holder at a time."""
     k1 = lock_path("edit", str(tmp_path / "a"))
     k2 = lock_path("edit", str(tmp_path / "b"))
     inside = {k1: 0, k2: 0}
@@ -224,8 +184,8 @@ def test_contending_takers_complete_and_never_overlap(tmp_path: Path) -> None:
     failures: list[str] = []
     guard = threading.Lock()
 
-    def visit(key: oslock.LockKey, lock: oslock.LockKey | Path) -> None:
-        with exclusive_lock(lock, wait_s=20) as held:
+    def visit(key: oslock.LockKey) -> None:
+        with exclusive_lock(key, wait_s=20) as held:
             if not held:
                 failures.append(f"{key.scope} not taken")
                 return
@@ -236,19 +196,13 @@ def test_contending_takers_complete_and_never_overlap(tmp_path: Path) -> None:
             with guard:
                 inside[key] -= 1
 
-    def new(order: list[oslock.LockKey]) -> None:
+    def taker(order: list[oslock.LockKey]) -> None:
         for _ in range(40):
             for key in order:
-                visit(key, key)
+                visit(key)
 
-    def old() -> None:
-        for _ in range(40):
-            for key in (k1, k2):
-                visit(key, _old_lock_file(key.name, key.scope))
-
-    threads = [threading.Thread(target=new, args=([k1, k2],)),
-               threading.Thread(target=new, args=([k2, k1],)),
-               threading.Thread(target=old)]
+    threads = [threading.Thread(target=taker, args=([k1, k2],)),
+               threading.Thread(target=taker, args=([k2, k1],))]
     for t in threads:
         t.start()
     for t in threads:
@@ -258,7 +212,7 @@ def test_contending_takers_complete_and_never_overlap(tmp_path: Path) -> None:
     assert worst == {k1: 1, k2: 1}
 
 
-# ------------------------------------------------------------- fallback
+# --------------------------------------------------------- fail closed
 
 
 def _refuse_runtime_dir(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -270,31 +224,35 @@ def _refuse_runtime_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(runtime, "runtime_dir", refuse)
 
 
-def test_a_refused_runtime_directory_falls_back_to_the_shared_file(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    _refuse_runtime_dir(monkeypatch)
+def test_a_refused_runtime_directory_fails_closed(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _isolated_locks: Path,
+        caplog: pytest.LogCaptureFixture) -> None:
+    # Others hold the file in the runtime directory and no other: a lock
+    # anywhere else would be a lock of its own.
     key = lock_path("edit", str(tmp_path / "tree"))
-    with caplog.at_level(logging.WARNING, logger="smriti.core.oslock"):
-        with exclusive_lock(key, wait_s=0.3) as held:
-            assert held, "never fail to lock"
-            assert not _free(key.legacy)
-            with exclusive_lock(key, wait_s=0.3) as second:
-                assert not second  # and it still excludes
-        with exclusive_lock(key, wait_s=0.3):
-            pass
-    warnings = [r for r in caplog.records if "fall back" in r.getMessage()]
+    private = key.private()
+    with _held(private):  # another process, inside the critical section
+        _refuse_runtime_dir(monkeypatch)
+        with caplog.at_level(logging.WARNING, logger="smriti.core.oslock"):
+            with oslock.try_lock(key, wait_s=0.3) as outcome:
+                assert outcome == oslock.UNAVAILABLE
+            with exclusive_lock(key, wait_s=0.3) as held:
+                assert not held
+    warnings = [r for r in caplog.records if "can't be taken" in r.getMessage()]
     assert len(warnings) == 1, "warned once, not on every lock"
+    with exclusive_lock(key, wait_s=0.3) as alone:
+        assert not alone  # nobody holds it now, and still: never another file
+    assert list(_isolated_locks.iterdir()) == [], "no fallback to the shared temp directory"
 
 
-def test_a_runtime_directory_that_cant_be_made_falls_back(
+def test_a_runtime_directory_that_cant_be_made_fails_closed(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     blocker = tmp_path / "a-file"
     blocker.write_text("", encoding="utf-8")
     monkeypatch.setenv("SMRITI_RUNTIME_DIR", str(blocker / "run"))
     key = lock_path("edit", str(tmp_path / "tree"))
-    with exclusive_lock(key, wait_s=0.3) as held:
-        assert held
-        assert not _free(key.legacy)
+    with oslock.try_lock(key, wait_s=0.3) as outcome:
+        assert outcome == oslock.UNAVAILABLE
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX ownership and modes")
@@ -305,81 +263,19 @@ def test_a_world_writable_runtime_directory_is_refused(
     run.chmod(0o777)
     monkeypatch.setenv("SMRITI_RUNTIME_DIR", str(run))
     key = lock_path("edit", str(tmp_path / "tree"))
-    with exclusive_lock(key, wait_s=0.3) as held:
-        assert held
-        assert not _free(key.legacy)
+    with oslock.try_lock(key, wait_s=0.3) as outcome:
+        assert outcome == oslock.UNAVAILABLE
     assert not (run / "locks").exists(), "nothing created in a refused directory"
 
 
-def test_with_the_shared_file_dropped_a_refused_runtime_directory_fails_closed(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    # Others hold the private file alone; the shared one would be a lock of its own.
-    monkeypatch.setenv(oslock.LEGACY_LOCKS_ENV, "0")
-    key = lock_path("edit", str(tmp_path / "tree"))
-    private = key.private()
-    with _held(private):  # another process, inside the critical section
-        _refuse_runtime_dir(monkeypatch)
-        with caplog.at_level(logging.WARNING, logger="smriti.core.oslock"):
-            with exclusive_lock(key, wait_s=0.3) as held:
-                assert not held
-                assert _free(key.legacy), "no switch to the shared file"
-    assert any("can't be taken" in r.getMessage() for r in caplog.records)
-    with exclusive_lock(key, wait_s=0.3) as alone:
-        assert not alone  # nobody holds it now, and still: never another namespace
-
-
-def test_an_unusable_shared_file_fails_closed(
-        tmp_path: Path, _isolated_locks: Path, caplog: pytest.LogCaptureFixture) -> None:
-    # Something else where the shared directory should be. An old process
-    # might still hold the file it had opened there, so the private file
-    # alone can't be trusted to exclude it.
-    key = lock_path("edit", str(tmp_path / "tree"))
-    (_isolated_locks / "smriti-locks").write_text("", encoding="utf-8")
-    with caplog.at_level(logging.WARNING, logger="smriti.core.oslock"):
-        with exclusive_lock(key, wait_s=0.3) as held:
-            assert not held
-            assert _free(key.private()), "a failed attempt holds nothing"
-    assert any("shared lock file can't be opened" in r.getMessage() for r in caplog.records)
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
-@pytest.mark.skipif(sys.platform != "win32" and os.geteuid() == 0,
-                    reason="root opens files whatever their mode")
-@pytest.mark.parametrize("tighten", ["file", "directory"])
-def test_a_held_shared_lock_still_excludes_after_its_permissions_change(
-        tmp_path: Path, tighten: str) -> None:
-    """An old process holds the shared file; then its mode, or its directory's,
-    changes so this user can no longer open it. The old holder's descriptor and
-    lock survive that, so a new taker must not enter on the private file alone."""
-    key = lock_path("edit", str(tmp_path / "tree"))
-    old = _old_lock_file(key.name, key.scope)
-    target = old if tighten == "file" else old.parent
-    with _held(old):  # the old process, inside the critical section
-        target.chmod(0)
-        try:
-            with exclusive_lock(key, wait_s=0.3) as held:
-                assert not held
-        finally:
-            target.chmod(0o700 if tighten == "directory" else 0o600)
-
-
-# ------------------------------------------- old and new processes, for real
+# ------------------------------------------------- separate processes
 
 _HOLDER = """
-import hashlib, os, sys, tempfile
+import sys
 from pathlib import Path
 
-role, kind, target = sys.argv[1], sys.argv[2], Path(sys.argv[3])
-if role == "old":  # what releases before the move did: the shared file alone
-    from smriti.core.oslock import exclusive_lock
-    if kind == "edit":
-        name, scope = "edit", os.path.normcase(str(target.resolve()))
-    else:
-        name, scope = "daylog-writer", str(target.resolve())
-    digest = hashlib.sha1(scope.encode("utf-8")).hexdigest()[:16]
-    held = exclusive_lock(Path(tempfile.gettempdir()) / "smriti-locks" / f"{digest}-{name}.lock",
-                          wait_s=10)
-elif kind == "edit":
+kind, target = sys.argv[1], Path(sys.argv[2])
+if kind == "edit":
     from smriti.core.files import edit_lock
     held = edit_lock(target, wait_s=10)
 else:
@@ -394,11 +290,11 @@ with held as ok:
 
 
 @contextmanager
-def _process_holding(role: str, kind: str, target: Path) -> Iterator[None]:
+def _process_holding(kind: str, target: Path) -> Iterator[None]:
     env = dict(os.environ)
     src = str(Path(smriti.__file__).resolve().parents[1])  # the smriti this test imported
     env["PYTHONPATH"] = os.pathsep.join([src, env.get("PYTHONPATH", "")])
-    proc = subprocess.Popen([sys.executable, "-c", _HOLDER, role, kind, str(target)],
+    proc = subprocess.Popen([sys.executable, "-c", _HOLDER, kind, str(target)],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env)
     assert proc.stdin is not None and proc.stdout is not None
     try:
@@ -409,16 +305,11 @@ def _process_holding(role: str, kind: str, target: Path) -> Iterator[None]:
         proc.wait(timeout=30)
 
 
-def _try_in_this_process(role: str, kind: str, target: Path) -> bool:
-    """Whether ``role`` code in this process gets ``kind``'s lock on ``target`` now."""
+def _try_in_this_process(kind: str, target: Path) -> bool:
+    """Whether this process gets ``kind``'s lock on ``target`` now."""
     from smriti.core.files import FileBusy, edit_lock
     from smriti.daylog.lock import LockTimeout, writer_lock
 
-    if role == "old":
-        name, scope = (("edit", os.path.normcase(str(target.resolve()))) if kind == "edit"
-                       else ("daylog-writer", str(target.resolve())))
-        with exclusive_lock(_old_lock_file(name, scope), wait_s=0.3) as held:
-            return held
     try:
         if kind == "edit":
             with edit_lock(target, wait_s=0.3):
@@ -430,11 +321,9 @@ def _try_in_this_process(role: str, kind: str, target: Path) -> bool:
 
 
 @pytest.mark.parametrize("kind", ["edit", "writer"])
-@pytest.mark.parametrize("holder,taker", [("old", "new"), ("new", "old"), ("new", "new")])
-def test_old_and_new_processes_exclude_each_other(tmp_path: Path, kind: str, holder: str,
-                                                  taker: str) -> None:
+def test_two_processes_exclude_each_other(tmp_path: Path, kind: str) -> None:
     target = tmp_path / "tree" / ("journal.md" if kind == "edit" else "daylog.lock")
     target.parent.mkdir()
-    with _process_holding(holder, kind, target):
-        assert not _try_in_this_process(taker, kind, target)
-    assert _try_in_this_process(taker, kind, target), "released when the holder let go"
+    with _process_holding(kind, target):
+        assert not _try_in_this_process(kind, target)
+    assert _try_in_this_process(kind, target), "released when the holder let go"
