@@ -204,8 +204,11 @@ def fts_terms(conn: IndexDB | sqlite3.Connection, query: str, k: int = FTS_MAX_T
 
     ORing every word of a long prompt made FTS5 rank most of the index: p90
     13 s on real prompts, against 31 ms with the 12 rarest terms (the
-    retrieval eval). Rarity comes from a temp-schema fts5vocab table, so a
-    read-only connection works and index.db is never modified. Each term is
+    retrieval eval). Rarity comes from the fts5vocab table the index schema
+    creates in the main database (:func:`_vocab_table`): it stores nothing of
+    its own, and query_only readers can read it but couldn't create one; an
+    index built before it existed gets a temp-schema one on a writable
+    connection, which leaves index.db as it is. Each term is
     matched as a quoted phrase (:func:`fts_match`); see :func:`_query_word`
     for what a word becomes.
     """
