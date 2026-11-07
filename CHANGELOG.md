@@ -19,7 +19,7 @@ All notable changes to this project are documented here, following
 - `smriti eval` reports a versioned quality set over its synthetic corpus (version
   1, 26 cases): retrieval by kind of question (direct, paraphrase, contradiction,
   correction; hit@1/3/5, MRR), whether the newer of two disagreeing notes wins, and
-  abstention on irrelevant queries (at the recall threshold, and threshold-free).
+  abstention on irrelevant queries (at a fixed threshold, 0.45, and threshold-free).
   `--markdown` prints the scores as tables. `smriti eval --llm` also digests
   synthetic days with the nightly's LLM and scores each digest's coverage of its
   turns, the facts it states and the share of its sentences traceable to the turns;
@@ -72,6 +72,46 @@ All notable changes to this project are documented here, following
   is `smriti.core.scrub` and the day zone `smriti.core.dayzone`.
   `smriti.daylog.scrub` and `smriti.daylog.model` re-export them, so existing
   imports keep working. A test fails on an import against that direction.
+- The lock transition is over: a named lock (file edits, the day-log writer, the
+  handoff, the nightly run) is one file in `<runtime>/locks`, and no longer also
+  its old file in the shared temp directory. `SMRITI_LEGACY_LOCKS` is gone.
+  Restart smriti's long-lived processes (MCP servers, logd) after upgrading:
+  one still running code from before 0.2 holds only the old file, and is no
+  longer excluded. A runtime directory that is refused or can't be made fails
+  closed, as it did with the old files off: the lock isn't taken.
+- On Linux and macOS the runtime directory is `~/.cache/smriti/run` whatever
+  `XDG_RUNTIME_DIR` says, so a cron job and a desktop session take the same lock
+  files (it was `$XDG_RUNTIME_DIR/smriti` when that was set). A desktop install
+  that had it set moves there once: restart smriti's processes after upgrading,
+  and its embedding service starts afresh with a new key. Windows is unchanged
+  (`%LOCALAPPDATA%\smriti\run`). `SMRITI_RUNTIME_DIR` still overrides it; set
+  it for every process or none.
+- The agent doc the installer writes (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`)
+  no longer says memory arrives when a file is touched; rerun the installer to
+  refresh it.
+
+### Removed
+
+- The encrypted private store (`smriti.private`, `private/` in the tree), with the
+  `private` extra and `cryptography` in `dev`. Nothing wrote to it, yet every CLI
+  command but `eval` and `embed` initialised it. `smriti status` loses its
+  committed-key warning. A tree that has one keeps it out of the index,
+  and the template's `.gitignore` still lists `private/.key`; read its notes with
+  0.2.0 and that key (PRIVACY.md, "The private store (removed)").
+- qmd as a recall backend: `smriti recall index` and `smriti recall daemon`, the
+  `SMRITI_RECALL_BACKEND`, `_QMD_URL`, `_NO_HTTP`, `_COLLECTION` and `_INTENT`
+  settings, logd's ten-minute keepalive of qmd's daemon, and the installer's
+  daemon start with its `--skip-recall-daemon` flag. A qmd daemon already running
+  keeps running until stopped (`qmd mcp stop`).
+- The PostToolUse ambient-recall hook (`smriti.recall`) and the `smriti recall`
+  command. The installer no longer wires the hook or deploys its script
+  (`associative_recall.py` for Claude Code, `recall_hook.py` for Codex), and
+  `smriti doctor` no longer checks Codex's copy. An entry an earlier install
+  wired stays until removed by hand; its script now exits without doing
+  anything. `examples/python_agent.py` searches through `smriti.store.search`.
+- `smriti.daylog.presence`, which only the hook used.
+
+The code of each is in the git history.
 
 ### Fixed
 

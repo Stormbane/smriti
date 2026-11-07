@@ -66,20 +66,6 @@ References: [Codex hooks docs](https://developers.openai.com/codex/hooks),
 Useful if you maintain your `config.toml` by hand and only want
 smriti's AGENTS.md drop-in.
 
-### Ambient recall on file touches
-
-`[[hooks.PostToolUse]]` matching `Edit|Write|apply_patch` is wired by
-the installer. After every patch, Codex calls
-`~/.codex/hooks/recall_hook.py` which parses the patch body for
-`*** Add/Update/Delete File:` directives, fires recall against each
-file, and emits matches as `hookSpecificOutput.additionalContext`
-JSON. Bash and `mcp__*` tools are skipped (too noisy for Bash;
-recursion guard for MCP).
-
-The hook is testable without Codex installed — see
-`tests/test_recall_hook.py` for synthetic-stdin examples that drive
-the same pipeline Codex uses in production.
-
 ---
 
 ## Synthetic evaluation
@@ -111,13 +97,14 @@ The harness-agnostic surface is in three packages:
 
 - `smriti.llm` — pluggable LLM providers (Anthropic API, Claude Code
   CLI, OpenAI, Ollama).
-- `smriti.recall` — hybrid vector + FTS5 search over the memory tree,
-  plus a tool-wrapper that fires recall after a callable runs.
+- `smriti.store.search` — hybrid vector + FTS5 search over the memory
+  tree's index (`search_with_status`, on a connection from
+  `smriti.store.schema.open_readonly`).
 - `smriti.wake` — the same identity + threads + project-context
   briefing that Claude Code's SessionStart hook injects, exposed as a
   pure-assembly function returning a string.
 - `smriti.store.writer` — write entries that get crosslinked, indexed,
-  and surfaced by future recall.
+  and found by later searches.
 - `smriti.templates.AGENT.md` — the harness-neutral memory contract
   shipped as package data.
 
@@ -201,10 +188,8 @@ Requires the Ollama daemon at `http://localhost:11434` (override via
 
 | Command                     | What it does                                             |
 |-----------------------------|----------------------------------------------------------|
-| `<text>`                    | Normal turn: ambient recall, then LLM call with history. |
+| `<text>`                    | Normal turn: memory search, then LLM call with history.  |
 | `/write <branch> <text>`    | Persist a note via `smriti.store.writer.write_entry`.    |
-| `/tool read <path>`         | Run `read_file` wrapped with `smriti.recall.wrap_tool`.  |
-| `/tool ls <path>`           | Run `list_dir` wrapped with `smriti.recall.wrap_tool`.   |
 | `/provider`                 | Show active provider, model, history depth.              |
 | `/provider list`            | Enumerate registered providers + availability.           |
 | `/reset`                    | Clear conversation history.                              |
@@ -214,11 +199,12 @@ Requires the Ollama daemon at `http://localhost:11434` (override via
 
 ## Building your own agent
 
-The four library entry points used by the example:
+The library entry points used by the example:
 
 ```python
 from smriti.llm import call_llm, list_providers, Message
-from smriti.recall import run_recall, wrap_tool
+from smriti.store.schema import open_readonly
+from smriti.store.search import search_with_status
 from smriti.store.writer import write_entry
 from smriti.wake import briefing
 ```
@@ -244,22 +230,25 @@ response = call_llm(system=system_prompt, messages=history)
 history.append(Message("assistant", response.text))
 ```
 
-### Wrapping a tool with ambient recall
+### Searching memory
 
 ```python
-def my_read(path: str) -> str:
-    return Path(path).read_text(encoding="utf-8")
+from smriti.core.tree import smriti_db_path
 
-wrapped = wrap_tool(my_read, query_from=lambda a, kw, out: a[0])
-result = wrapped("notes.md")
-print(result.output)         # the file contents
-print(result.recall_block)   # injectable system-reminder text (or "")
+conn = open_readonly(smriti_db_path())  # a reader never holds up a writer
+try:
+    outcome = search_with_status(conn, "how does Sam like answers", top_k=3)
+finally:
+    conn.close()
+for note in outcome.notes():  # keyword-only, or nothing close to the query
+    print(note)
+for r in outcome.results:
+    print(r.source, f"{r.score:.2f}", r.content[:200])
 ```
 
-`result.recall_block` is the same `<system-reminder>...</system-reminder>`
-shape Claude Code's PostToolUse hook emits — feed it back to the LLM as
-the next user message (or as a tool-result annotation in tool-calling
-APIs) to give the agent ambient memory after every file touch.
+Nothing puts the results in front of the model for you: add the ones
+you want to the system prompt or the next message, as the example does
+on every turn.
 
 ### Picking a provider programmatically
 
@@ -287,7 +276,7 @@ path = write_entry(
 
 The writer dates the entry, places it under `journal/YYYY/MM/weekN/`,
 indexes it, and regenerates any `index.md` above it. Anything written
-here is searchable on the next `run_recall()` call.
+here is found by the next search.
 
 ---
 

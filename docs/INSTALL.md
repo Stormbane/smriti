@@ -215,7 +215,7 @@ python scripts/install.py --harness none  # core memory setup only
 | Create junctions | `<entity>/mirrors/{project}/auto-memory`, `/knowledge`, `/ai` | Per-project memory and knowledge access, for each project under the projects root |
 | Record the projects root | `<entity>/.smriti/install.json` | The next run links the same projects without `--projects-root` |
 | Register MCP server | `~/.claude.json` | Exposes `smriti_read` / `smriti_write` / `smriti_status` |
-| Patch settings.json | `~/.claude/settings.json` | SessionStart → `wake.py`; UserPromptSubmit → touch `last-activity`; PostToolUse → ambient recall (legacy, being retired) |
+| Patch settings.json | `~/.claude/settings.json` | SessionStart → `wake.py`; UserPromptSubmit → touch `last-activity` |
 | Write CLAUDE.md | `~/.claude/CLAUDE.md` | Managed block: the memory contract from `src/smriti/templates/AGENT.md` |
 
 Claude Code rewrites `~/.claude.json` and `settings.json` while it runs, so
@@ -229,7 +229,7 @@ the file before smriti changed it, is never removed; five are kept in all.
 
 The table above describes the default Claude Code bridge. The Codex bridge
 writes `~/.codex/AGENTS.md`, patches `~/.codex/config.toml`, registers the MCP
-server, and installs wake/recall hooks. Verify it without changing state:
+server, and installs the wake hook. Verify it without changing state:
 
 ```bash
 smriti doctor --harness codex --project C:/Projects/your-project
@@ -587,15 +587,13 @@ and leaves a `.pre-migrate.bak` backup next to the file.
 
 ### Why deployed hooks are copies, not symlinks
 
-Deployed hook shims (`~/.claude/hooks/`, `~/.codex/hooks/`) are copies
+Deployed hook scripts (`~/.claude/hooks/precompact_capture.py`) are copies
 of the sources in `smriti/integrations/`, on purpose:
 
 - True file symlinks on Windows require Developer Mode or elevation
   (`WinError 1314` otherwise), and git-bash `ln -s` silently degrades
   to a copy — a link that looks real but is not.
-- The editable pip install (`pip install -e .`) already single-sources
-  all real logic; the shims are ~20-line stable entry points whose text
-  rarely changes.
+- Their text rarely changes.
 - Byte-compare on deploy plus the `smriti doctor` integrity check make
   drift visible without link semantics.
 

@@ -650,6 +650,50 @@ a recheck.
 - **H12**: done (merged by 5323e58; H12.8 dropped). H12.10: outside review #6 at `5323e58`; its findings are H13.
 - **H13**: done (merged by 32ebc04; all CI green). H13.7 (fsync) measured and not kept: it slowed writes beyond noise. H13.13: outside review #7 at `9247509`; its findings are H14.
 - **H14**: planned, awaiting approval.
+- **H14.7 done** (2026-11-08, `hardening/h14b`; not yet reviewed or merged). Three
+  removals, each its own commit with its tests; the code is in the git history.
+  - The private store: `smriti.private`, the CLI's init on every command,
+    status's committed-key warning, the `private` extra and `cryptography`. A
+    tree that still has one keeps it out of the index, and the template's
+    `.gitignore` still lists `private/.key`.
+  - The qmd backend: `smriti recall index`/`daemon` and the "narada"
+    collection, the qmd settings, logd's keepalive of qmd's daemon, the
+    installer's daemon start and `--skip-recall-daemon`.
+  - The ambient-recall hook: `smriti.recall`, `smriti recall` (14 commands
+    now), the shared shim, both installers' PostToolUse wiring, doctor's check
+    of Codex's shim, `daylog.presence` (only the hook used it). The agent doc no
+    longer says memory comes with a file touch; `examples/python_agent.py`
+    searches through `smriti.store.search`. The installer doesn't remove an
+    entry an earlier install wired (its shim then exits without doing
+    anything); README says to remove it by hand.
+  - What the reference install still called, checked read-only: the
+    `smriti-logd` task's keepalive started qmd's daemon every ten minutes (one
+    has run since 2026-10-26, `qmd mcp --http --port 8181`; nothing queries it,
+    and it now runs until stopped by hand); Codex's PostToolUse entry runs
+    `~/.codex/hooks/recall_hook.py` and is disabled; Claude Code wires no
+    PostToolUse hook (a stale `~/.claude/hooks/associative_recall.py` sits
+    unwired); there is no `private/`; no other local project imports any of
+    it. Kept: Hermes, and the PreCompact hook (`~/.claude/hooks/precompact_capture.py`,
+    and the copy Codex's config runs, are older copies of smriti's own script).
+- **H14.8 done** (2026-11-08, `hardening/h14b`; not yet reviewed or merged). A
+  named lock is its one file in `<runtime>/locks`: `LEGACY_LOCKS`,
+  `SMRITI_LEGACY_LOCKS`, the shared temp-dir file and its fallback are gone, and
+  a runtime directory that is refused or can't be made fails closed (the old
+  files-off behaviour). The POSIX caveat is closed in `core.rundir`: the runtime
+  directory is `~/.cache/smriti/run` whatever `XDG_RUNTIME_DIR` says, so a cron
+  job and a desktop session take the same files. The simplest correct option:
+  `SMRITI_RUNTIME_DIR` in the scheduled tasks would cover cron only (POSIX
+  scheduling just prints crontab lines), not every other process started
+  without the variable. A desktop install that had `XDG_RUNTIME_DIR` set moves
+  its runtime directory once (its embedding service starts afresh). Tests: the
+  directory is the same with and without the variable (fails against the old
+  rule), and a process with it and one without exclude each other; the
+  old/new contention tests went. Bench (one run against master, two rounds a
+  side, on a copy of the reference tree): `smriti_write` p50 171 → 52 ms, max
+  236 → 95 ms. Master's 171 ms is well above its 50 ms of 11-07: its second lock
+  file goes in `%TEMP%\smriti-locks`, which holds 26,159 never-deleted files
+  today, and the branch no longer touches it. The rest is within the run's
+  noise (0.90-1.10); the top-5 results and the wake text are the same.
 - **H13.8, the nightly's part, implemented** (2026-11-07, `hardening/h13c`;
   not yet reviewed or merged). Opus's three findings held.
   - The stale-day scan read every day-file in the history every night to

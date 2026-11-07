@@ -44,16 +44,14 @@ security backport series or guaranteed response time.
   same user that holds its key can use it; other users can connect but are
   refused. See [The embedding service](#the-embedding-service).
 - The locks that serialise smriti's own writers (file edits, the day-log writer,
-  the handoff letter) are OS locks on files in the runtime directory's `locks/`,
-  which other users can't create or hold. During the move there from the shared
-  temp directory, each one is also taken on its earlier file
-  (`<tempdir>/smriti-locks`), so that processes still running an earlier release
-  and new ones exclude each other. There, on POSIX, another local user could hold
-  a lock, or own the shared directory so the file can't be opened, and stall
-  those writes, which then fail as busy rather than run unguarded. A later
-  release ends the move; `SMRITI_LEGACY_LOCKS=0` ends it for
-  one installation once none of its processes runs older code (see
-  `smriti.core.oslock`).
+  the handoff letter, the nightly run) are OS locks on files in the runtime
+  directory's `locks/`, which other users can't create or hold. Every process of
+  the user resolves the same runtime directory whatever its environment (it
+  doesn't follow `XDG_RUNTIME_DIR`, which a cron job lacks), so all of them take
+  the same files; `SMRITI_RUNTIME_DIR` must be set for all of them or for none.
+  When the directory is refused (another user owns it, or others can write to
+  it) or can't be made, a lock isn't taken anywhere else: what needed it fails as
+  busy rather than running unguarded (see `smriti.core.oslock`).
 - Backups commit the tree and can push it to a git remote you choose, in plaintext
   unless git-crypt encrypts it. Use a private remote. We recommend git-crypt for
   sensitive memory backups, but **the installer does not set up git-crypt**: it asks
@@ -64,9 +62,6 @@ security backport series or guaranteed response time.
   commit messages, and other metadata remain visible even when file contents are
   encrypted. [`docs/PRIVACY.md`](docs/PRIVACY.md#what-is-pushed-in-the-clear) lists
   what is pushed in the clear.
-- The optional private store encrypts content with Fernet, and keeps its key
-  beside it on this machine: it hides private notes from the git remote, not
-  from anyone who has the machine. See [The private store](#the-private-store).
 - A profile (`"profile"` in `daylog.json`) is code from an installed package,
   found through the `smriti.profiles` entry-point group of the Python
   environment smriti runs in; nothing is loaded from the memory tree, so the
@@ -126,9 +121,8 @@ listens on loopback only.
   fallback never gets it.
 - **Backups, to the git remote.** Everything git tracks in the tree: memory
   notes, captured conversations and their renders, digests, rollups,
-  `daylog.json`, witness manifests, and the private store's ciphertext, in
-  plaintext unless git-crypt encrypts it (file names, sizes and commit messages
-  stay readable either way). *To:* every push URL of the current branch's
+  `daylog.json` and witness manifests, in plaintext unless git-crypt encrypts it
+  (file names, sizes and commit messages stay readable either way). *To:* every push URL of the current branch's
   upstream remote, or of `origin` when it has none. *When:* hourly (the
   `smriti-backup` task, when something changed), in the nightly's witness step,
   and on `smriti backup --push`. *Off:* no remote to push to (remove the
@@ -169,48 +163,23 @@ listens on loopback only.
   names it. *When:* each time the agent calls the tool. *Off:* no profile, or
   neither command.
 - **Local by default.** Ollama, for the LLM (`SMRITI_OLLAMA_URL`) or embeddings
-  (`SMRITI_EMBED_PROVIDER=ollama`, `OLLAMA_HOST`), and the legacy qmd recall
-  backend (`SMRITI_RECALL_QMD_URL`) are on localhost unless pointed elsewhere;
-  then the same text goes there.
+  (`SMRITI_EMBED_PROVIDER=ollama`, `OLLAMA_HOST`), is on localhost unless
+  pointed elsewhere; then the same text goes there.
 
 The LLM CLIs and harnesses talk to their own vendors under their own settings
 and terms, telemetry included; smriti doesn't change those.
 
-## The private store
+## The private store (removed)
 
-`smriti.private` (`private/` in the tree) is an append-only store of notes
-encrypted with Fernet (AES-128-CBC with HMAC-SHA256), for the agent's private
-memory. Its key is in plain text in `private/.key`, beside the store. No smriti
-command or MCP tool reads or writes its notes; it is an API (the CLI only runs
-its idempotent `init` on a store that exists). [`docs/PRIVACY.md`](docs/PRIVACY.md)
-has the design and its later phases (an OS keyring, secret sharing, hardware),
-none of them built.
-
-- **What it protects against: the git remote reading private notes.** The backup
-  pushes the ciphertext (`private/YYYY/MM/*.md.enc`), the contract
-  (`private/README.md`) and the failures-only `.audit.log`, never the key: both
-  the private store's `.gitignore` and the memory template's keep `.key` out of
-  git. Whoever can read the remote (its host, a leaked clone, a repository made
-  public by mistake) can't read the notes. The search index skips `private/`, so
-  no plaintext reaches the index either.
-- **What it doesn't: anyone with the machine.** The key sits beside the store, so
-  anyone who can read the user's files can decrypt it: the operator, the agent
-  itself through a shell, any program running as the user, an administrator,
-  malware, a disk image, or a backup of the home directory that includes
-  `.key`. A `ConsentToken` keeps operator-facing code from reading the store by
-  accident; any code can issue one, so it is not access control.
-- **What the remote still sees:** how many private notes there are and on which
-  days (the file names), their sizes and commit times, and the audit log's
-  failures (paths, session ids, error messages; no content).
-- **Text read out of the store is ordinary text.** Decrypted into a session, it
-  is captured into the day-log like any other turn, and pushed with it.
-- **The key is the only copy.** Git can't restore it: back it up outside the
-  tree, or the notes are lost with it. An older store kept its key in
-  `private/README.md`, which is committed; smriti moves such a key to `.key`,
-  takes it out of the README and warns (in the log, and in `smriti status`
-  until `private/KEY-WAS-COMMITTED.txt` is deleted). The key is still in the
-  history: re-encrypt the notes under a new key (smriti has no tool for that
-  yet; `docs/PRIVACY.md` has the steps) and rewrite the history.
+Versions before 0.3 had `smriti.private`, an append-only store of notes
+encrypted with Fernet, in `private/` in the tree, with its key in plain text
+beside it in `private/.key`. Nothing in smriti wrote to it, no command or tool
+read it, and it hid notes from the git remote only, never from anyone with the
+machine, so it was removed. A tree that still has one keeps it out of the
+search index, and the memory template's `.gitignore` lists `private/.key`. Its
+notes can be read with smriti 0.2.0 (`git checkout v0.2.0`) and that key; back
+the key up outside the tree, because git can't restore it.
+[`docs/PRIVACY.md`](docs/PRIVACY.md#the-private-store-removed) says more.
 
 ## The embedding service
 
@@ -226,10 +195,10 @@ root and embeds text for the user's other smriti processes: the MCP servers,
   locks and logs, and smriti's other locks (`locks/`), and is never inside the
   memory tree, so none of it is committed
   or pushed: `%LOCALAPPDATA%\smriti\run` on Windows, private to the user by the
-  profile's ACLs; `$XDG_RUNTIME_DIR/smriti` or `~/.cache/smriti/run` elsewhere,
-  created mode 0700 and refused when another user owns it or others can write to
-  it (smriti doesn't check ownership on Windows; it relies on the profile's ACLs,
-  including when `SMRITI_RUNTIME_DIR` points elsewhere).
+  profile's ACLs; `~/.cache/smriti/run` elsewhere, whatever `XDG_RUNTIME_DIR`
+  says, created mode 0700 and refused when another user owns it or others can
+  write to it (smriti doesn't check ownership on Windows; it relies on the
+  profile's ACLs, including when `SMRITI_RUNTIME_DIR` points elsewhere).
 - **The key.** 32 random bytes in `<runtime>/embed.key`, made once by an exclusive
   create (mode 0600 on POSIX, refused if others can read it) and never replaced.
   One key serves all of a user's memory roots.
@@ -276,11 +245,13 @@ correlation and guesses of known queries; they are not encryption. Metrics also
 include operational metadata such as source paths and timings.
 
 The installed memory-template `.gitignore` excludes the search index, SQLite
-side files, metrics and recall logs, LLM work directories, the parked queue,
-day-log runtime state, locks, and `private/.key`. It does **not** exclude memory
-notes, captured day logs, digests, or rollups. Ignore rules do not untrack files
+side files, the metrics log (and the recall log earlier versions wrote), LLM
+work directories, the parked queue, day-log runtime state, locks, and the key
+of the private store earlier versions had (`private/.key`). It does **not**
+exclude memory notes, captured day logs, digests, or rollups. Ignore rules do not untrack files
 already committed; check existing repositories before enabling remote backups.
-The search index excludes the private store and runtime state.
+The search index excludes runtime state, and `private/` (that store) where a
+tree still has it.
 
 Capture is off until it is configured, and is chosen at install.
 `<memory-root>/.smriti/daylog.json` turns it on with `"capture": true` (the default
