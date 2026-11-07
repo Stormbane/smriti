@@ -1090,6 +1090,17 @@ a recheck.
   deployed `backup.py`, comments that told an incident ("diff review P1", "recheck
   finding 2", "spec: review round 1, finding 6", "2026-09-06 ...") state the rule,
   with dates kept only for measurements that still stand; one named the maintainer.
+- **Codex diff review of `hardening/h12w`** (2026-11-07): three P2s, fixed with
+  regression tests that fail without the fix. A new install without
+  `--projects-root` recorded nothing, so its rerun found the `wake.py` it had
+  deployed, took itself for an install from before the record and linked
+  `C:/Projects` unasked: the choice of none is recorded (`"projects_root": null`)
+  and kept; only a record without the key predates it, and the reference install
+  still resolves `C:\Projects` from its mirrors. A root given with `..` was kept
+  as spelled, so Claude Code's directories were looked up under the wrong names:
+  the root is normalised (`os.path.normpath`, not `resolve()`, which would follow
+  junctions and change `C:/Projects`'s case). `smriti eval --llm --markdown`
+  dropped the digests' scores and errors: the Markdown report has their table.
 - **H11.1, H11.5, H11.10 done** (2026-11-06, merged at `498ce0e` after a Codex diff
   review; its two findings, the capture override and the metrics scrub, fixed). Capture is off unless `daylog.json` says
   `"capture": true` (the default sources; the installer's `--capture` writes it) or
