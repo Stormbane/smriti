@@ -16,7 +16,7 @@ from smriti.daylog.morning import run_morning
 from smriti.daylog.nightly import run_nightly
 from smriti.daylog.render import input_hash, read_input_hash, render_day
 from smriti.daylog.rollup import enumerate_stale_periods, week_of
-from smriti.daylog.writer import append_turns, read_day_turns
+from smriti.daylog.writer import append_turns, read_whole_day
 from smriti.llm.types import LLMRequest, LLMResponse
 
 
@@ -76,7 +76,7 @@ def test_render_writes_timeline_with_hash_and_autonomous_marker(tmp_path: Path) 
     # The zero-human session is a derived marker, not inline turns.
     assert "[autonomous: claude:smriti" in text
     assert "loop iteration output" not in text
-    turns = read_day_turns(cfg.day_jsonl("2026-09-04"))
+    turns = read_whole_day(cfg.day_jsonl("2026-09-04"))
     assert read_input_hash(out) == input_hash(turns)
 
 
@@ -151,7 +151,7 @@ def test_a_legacy_day_renders_byte_identically_with_the_reference_names(
     assert out is not None
     # render_day writes in text mode, so the platform's line ending is part of the bytes.
     assert out.read_bytes() == _LEGACY_RENDER.replace("\n", os.linesep).encode("utf-8")
-    turns = read_day_turns(path)
+    turns = read_whole_day(path)
     assert [t.who for t in turns] == [USER, AGENT, USER, AGENT, AGENT, AGENT]
     assert input_hash(turns) == "a1d98fd4f3012c12"  # unchanged: past digests stay current
 
@@ -443,7 +443,7 @@ def test_read_day_counts_the_lines_it_skips(tmp_path: Path) -> None:
     assert [t.text for t in read.turns] == [
         "morning question", "morning answer", "loop iteration output"]
     assert read.invalid == 4
-    assert read_day_turns(path) == read.turns
+    assert read_whole_day(path) == read.turns
     assert read_day(tmp_path / "missing.jsonl").invalid == 0
 
 

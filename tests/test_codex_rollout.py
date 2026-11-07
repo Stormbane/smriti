@@ -21,7 +21,7 @@ from smriti.daylog.collect import collect_once
 from smriti.daylog.config import DaylogConfig, SourceSpec
 from smriti.daylog.model import AGENT, USER
 from smriti.daylog.state import DaylogState
-from smriti.daylog.writer import read_day_turns
+from smriti.daylog.writer import read_whole_day
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "codex"
 PAGINATED = "rollout-2026-10-23T19-15-00-01a1aaaa-0b0b-7c0c-8d0d-0e0e0e0e0e01.jsonl"
@@ -176,8 +176,8 @@ def test_capture_gives_the_same_turns_however_short_its_reads(
         collect_once(cfg)
     assert DaylogState.load(cfg.state_path).sources["codex"].files[str(path)].offset == \
         path.stat().st_size
-    turns = [*read_day_turns(cfg.day_jsonl("2026-07-15")),
-             *read_day_turns(cfg.day_jsonl("2026-07-16"))]
+    turns = [*read_whole_day(cfg.day_jsonl("2026-07-15")),
+             *read_whole_day(cfg.day_jsonl("2026-07-16"))]
     assert [t.id for t in turns] == [i for _, _, i, _ in LEGACY_TURNS]
 
 
@@ -227,11 +227,11 @@ def test_capture_reads_both_encodings(tmp_path: Path) -> None:
     _copy(PAGINATED, sessions / "2026" / "10" / "23")
     cfg = DaylogConfig(root=tmp_path / "root", sources=[_codex_source(sessions)])
     assert collect_once(cfg).appended == 8
-    assert [t.text for t in read_day_turns(cfg.day_jsonl("2026-10-23"))] == [
+    assert [t.text for t in read_whole_day(cfg.day_jsonl("2026-10-23"))] == [
         "Ari, can you check why the orchard ledger totals drift?", FINAL_1,
         "Thanks. Does it handle an empty ledger?", FINAL_2]
-    legacy = [*read_day_turns(cfg.day_jsonl("2026-07-15")),  # UTC+10: it crosses midnight
-              *read_day_turns(cfg.day_jsonl("2026-07-16"))]
+    legacy = [*read_whole_day(cfg.day_jsonl("2026-07-15")),  # UTC+10: it crosses midnight
+              *read_whole_day(cfg.day_jsonl("2026-07-16"))]
     assert [t.id for t in legacy] == [turn_id for _, _, turn_id, _ in LEGACY_TURNS]
 
 
@@ -266,7 +266,7 @@ def test_rescan_backfills_what_an_older_adapter_read_past(
     out = capsys.readouterr().out
     assert "Rescan: codex: 2 known files will be read again from the start" in out
     assert "Pass: +4 turns" in out and "days changed: 2026-10-23" in out
-    assert len(read_day_turns(cfg.day_jsonl("2026-10-23"))) == 4
+    assert len(read_whole_day(cfg.day_jsonl("2026-10-23"))) == 4
     legacy_lines = [line for day in ("2026-07-15", "2026-07-16")
                     for line in cfg.day_jsonl(day).read_text(encoding="utf-8").splitlines()]
     assert len(legacy_lines) == 4  # none twice

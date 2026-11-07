@@ -23,7 +23,7 @@ from smriti.daylog.config import DaylogConfig
 from smriti.daylog.model import AGENT, USER, Turn, parse_ts
 from smriti.daylog.nightly import run_lock_key, run_nightly
 from smriti.daylog.render import input_hash, read_input_hash
-from smriti.daylog.writer import append_turns, read_day_turns
+from smriti.daylog.writer import append_turns, read_whole_day
 from smriti.llm.types import LLMRequest, LLMResponse
 
 NIGHT_1 = datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc)  # 03:05 on 09-05, UTC+10
@@ -284,7 +284,7 @@ def _race_between_render_and_digest(cfg: DaylogConfig,
 
 
 def _current(cfg: DaylogConfig, day: str = DAY) -> str:
-    return input_hash(read_day_turns(cfg.day_jsonl(day)))
+    return input_hash(read_whole_day(cfg.day_jsonl(day)))
 
 
 def test_a_turn_appended_between_render_and_digest_leaves_the_digest_stale(

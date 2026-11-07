@@ -16,7 +16,7 @@ import pytest
 from smriti.daylog import digest as digest_mod
 from smriti.daylog.config import DaylogConfig
 from smriti.daylog.model import Turn, parse_ts
-from smriti.daylog.writer import append_turns, read_day_turns
+from smriti.daylog.writer import append_turns, read_whole_day
 from smriti.llm import LLMError
 from smriti.llm.types import LLMRequest, LLMResponse
 
@@ -129,7 +129,7 @@ def _seed(tmp_path: Path, log_text: str) -> DaylogConfig:
 
 
 def _sample(cfg: DaylogConfig) -> str:
-    sample = digest_mod._autonomous_sample(read_day_turns(cfg.day_jsonl(DAY)))
+    sample = digest_mod._autonomous_sample(read_whole_day(cfg.day_jsonl(DAY)))
     assert sample  # the fixture day has unattended activity to report
     return sample
 

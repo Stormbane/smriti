@@ -21,7 +21,7 @@ from smriti.daylog.lock import LockTimeout, writer_lock
 from smriti.daylog.model import AGENT, USER, Turn, local_day, make_turn_id, parse_ts
 from smriti.daylog.scrub import scrub
 from smriti.daylog.state import DaylogState
-from smriti.daylog.writer import append_turns, load_day_ids, read_day_turns
+from smriti.daylog.writer import append_turns, load_day_ids, read_whole_day
 
 
 def _cfg(tmp_path: Path, sources: list[SourceSpec] | None = None) -> DaylogConfig:
@@ -107,7 +107,7 @@ def test_recapturing_a_legacy_day_appends_nothing(tmp_path: Path) -> None:
     path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
     appended, _ = append_turns(cfg, [_turn("2026-09-04T01:00:00Z", "hello", who=USER)])
     assert appended == 0
-    assert [t.who for t in read_day_turns(path)] == [USER]
+    assert [t.who for t in read_whole_day(path)] == [USER]
 
 
 # ---------------------------------------------------------------- scrub
@@ -331,13 +331,13 @@ def test_append_dedups_and_reports_changed_days(tmp_path: Path) -> None:
     assert len(load_day_ids(cfg.day_jsonl("2026-09-04"))) == 1
 
 
-def test_read_day_turns_sorts_by_event_time(tmp_path: Path) -> None:
+def test_read_whole_day_sorts_by_event_time(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     late = _turn("2026-09-04T05:00:00Z", "later")
     early = _turn("2026-09-04T01:00:00Z", "earlier")
     append_turns(cfg, [late])
     append_turns(cfg, [early])
-    texts = [t.text for t in read_day_turns(cfg.day_jsonl("2026-09-04"))]
+    texts = [t.text for t in read_whole_day(cfg.day_jsonl("2026-09-04"))]
     assert texts == ["earlier", "later"]
 
 
@@ -437,7 +437,7 @@ def test_collect_tails_incrementally_without_duplicates(tmp_path: Path) -> None:
         fh.write("- `10:00:09` **assistant:** second\n")
     r2 = collect_once(cfg)
     assert r2.appended == 1
-    turns = read_day_turns(cfg.day_jsonl("2026-09-04"))
+    turns = read_whole_day(cfg.day_jsonl("2026-09-04"))
     assert [t.text for t in turns] == ["first", "second"]
 
 
@@ -450,7 +450,7 @@ def test_collect_crash_between_append_and_state_save(tmp_path: Path) -> None:
     # "Crash": the state save never landed — marks regress to zero.
     cfg.state_path.unlink()
     assert collect_once(cfg).appended == 0
-    assert len(read_day_turns(cfg.day_jsonl("2026-09-04"))) == 1
+    assert len(read_whole_day(cfg.day_jsonl("2026-09-04"))) == 1
 
 
 def test_collect_reread_on_truncation(tmp_path: Path) -> None:
@@ -461,7 +461,7 @@ def test_collect_reread_on_truncation(tmp_path: Path) -> None:
     # Recreate the file with different content (identity change).
     f.write_text("- `10:00:07` **user:** rewritten\n", encoding="utf-8")
     collect_once(cfg)
-    texts = {t.text for t in read_day_turns(cfg.day_jsonl("2026-09-04"))}
+    texts = {t.text for t in read_whole_day(cfg.day_jsonl("2026-09-04"))}
     assert texts == {"original", "rewritten"}
 
 

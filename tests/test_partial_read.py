@@ -1,10 +1,11 @@
 """A day-file read only partway is never published (hardening H14.3).
 
 ``read_day`` says when it couldn't read a day-file to its end (``complete``
-False, the turns before the failure), but the render took the prefix as the
-whole day and wrote it, and the digest summarised that (Codex, outside review
-#7). Now what publishes (the render, the digest) reads with
-``read_whole_day``, which raises ``DayUnreadable`` instead; the nightly keeps
+False, the turns before the failure), but ``read_day_turns`` dropped that, the
+render took the prefix as the whole day and wrote it, and the digest
+summarised that (Codex, outside review #7). Now the day's turns are read with
+``read_whole_day``, which raises ``DayUnreadable`` instead (``read_day_turns``
+went with its last caller); the nightly keeps
 the previous render and digest, names the day in its status (and the wake
 line), keeps its dirty marker, and reads it again the next night.
 
@@ -27,7 +28,6 @@ from smriti.daylog.writer import (
     DayUnreadable,
     append_turns,
     read_day,
-    read_day_turns,
     read_whole_day,
 )
 from smriti.wake.briefing import _nightly_line
@@ -83,7 +83,6 @@ def test_read_whole_day_refuses_a_read_that_stops_partway(
     assert not partial.complete and len(partial.turns) == 1
     with pytest.raises(DayUnreadable):
         read_whole_day(path)
-    assert len(read_day_turns(path)) == 1  # the prefix, for a caller that only looks
     assert read_whole_day(tmp_path / "log" / "2026" / "01" / "01.jsonl") == []  # missing: whole
 
 

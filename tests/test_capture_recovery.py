@@ -24,7 +24,7 @@ from smriti.daylog.writer import (
     AppendPass,
     append_turns,
     append_turns_unlocked,
-    read_day_turns,
+    read_whole_day,
     scan_day,
 )
 
@@ -110,7 +110,7 @@ def test_a_torn_last_line_is_closed_before_the_next_append(tmp_path: Path) -> No
     assert appended == 1
     lines = _lines(path)
     assert len(lines) == 3 and json.loads(lines[2])["text"] == "third"
-    assert [t.text for t in read_day_turns(path)] == ["first", "third"]
+    assert [t.text for t in read_whole_day(path)] == ["first", "third"]
     assert batch.repaired == [DAY] and batch.invalid == {DAY: 1} and not batch.unsynced
     scan = scan_day(path)
     assert scan.invalid == 1 and not scan.torn
@@ -165,14 +165,14 @@ def test_a_capture_killed_mid_append_loses_no_turn(tmp_path: Path) -> None:
 
     report = collect_once(cfg)  # the restart
     assert report.appended == 3 and report.repaired_days == [DAY]
-    assert [t.text for t in read_day_turns(path)] == texts
+    assert [t.text for t in read_whole_day(path)] == texts
     assert len(_records(path)) == 6 and len(_lines(path)) == 7  # six records, one fragment
     state = DaylogState.load(cfg.state_path)
     assert state.corrupt_lines == {DAY: 1} and state.torn_repairs == 1
 
     _say(transcript, _claude(7, "and one more"))
     assert collect_once(cfg).appended == 1
-    assert [t.text for t in read_day_turns(path)] == [*texts, "and one more"]
+    assert [t.text for t in read_whole_day(path)] == [*texts, "and one more"]
 
 
 @pytest.mark.parametrize("crash", ["before the state is saved", "while the state is saved"])
@@ -197,7 +197,7 @@ def test_a_capture_killed_after_its_append_duplicates_no_turn(tmp_path: Path, cr
     assert len(_lines(path)) == 6 and len({r["id"] for r in _records(path)}) == 6
     _say(transcript, _claude(7, "after the crash"))
     assert collect_once(cfg).appended == 1
-    assert read_day_turns(path)[-1].text == "after the crash"
+    assert read_whole_day(path)[-1].text == "after the crash"
 
 
 # ------------------------------------------------------------ state and status
@@ -270,7 +270,7 @@ def test_a_record_longer_than_one_read_is_skipped_and_the_turns_after_it_capture
     _say(transcript, _claude(0, "before the image"), _huge(1, 9 * MIB),
          _claude(2, "after the image"), _claude(3, "and later still", who="assistant"))
     reports = _passes(cfg, 3)
-    texts = [t.text for t in read_day_turns(cfg.day_jsonl(DAY))]
+    texts = [t.text for t in read_whole_day(cfg.day_jsonl(DAY))]
     assert texts == ["before the image", "after the image", "and later still"]
     skips = [s for r in reports for s in r.skipped]  # type: ignore[attr-defined]
     assert len(skips) == 1 and skips[0].path == str(transcript)
@@ -304,7 +304,7 @@ def test_a_long_record_still_being_written_is_waited_for_not_skipped(
     report = collect_once(cfg)
     assert looked == [fstate.waiting]  # only what came since
     assert len(report.skipped) == 1 and report.appended == 1
-    assert [t.text for t in read_day_turns(cfg.day_jsonl(DAY))][-1] == "after the image"
+    assert [t.text for t in read_whole_day(cfg.day_jsonl(DAY))][-1] == "after the image"
 
 
 def test_a_file_that_shrinks_while_a_long_record_is_waited_for_is_read_again(
@@ -321,7 +321,7 @@ def test_a_file_that_shrinks_while_a_long_record_is_waited_for_is_read_again(
     transcript.write_bytes(first.encode() + _claude(2, "after the rewrite").encode())
     assert fstate.offset < transcript.stat().st_size < fstate.waiting
     collect_once(cfg)
-    assert [t.text for t in read_day_turns(cfg.day_jsonl(DAY))][-1] == "after the rewrite"
+    assert [t.text for t in read_whole_day(cfg.day_jsonl(DAY))][-1] == "after the rewrite"
     fstate = DaylogState.load(cfg.state_path).sources["claude"].files[str(transcript)]
     assert fstate.offset == transcript.stat().st_size and fstate.waiting == 0
     assert fstate.skipped == [] and fstate.parse_errors == 0
@@ -343,7 +343,7 @@ def test_skipping_a_long_record_reads_it_a_step_at_a_time(tmp_path: Path) -> Non
         tracemalloc.stop()
     assert len(report.skipped) == 1 and report.skipped[0].size > 40 * MIB
     assert peak < 12 * MIB, f"peak {peak / MIB:.1f} MiB"  # one read and one step, not 40 MiB
-    assert [t.text for t in read_day_turns(cfg.day_jsonl(DAY))] == ["after"]
+    assert [t.text for t in read_whole_day(cfg.day_jsonl(DAY))] == ["after"]
 
 
 # ------------------------------------------------------------ a stuck source is visible
