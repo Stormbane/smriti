@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -26,7 +27,7 @@ from smriti.core.files import write_atomic
 from smriti.core.oslock import BUSY, UNAVAILABLE, LockKey, lock_path, try_lock
 from smriti.daylog.config import DaylogConfig, load_config
 from smriti.daylog.digest import digest_day, digest_fingerprint
-from smriti.daylog.model import Turn, day_key, day_tz
+from smriti.daylog.model import day_key, day_tz
 from smriti.daylog.render import (
     head_field,
     input_hash,
@@ -53,11 +54,106 @@ def _target_day(now: datetime, root: Path | None = None) -> date:
     return (now.astimezone(day_tz(root)) - timedelta(days=1)).date()
 
 
-def _all_log_days(cfg: DaylogConfig) -> set[str]:
-    days: set[str] = set()
-    for path in cfg.log_dir.glob("[0-9]" * 4 + "/[0-9][0-9]/[0-9][0-9].jsonl"):
-        days.add(f"{path.parent.parent.name}-{path.parent.name}-{path.stem}")
-    return days
+_YEAR_RE = re.compile(r"[0-9]{4}")
+_MONTH_RE = re.compile(r"[0-9]{2}")
+_DAY_FILE_RE = re.compile(r"([0-9]{2})\.jsonl")
+
+
+def _subdirs(path: Path | str, name: re.Pattern[str]) -> list[os.DirEntry[str]]:
+    try:
+        with os.scandir(path) as entries:
+            return [e for e in entries if name.fullmatch(e.name) and e.is_dir()]
+    except OSError:
+        return []
+
+
+def _log_day_files(cfg: DaylogConfig) -> dict[str, tuple[int, int]]:
+    """Every day-file in the tree (``log/YYYY/MM/DD.jsonl``) by day: its size and mtime (ns).
+
+    From the directory listing, which is as current as a stat (a file's entry
+    is updated as it is written) and costs no open per file.
+    """
+    files: dict[str, tuple[int, int]] = {}
+    for year in _subdirs(cfg.log_dir, _YEAR_RE):
+        for month in _subdirs(year.path, _MONTH_RE):
+            try:
+                with os.scandir(month.path) as entries:
+                    for entry in entries:
+                        m = _DAY_FILE_RE.fullmatch(entry.name)
+                        if m and entry.is_file():
+                            st = entry.stat()
+                            files[f"{year.name}-{month.name}-{m.group(1)}"] = (
+                                st.st_size, st.st_mtime_ns)
+            except OSError:
+                continue
+    return files
+
+
+# The scan's marker: what each day-file held when the nightly last read it.
+_MARKER_FILE = "nightly-scan.json"
+# Bump when what an entry caches changes meaning (the input hash, what counts
+# as a corrupt line): a marker of another version is ignored, and the night
+# scans in full.
+_MARKER_VERSION = 1
+# A full scan at least this often, whatever the marker holds: the safety net
+# for a day-file changed in a way its size and mtime don't show.
+_FULL_SCAN_EVERY = timedelta(days=7)
+
+
+@dataclass(frozen=True)
+class _Checked:
+    """A day-file as the scan last read it.
+
+    Its size and mtime are from before the read, so a change during or
+    after the read makes the next night's differ, and it is read again.
+    """
+
+    size: int
+    mtime_ns: int
+    hash: str  # its turns' input hash; "" when it had none
+    corrupt: int  # its lines that aren't turns
+
+
+@dataclass
+class _Marker:
+    full_scan: date  # the target day of the last full scan
+    days: dict[str, _Checked]
+
+
+def _marker_path(cfg: DaylogConfig) -> Path:
+    return cfg.root / ".smriti" / _MARKER_FILE
+
+
+def _load_marker(path: Path) -> _Marker | None:
+    """The marker, or None when it is missing, unreadable or of another version."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if raw.get("version") != _MARKER_VERSION:
+            return None
+        days: dict[str, _Checked] = {}
+        for day, entry in raw["days"].items():
+            size, mtime_ns, digest, corrupt = entry
+            ints = (size, mtime_ns, corrupt)
+            if not (all(type(x) is int for x in ints) and isinstance(digest, str)):
+                return None
+            days[str(day)] = _Checked(size, mtime_ns, digest, corrupt)
+        return _Marker(date.fromisoformat(raw["full_scan"]), days)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return None
+
+
+def _save_marker(path: Path, marker: _Marker) -> None:
+    payload = {
+        "version": _MARKER_VERSION,
+        "full_scan": marker.full_scan.isoformat(),
+        "days": {day: [c.size, c.mtime_ns, c.hash, c.corrupt]
+                 for day, c in sorted(marker.days.items())},
+    }
+    try:
+        write_atomic(path, json.dumps(payload, separators=(",", ":")))
+    except OSError as exc:
+        # The night's scan stands; the next one finds the old marker or none.
+        log.warning("could not save the nightly's scan marker %s: %s", path, exc)
 
 
 @dataclass
@@ -66,29 +162,63 @@ class _Scan:
 
     stale: list[str] = field(default_factory=list)  # days to render and digest, oldest first
     corrupt: dict[str, int] = field(default_factory=dict)  # day -> its lines that aren't turns
+    days: int = 0  # day-files in the tree
+    read: int = 0  # day-files read tonight
+    full: bool = False  # every day-file read, the marker not trusted
 
 
 def _scan_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
                target: date) -> _Scan:
     """Days needing render/digest, and the day-files' lines that aren't turns.
 
-    Candidates: reconcile-changed dates (any age), persisted dirty-day
-    markers from daemon passes (a past day logd changed before this run
-    is repaired, not lost), the 7-day
-    window, and — because staleness is a cheap hash compare — every day
-    file in the tree, so no drift can ever survive a night unnoticed.
+    Every day-file in the tree is a candidate, as are the reconcile-changed
+    dates (any age), the persisted dirty-day markers from daemon passes (a
+    past day logd changed before this run is repaired, not lost) and the
+    7-day window. Each candidate's render and digest heads are compared with
+    its turns' input hash (and the digest's fingerprint) every night, so no
+    drift survives a night unnoticed.
+
+    The signalled days (changed, dirty, the window) are read every night.
+    Any other day-file is read only when its size or mtime differs from the
+    marker's (``.smriti/nightly-scan.json``), which records what each file
+    held when it was last read; otherwise the marker's hash and corrupt-line
+    count stand for it. A missing, unreadable or old-version marker, or one
+    whose last full scan is a week old, means every file is read, so the
+    result is the full scan's.
     """
-    candidates = {day_key(d) for d in changed} | set(dirty) | _all_log_days(cfg)
+    files = _log_day_files(cfg)
+    signalled = {day_key(d) for d in changed} | set(dirty)
     for back in range(_REPAIR_WINDOW_DAYS):
-        candidates.add(day_key(target - timedelta(days=back)))
+        signalled.add(day_key(target - timedelta(days=back)))
+    path = _marker_path(cfg)
+    marker = _load_marker(path)
+    full = marker is None or not (
+        timedelta(0) <= target - marker.full_scan < _FULL_SCAN_EVERY)
+    known = {} if marker is None or full else marker.days
     fingerprint = digest_fingerprint(cfg)
-    scan = _Scan()
-    for day in sorted(candidates):
-        read = read_day(cfg.day_jsonl(day))
-        if read.invalid:
-            scan.corrupt[day] = read.invalid
-        if read.turns and not _day_is_current(cfg, day, read.turns, fingerprint):
+    scan = _Scan(days=len(files), full=full)
+    checked: dict[str, _Checked] = {}
+    for day in sorted(signalled | set(files)):
+        stat = files.get(day)
+        entry = known.get(day)
+        if day in signalled or entry is None or stat != (entry.size, entry.mtime_ns):
+            read = read_day(cfg.day_jsonl(day))
+            scan.read += 1
+            current = input_hash(read.turns) if read.turns else ""
+            corrupt = read.invalid
+            # Recorded with the stat taken before this read (none: the file isn't listed).
+            entry = None if stat is None else _Checked(stat[0], stat[1], current, corrupt)
+        else:
+            current, corrupt = entry.hash, entry.corrupt
+        if entry is not None:
+            checked[day] = entry
+        if corrupt:
+            scan.corrupt[day] = corrupt
+        if current and not _day_is_current(cfg, day, current, fingerprint):
             scan.stale.append(day)
+    new = _Marker(target if full or marker is None else marker.full_scan, checked)
+    if marker is None or new != marker:
+        _save_marker(path, new)
     return scan
 
 
@@ -98,14 +228,15 @@ def _stale_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
     return _scan_days(cfg, changed, dirty, target).stale
 
 
-def _day_is_current(cfg: DaylogConfig, day: str, turns: list[Turn], fingerprint: str) -> bool:
-    """Whether *day*'s render and digest were made from *turns*, and the digest as now.
+def _day_is_current(cfg: DaylogConfig, day: str, current: str, fingerprint: str) -> bool:
+    """Whether *day*'s render and digest were made from the turns hashed *current*,
+    and the digest as now.
 
-    A digest's ``prompt_fp`` (H12.12) must be *fingerprint*, the digest
-    prompt's and config's now; a digest written before H12.12 records none,
-    and is judged by its input hash alone, so the upgrade redoes no day.
+    A digest's ``prompt_fp`` must be *fingerprint*, the digest prompt's and
+    config's now; a digest that records none was written before digests
+    carried one, and is judged by its input hash alone, so no day is redone
+    for lacking it.
     """
-    current = input_hash(turns)
     if read_input_hash(cfg.day_md(day)) != current:
         return False
     head = read_head(cfg.day_digest(day))
@@ -217,7 +348,9 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
                 digest_errors[day] = str(exc)[:300]
             del snapshot  # one day's turns in memory at a time
         rendered.sort()
-        render_step: dict[str, object] = {"ok": True, "days": rendered}
+        render_step: dict[str, object] = {
+            "ok": True, "days": rendered,
+            "scan": {"days": scan.days, "read": scan.read, "full": scan.full}}
         if scan.corrupt:
             # Lines the day's readers skip (render, digest): counted, so they're seen.
             render_step["corrupt_lines"] = scan.corrupt
@@ -328,7 +461,7 @@ def _clear_dirty(cfg: DaylogConfig, dirty: set[str], digest_errors: dict[str, st
                 if day in digest_errors:
                     continue
                 turns = read_day_turns(cfg.day_jsonl(day))
-                if turns and not _day_is_current(cfg, day, turns, fingerprint):
+                if turns and not _day_is_current(cfg, day, input_hash(turns), fingerprint):
                     continue  # changed underneath us — stays dirty
                 state.dirty_days.discard(day)
             state.save()

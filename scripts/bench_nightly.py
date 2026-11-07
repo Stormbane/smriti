@@ -20,7 +20,10 @@ What a round times, in that process:
   sources are the transcripts it names (read, never written); what is new
   in them since the copy's state goes into the copy's day-log.
 - ``stale days``: the scan for days to render and digest (every day-file's
-  hash against its render's and digest's).
+  hash against its render's and digest's), on the fresh copy.
+- ``stale days, again``: the same scan once more, as the next night runs it.
+  A side whose scan keeps a marker of the day-files it read (H13.8) reads
+  only the changed and recent ones; a side without one reads them all again.
 - ``render``: the three most recent days and the largest, as the nightly
   renders a day it digests (``render_snapshot`` where a side has it).
 - ``rollup scan``: the scan for closed weeks, months and years to roll up.
@@ -61,6 +64,7 @@ COPIED = ("log", ".smriti/daylog.json", "heartbeat/voice-transcripts")
 MEASURES = (
     ("reconcile_ms", "reconcile"),
     ("stale_days_ms", "stale days"),
+    ("stale_days_again_ms", "stale days, again"),
     ("render_ms", "render, 3 recent + largest"),
     ("rollup_scan_ms", "rollup scan"),
     ("backup_status_ms", "backup status"),
@@ -141,6 +145,10 @@ def child_time(root: Path) -> dict[str, Any]:
     stale = nightly._stale_days(cfg, report.changed_days, dirty, target)
     out["stale_days_ms"] = _ms(t0)
     out["stale"] = len(stale)
+    t0 = time.perf_counter()
+    again = nightly._stale_days(cfg, report.changed_days, dirty, target)
+    out["stale_days_again_ms"] = _ms(t0)
+    assert again == stale, "a second scan must find what the first found"
 
     days = _days(cfg)
     chosen = [d for d, _ in days[-3:]] + [max(days, key=lambda d: d[1])[0]]

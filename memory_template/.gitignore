@@ -20,6 +20,9 @@
 # The parked pipeline's task queue.
 .smriti/queue.json
 
+# The nightly's record of the day-files it has read (a full scan rebuilds it).
+.smriti/nightly-scan.json
+
 # Day-log daemon state and locks.
 log/.state.json
 log/*.lock
