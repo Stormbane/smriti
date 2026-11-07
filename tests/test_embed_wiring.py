@@ -296,10 +296,26 @@ def test_an_mcp_server_stays_small_and_never_loads_a_model(
 # ── The real model ───────────────────────────────────────────────────
 
 
+def _real_provider() -> str:
+    """The real model this run can load: the one the environment names, else the
+    first of the auto order whose packages are installed (CI's weekly job: onnx)."""
+    import importlib.util
+
+    named = os.environ.get("SMRITI_EMBED_PROVIDER", "").strip().lower()
+    if named and named != "stub":
+        return named
+    needs = {"onnx": ("onnxruntime", "tokenizers", "huggingface_hub"),
+             "local": ("sentence_transformers",)}
+    for key in embedding.AUTO_ORDER:
+        if all(importlib.util.find_spec(m) is not None for m in needs.get(key, ())):
+            return key
+    pytest.skip("no real embedding model's packages are installed")
+
+
 @pytest.mark.needs_model
 def test_with_the_real_model_vectors_match_and_a_warm_first_search_is_fast(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    pytest.importorskip("sentence_transformers")
+    provider = _real_provider()
     from smriti.store.search import search_with_status
 
     root = tree_root()
@@ -307,7 +323,7 @@ def test_with_the_real_model_vectors_match_and_a_warm_first_search_is_fast(
                        ("garden.md", "# Garden\n\nSam planted marigolds beside the well.\n"),
                        ("kitchen.md", "# Kitchen\n\nBread rises slowly in the cold.\n")):
         (root / name).write_text(text, encoding="utf-8")
-    monkeypatch.setenv("SMRITI_EMBED_PROVIDER", "local")  # the reference install's model
+    monkeypatch.setenv("SMRITI_EMBED_PROVIDER", provider)
     embedding.forget_provider()
     service_pid = 0
     try:
