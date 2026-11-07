@@ -33,7 +33,7 @@ from smriti.core.memwrite import write_memory
 from smriti.daylog.config import DEFAULT_AGENT_NAME, DEFAULT_USER_NAME, DaylogConfig
 from smriti.daylog.model import USER, Turn, day_tz
 from smriti.daylog.render import AUTONOMOUS_HEADING, DaySnapshot, input_hash, input_hash_of
-from smriti.daylog.writer import read_day_turns
+from smriti.daylog.writer import read_whole_day
 from smriti.llm import LLMError, LLMRequest, get_provider
 
 log = logging.getLogger(__name__)
@@ -446,7 +446,8 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]], 
     passes the *snapshot* it rendered the day from: the rendered text, the
     turns it was rendered from and their hash, all from one read. Without
     one, the digest summarises ``DD.md`` as it is and records the hash that
-    file carries.
+    file carries; a day-file that can't be read to its end then raises
+    :class:`~smriti.daylog.writer.DayUnreadable`.
 
     A failed call (any part, or the merge) raises, and no digest is written.
     """
@@ -456,7 +457,7 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]], 
         if "\r" in log_text:  # as read_text would give it back from DD.md
             log_text = log_text.replace("\r\n", "\n").replace("\r", "\n")
     else:
-        turns = read_day_turns(cfg.day_jsonl(day))
+        turns = read_whole_day(cfg.day_jsonl(day))
         if not turns:
             return None
         try:

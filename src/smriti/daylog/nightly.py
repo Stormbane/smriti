@@ -40,7 +40,7 @@ from smriti.daylog.render import (
 )
 from smriti.daylog.rollup import build_rollup, enumerate_stale_periods
 from smriti.daylog.state import DaylogState
-from smriti.daylog.writer import read_day, read_day_turns
+from smriti.daylog.writer import DayUnreadable, read_day
 
 log = logging.getLogger(__name__)
 
@@ -193,7 +193,8 @@ def _scan_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
     count stand for it. A missing, unreadable or old-version marker, or one
     whose last full scan is a week old, means every file is read, so the
     result is the full scan's. A read that fails isn't recorded, so the next
-    night reads that file again; the scan names it (``unreadable``).
+    night reads that file again; the scan names it (``unreadable``), and
+    doesn't judge it stale from the turns read before the failure.
     """
     files = _log_day_files(cfg)
     signalled = {day_key(d) for d in changed} | set(dirty)
@@ -219,6 +220,9 @@ def _scan_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
                 log.warning("nightly: could not read %s; it is read again next night",
                             cfg.day_jsonl(day))
                 scan.unreadable.append(day)
+                # A prefix's hash says nothing about the day: it isn't judged
+                # tonight, so its render and digest stay as they are.
+                current = ""
             # Recorded with the stat taken before this read; not recorded when the
             # file isn't listed, or the read failed (its stat would stand for turns
             # never read).
@@ -362,13 +366,27 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
         # few nights instead of burning the seat in one.
         digest_days = sorted(stale, reverse=True)[:digest_cap]
         to_digest = set(digest_days)
+        # A day-file that can't be read to its end publishes nothing: its
+        # render and digest stay as they were, and the next night tries again.
+        unreadable = list(scan.unreadable)
         for day in stale:
-            if day not in to_digest and render_day(cfg, day) is not None:
-                rendered.append(day)
+            if day in to_digest:
+                continue
+            try:
+                if render_day(cfg, day) is not None:
+                    rendered.append(day)
+            except DayUnreadable as exc:
+                log.warning("nightly: %s; its render is left as it was", exc)
+                unreadable.append(day)
         # A digested day is rendered and digested from one read of its turns,
         # so its digest hashes exactly what it summarised.
         for day in digest_days:
-            snapshot = render_snapshot(cfg, day)
+            try:
+                snapshot = render_snapshot(cfg, day)
+            except DayUnreadable as exc:
+                log.warning("nightly: %s; its render and digest are left as they were", exc)
+                unreadable.append(day)
+                continue
             if snapshot is None:
                 continue
             rendered.append(day)
@@ -386,16 +404,17 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
         if scan.corrupt:
             # Lines the day's readers skip (render, digest): counted, so they're seen.
             render_step["corrupt_lines"] = scan.corrupt
-        if scan.unreadable:
-            # Day-files the scan couldn't read tonight; the next night reads them again.
-            render_step["unreadable"] = scan.unreadable
+        if unreadable:
+            # Day-files that couldn't be read tonight, by the scan or the render;
+            # nothing was published from them, and the next night reads them again.
+            render_step["unreadable"] = sorted(set(unreadable))
         steps["render"] = render_step
         # A failed digest is a failed night: the wake briefing must say
         # so, and the CLI must exit nonzero.
         steps["digest"] = {"ok": not digest_errors, "days": digested,
                            "errors": digest_errors,
                            "deferred": max(0, len(stale) - len(digest_days))}
-        _clear_dirty(cfg, dirty, digest_errors)
+        _clear_dirty(cfg, dirty, {*digest_errors, *unreadable})
     except Exception as exc:  # noqa: BLE001 — recorded in the status; the night goes on
         steps["render"] = {"ok": False, "error": str(exc)[:300]}
 
@@ -474,13 +493,14 @@ def _index_with_retries(cfg: DaylogConfig) -> dict[str, object]:
             "attempts": len(_INDEX_RETRY_DELAYS_S)}
 
 
-def _clear_dirty(cfg: DaylogConfig, dirty: set[str], digest_errors: dict[str, str]) -> None:
-    """Drop repaired dirty-day markers; keep the ones whose digest failed.
+def _clear_dirty(cfg: DaylogConfig, dirty: set[str], failed: set[str]) -> None:
+    """Drop repaired dirty-day markers; keep those of *failed* days (a failed
+    digest, a day-file that couldn't be read).
 
     A marker is cleared only when, under the writer lock, the day's
-    CURRENT input hash still matches both derived artifacts — so a turn
-    logd appended mid-digest renews the marker instead of being silently
-    swallowed for a cycle.
+    CURRENT input hash, from a read to the file's end, still matches both
+    derived artifacts — so a turn logd appended mid-digest renews the marker
+    instead of being silently swallowed for a cycle.
     """
     if not dirty:
         return
@@ -491,9 +511,12 @@ def _clear_dirty(cfg: DaylogConfig, dirty: set[str], digest_errors: dict[str, st
         with writer_lock(cfg.lock_path, timeout_s=30.0):
             state = DaylogState.load(cfg.state_path)
             for day in dirty:
-                if day in digest_errors:
+                if day in failed:
                     continue
-                turns = read_day_turns(cfg.day_jsonl(day))
+                read = read_day(cfg.day_jsonl(day))
+                if not read.complete:
+                    continue  # not read to its end — stays dirty
+                turns = read.turns
                 if turns and not _day_is_current(cfg, day, input_hash(turns), fingerprint):
                     continue  # changed underneath us — stays dirty
                 state.dirty_days.discard(day)

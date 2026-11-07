@@ -27,7 +27,7 @@ from pathlib import Path
 from smriti.core.memwrite import write_memory
 from smriti.daylog.config import DaylogConfig
 from smriti.daylog.model import USER, Turn, day_tz
-from smriti.daylog.writer import read_day_turns
+from smriti.daylog.writer import read_whole_day
 
 _HASH_RE = re.compile(r"^input_hash:\s*(\S+)\s*$", re.MULTILINE)
 
@@ -145,9 +145,11 @@ def render_text(cfg: DaylogConfig, day: str, turns: list[Turn], digest: str) -> 
 def render_snapshot(cfg: DaylogConfig, day: str) -> DaySnapshot | None:
     """Read *day*'s turns once, write ``DD.md`` from them, and return that read.
 
-    None if the day has no turns.
+    None if the day has no turns. A read that fails partway raises
+    :class:`~smriti.daylog.writer.DayUnreadable` and writes nothing, so the
+    render already there stays.
     """
-    turns = read_day_turns(cfg.day_jsonl(day))
+    turns = read_whole_day(cfg.day_jsonl(day))
     if not turns:
         return None
     digest = input_hash(turns)
@@ -159,6 +161,9 @@ def render_snapshot(cfg: DaylogConfig, day: str) -> DaySnapshot | None:
 
 
 def render_day(cfg: DaylogConfig, day: str) -> Path | None:
-    """Write ``DD.md`` for *day* (YYYY-MM-DD). Returns None if no turns."""
+    """Write ``DD.md`` for *day* (YYYY-MM-DD). Returns None if no turns.
+
+    As :func:`render_snapshot`, a day-file that can't be read to its end raises.
+    """
     snapshot = render_snapshot(cfg, day)
     return snapshot.path if snapshot is not None else None

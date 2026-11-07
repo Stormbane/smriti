@@ -255,8 +255,13 @@ wake shows as `NIGHTLY SKIPPED for <day>: <reason>`, and exits 1. Target date: t
    and, when there are any, each day's lines that aren't turns
    (`corrupt_lines`), which the readers skip. A day-file that can't be read
    (an OSError other than a missing file) isn't recorded in the marker, so the
-   next night reads it again; the render step names it (`unreadable`).
-3. **Render** `DD.md` from the sorted JSONL. A day that is digested tonight is
+   next night reads it again; the render step names it (`unreadable`), and the
+   wake's while-you-slept line says it couldn't be read.
+3. **Render** `DD.md` from the sorted JSONL. Only from a read to the file's
+   end (H14.3): a day-file that can't be read whole, at the scan or at the
+   render, publishes nothing, so its render and digest stay as they were (a
+   prefix would have replaced the day with part of it); it is named in
+   `unreadable`, keeps its dirty marker, and is read again the next night. A day that is digested tonight is
    rendered from one read of its turns, and the digest gets that rendered
    text, those turns and their hash (H12.11): a turn appended after the read
    leaves both stale for the next night, never a digest that claims a turn its

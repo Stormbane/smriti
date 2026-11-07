@@ -152,10 +152,30 @@ def read_day(path: Path) -> DayTurns:
     return DayTurns(sorted(turns.values(), key=lambda t: (t.ts, t.id)), invalid, complete)
 
 
+class DayUnreadable(OSError):
+    """A day-file couldn't be read to its end, so what was read is only a prefix."""
+
+
+def read_whole_day(path: Path) -> list[Turn]:
+    """A day-file's turns, read to its end, or :class:`DayUnreadable`.
+
+    For a caller that publishes what it read (the render, the digest): a
+    prefix published as the day would replace a whole artefact with part of
+    one. A missing file has no turns, which is a whole answer.
+    """
+    read = read_day(path)
+    if not read.complete:
+        raise DayUnreadable(f"{path} could not be read to its end")
+    return read.turns
+
+
 def read_day_turns(path: Path) -> list[Turn]:
     """Read a day-file's turns, deduped by id, sorted by event time.
 
     Lines that aren't turns are skipped; :func:`read_day` also counts them.
+    A read that fails partway returns the turns before the failure, so this
+    is for a caller that only looks (who was last seen); one that publishes
+    takes :func:`read_whole_day`.
     """
     return read_day(path).turns
 

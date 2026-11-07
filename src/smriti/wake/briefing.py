@@ -357,6 +357,7 @@ def _handoff_block(memory_root: Path) -> _Block | None:
 
 
 NIGHTLY_REASON_CAP = 300  # a skipped run's reason, in the while-you-slept line
+NIGHTLY_UNREADABLE_SHOWN = 5  # day-files the night couldn't read, named in that line
 
 
 def _nightly_line(memory_root: Path) -> str:
@@ -375,10 +376,14 @@ def _nightly_line(memory_root: Path) -> str:
         return ""
     steps = status.get("steps", {}) if isinstance(status, dict) else {}
     digest_days: list[str] = []
+    unreadable: list[object] = []
     if isinstance(steps, dict):
         digest = steps.get("digest")
         if isinstance(digest, dict):
             digest_days = digest.get("days") or []
+        render = steps.get("render")
+        if isinstance(render, dict) and isinstance(render.get("unreadable"), list):
+            unreadable = render["unreadable"]
     ok = bool(status.get("ok")) if isinstance(status, dict) else False
     target = status.get("target_day", "?") if isinstance(status, dict) else "?"
     reason = status.get("reason") if isinstance(status, dict) else None
@@ -389,6 +394,12 @@ def _nightly_line(memory_root: Path) -> str:
         summary = f"nightly ok for {target}"
         if digest_days:
             summary += f" (digested: {', '.join(digest_days)} — see log/ for digests)"
+        if unreadable:
+            # Their render and digest weren't brought up to date: not silently stale.
+            shown = ", ".join(map(str, unreadable[:NIGHTLY_UNREADABLE_SHOWN]))
+            more = len(unreadable) - NIGHTLY_UNREADABLE_SHOWN
+            shown += f" and {more} more" if more > 0 else ""
+            summary += f"; could not read the day-log of {shown}, read again next night"
     else:
         failed = [
             name for name, step in steps.items()
