@@ -152,7 +152,7 @@ def read_discovery(paths: ServicePaths) -> Discovery | None:
             if wait is None:
                 return None
             time.sleep(wait)
-        except OSError:
+        except (OSError, UnicodeDecodeError):  # gone, or not a record: no service, at once
             return None
     try:
         data = json.loads(text)

@@ -69,6 +69,15 @@ def test_refusals_are_waited_out_for_about_50_ms_then_read_as_none(
     assert len(refused) == 5 and 0.04 <= time.monotonic() - t0 < 1.0
 
 
+def test_a_record_that_isnt_utf8_is_no_service_at_once(paths: Any) -> None:
+    # Malformed, as it was before the retry: a client then recovers as from no
+    # record (Codex review), instead of the read raising.
+    paths.discovery.write_bytes(b'{"pid": 1, "state": "ready' + bytes([0xFF, 0xFE]) + b'"}')
+    t0 = time.monotonic()
+    assert read_discovery(paths) is None
+    assert time.monotonic() - t0 < 0.04
+
+
 def test_a_missing_file_is_no_service_at_once(paths: Any) -> None:
     paths.discovery.unlink()
     t0 = time.monotonic()
