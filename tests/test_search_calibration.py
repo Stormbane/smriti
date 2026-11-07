@@ -55,13 +55,19 @@ def _vector(*values: float) -> bytes:
     return struct.pack(f"<{len(values)}f", *values)
 
 
-@pytest.fixture()
-def vec_conn() -> IndexDB:
+CLOSE, FAR = _vector(1.0, 0.0), _vector(0.0, 1.0)
+
+
+def _index(vectors: dict[int, bytes]) -> IndexDB:
+    """An index holding just these stored vectors."""
     import sqlite_vec
 
     conn = sqlite3.connect(":memory:")
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
+    conn.execute("CREATE VIRTUAL TABLE chunks_vec USING vec0(embedding float[2])")
+    for rowid, vector in vectors.items():
+        conn.execute("INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)", (rowid, vector))
     return IndexDB(conn=conn, has_vec=True, has_fts=False)
 
 
@@ -75,48 +81,54 @@ OTHER = _chunk("notes/class.md", "2026-05-10: the class")
 NEW = _chunk("projects/kite/2026/05-13.md")
 NEWEST = _chunk("projects/kite/2026/05-20.md")
 UNDATED = _chunk("notes/supplies.md")
-CLOSE, FAR = _vector(1.0, 0.0), _vector(0.0, 1.0)
 
 
-def _reorder(conn: IndexDB, ranked: list[search_mod._Ranked],
-             vectors: dict[int, bytes]) -> list[tuple[str, float]]:
-    out = search_mod._newer_versions_first(conn, ranked, vectors, same_note=0.75, depth=3)
+def _reorder(ranked: list[search_mod._Ranked], vectors: dict[int, bytes],
+             hits: set[int] | None = None) -> list[tuple[str, float]]:
+    conn = _index(vectors)
+    try:
+        out = search_mod._newer_versions_first(
+            conn, ranked, set(vectors) if hits is None else hits, same_note=0.75)
+    finally:
+        conn.close()
     return [(cand["source"], score) for _, score, cand in out]
 
 
 @needs_vec
-def test_a_later_version_takes_the_earlier_ones_place_and_score(vec_conn: IndexDB) -> None:
+def test_a_later_version_takes_the_earlier_ones_place_and_score() -> None:
     ranked = [(1, 0.9, OLD), (2, 0.7, OTHER), (3, 0.6, NEW)]
     vectors = {1: CLOSE, 2: FAR, 3: _vector(0.95, 0.1)}
-    assert _reorder(vec_conn, ranked, vectors) == [
+    assert _reorder(ranked, vectors) == [
         (NEW["source"], 0.9), (OTHER["source"], 0.7), (OLD["source"], 0.6)]
 
 
 @needs_vec
-def test_the_newest_of_several_versions_comes_first(vec_conn: IndexDB) -> None:
+def test_the_newest_of_several_versions_comes_first() -> None:
     ranked = [(1, 0.9, OLD), (3, 0.8, NEW), (4, 0.7, NEWEST)]
     vectors = {1: CLOSE, 3: CLOSE, 4: CLOSE}
-    assert [s for s, _ in _reorder(vec_conn, ranked, vectors)] == [
+    assert [s for s, _ in _reorder(ranked, vectors)] == [
         NEWEST["source"], NEW["source"], OLD["source"]]
 
 
 @needs_vec
-@pytest.mark.parametrize(("ranked", "vectors"), [
+@pytest.mark.parametrize(("ranked", "vectors", "hits"), [
     # Not versions of one note: not similar enough.
-    ([(1, 0.9, OLD), (3, 0.8, NEW)], {1: CLOSE, 3: _vector(0.6, 0.8)}),
+    ([(1, 0.9, OLD), (3, 0.8, NEW)], {1: CLOSE, 3: _vector(0.6, 0.8)}, None),
     # A clearly worse match: under half the place's score.
-    ([(1, 0.9, OLD), (3, 0.4, NEW)], {1: CLOSE, 3: CLOSE}),
+    ([(1, 0.9, OLD), (3, 0.4, NEW)], {1: CLOSE, 3: CLOSE}, None),
     # Already in order, or not dated.
-    ([(3, 0.9, NEW), (1, 0.8, OLD)], {1: CLOSE, 3: CLOSE}),
-    ([(5, 0.9, UNDATED), (3, 0.8, NEW)], {5: CLOSE, 3: CLOSE}),
-    ([(1, 0.9, OLD), (5, 0.8, UNDATED)], {1: CLOSE, 5: CLOSE}),
-    # No stored vector (a chunk only the keyword leg found).
-    ([(1, 0.9, OLD), (3, 0.8, NEW)], {1: CLOSE}),
-], ids=["dissimilar", "worse-match", "in-order", "undated-place", "undated-later", "no-vector"])
-def test_nothing_else_moves(vec_conn: IndexDB, ranked: list[search_mod._Ranked],
-                            vectors: dict[int, bytes]) -> None:
+    ([(3, 0.9, NEW), (1, 0.8, OLD)], {1: CLOSE, 3: CLOSE}, None),
+    ([(5, 0.9, UNDATED), (3, 0.8, NEW)], {5: CLOSE, 3: CLOSE}, None),
+    ([(1, 0.9, OLD), (5, 0.8, UNDATED)], {1: CLOSE, 5: CLOSE}, None),
+    # Not a vector hit (a chunk only the keyword leg found), or no stored vector.
+    ([(1, 0.9, OLD), (3, 0.8, NEW)], {1: CLOSE, 3: CLOSE}, {1}),
+    ([(1, 0.9, OLD), (3, 0.8, NEW)], {1: CLOSE}, {1, 3}),
+], ids=["dissimilar", "worse-match", "in-order", "undated-place", "undated-later",
+        "keyword-hit", "no-vector"])
+def test_nothing_else_moves(ranked: list[search_mod._Ranked], vectors: dict[int, bytes],
+                            hits: set[int] | None) -> None:
     before = [(cand["source"], score) for _, score, cand in ranked]
-    assert _reorder(vec_conn, ranked, vectors) == before
+    assert _reorder(ranked, vectors, hits) == before
 
 
 # ── Through search ───────────────────────────────────────────────────
