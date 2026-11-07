@@ -384,16 +384,23 @@ class _Raises:
         raise self.exc
 
 
-def _sdk_errors(sdk):
-    import httpx
+def _sdk_error(cls: type[BaseException], message: str) -> BaseException:
+    """An instance of the SDK's own error class, made without its constructor.
 
-    request = httpx.Request("POST", "https://api.example.invalid/v1")
+    The providers read only the class and the message. The constructors take
+    the SDK's HTTP types, which change between releases (anthropic 2.x installs
+    no httpx), so the test doesn't build them.
+    """
+    exc = cls.__new__(cls)
+    Exception.__init__(exc, message)
+    return exc
+
+
+def _sdk_errors(sdk):
     return {
-        "connection": sdk.APIConnectionError(request=request),
-        "status": sdk.InternalServerError(
-            "server error", response=httpx.Response(500, request=request), body=None),
-        "rate limit": sdk.RateLimitError(
-            "rate limited", response=httpx.Response(429, request=request), body=None),
+        "connection": _sdk_error(sdk.APIConnectionError, "Connection error."),
+        "status": _sdk_error(sdk.InternalServerError, "server error"),
+        "rate limit": _sdk_error(sdk.RateLimitError, "rate limited"),
     }
 
 
