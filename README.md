@@ -160,7 +160,7 @@ Then start a new Claude Code session. The briefing appears in the opening contex
 
 Notes:
 - **The wheel carries what the installer copies** (the memory template and the three scripts), so no checkout is needed. An editable install copies the checkout's own files, and the installer upgrades a deployed script when the checkout's changes. `smriti --version` prints the version.
-- **The root is `SMRITI_ROOT`, default `~/.smriti`.** An existing `~/.narada` (the default before 0.2) is used instead when no variable is set, even if a `~/.smriti` appears beside it; `smriti status` shows which root is in use and why, and warns when both exist. If you use another root, pass `--memory-root` to the installer and also set `SMRITI_ROOT` in your user environment. The wake hook carries the root, and so does the MCP server's registration in Codex's config; the CLI, and the server as Claude Code registers it, read only the environment.
+- **The root is `SMRITI_ROOT`, default `~/.smriti`.** An existing `~/.narada` (the default before 0.2) is used instead when no variable is set, even if a `~/.smriti` appears beside it; `smriti status` shows which root is in use and why, and warns when both exist. If you use another root, pass `--memory-root` to the installer and also set `SMRITI_ROOT` in your user environment. The wake hook carries the root, and so does the MCP server's registration (in `~/.claude.json` and Codex's config, written by the installer); the CLI reads only the environment.
 - **An existing `~/.claude/CLAUDE.md` without smriti's markers** makes the installer stop before changing anything. Run it once with `--migrate-agent-doc` to convert the file; a `.pre-migrate.bak` copy is kept.
 - **The installer also wires the PostToolUse ambient-recall hook.** It is being retired (see Status and limits); remove the `associative_recall.py` entry from `~/.claude/settings.json` if you don't want it.
 - **The qmd recall daemon.** The installer tries to start it unless `--skip-recall-daemon` is given, and prints a hint when qmd isn't installed. You don't need qmd.
@@ -189,7 +189,7 @@ The embedding service reads three environment variables: `SMRITI_EMBED_SERVICE=0
 - **CLI:** 15 `smriti` subcommands: `backup`, `doctor`, `embed`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `recall`, `status`, `tasks`, `witness`, `write`. Nested: `embed` has `serve`, `status`, `stop`; `recall` has `query`, `status`, `stats`, `index`, `daemon`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 1030 test functions in 90 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 1033 test functions in 90 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 **CLI.** `smriti --help` lists the commands; each takes `--help`.

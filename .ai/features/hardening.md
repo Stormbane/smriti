@@ -765,15 +765,20 @@ a recheck.
   `tree_root()`: unchanged. The installer's registration: `mcp_spec.mcp_registration(root)`
   puts `SMRITI_ROOT` (absolute, not resolved) in the entry's `env`, and
   `mcp_registration_matches(entry, root)` asks for it, so a rerun updates an
-  entry without it; the Codex installer uses both and keeps the entry's other
-  variables and annotations. **Not done here:** the Claude Code installer
-  (`integrations/claude_code/install.py`, the H13.5 stream's file) still
-  registers without the root: its `register_mcp_server` needs `memory_root`
-  and these two calls. The reference install (no SMRITI_ROOT, `~/.narada`)
+  entry without it; `mcp_spec.registered` writes the entry, keeping its
+  other keys and variables. The Codex installer uses them, and, after H13.5
+  merged, the Claude Code one too: `register_mcp_server(memory_root)`, inside
+  H13.5's locked, atomic, backed-up edit of `~/.claude.json`. (H13.5's test
+  of a write during the edit stands in for `mcp_registration_matches`; its
+  stand-in now takes the root and passes it on.) The reference install (no SMRITI_ROOT, `~/.narada`)
   registers `C:\Users\<user>\.narada`, which resolves to the root it uses now.
   Tests: two roots, each holding only its own sources, purge included; a run
   on B leaves A's index and metrics alone; `index_file` on B asks B's service;
-  `smriti index --root`; the provider per index; the registration.
+  `smriti index --root`; the provider per index; the registration, in
+  Codex's config and in `~/.claude.json` with a temporary home (written with
+  the root, a rerun a no-op with no new backup, an older entry or another
+  root's brought up to date with one backup, the install registering the root
+  it installs).
 - **H13.2 implemented** (same branch). The query is embedded first; then the
   pending count, the identity check, the vector hits, the keyword hits and
   every chunk's text are read in one read transaction (`_snapshot`), each
@@ -876,9 +881,11 @@ a recheck.
   candidate, before the reranker's input is chosen; the reranker returns all
   it scored, scaled the same way; the cut to `top_k` comes last, then the
   later-version step. Tests for both paths and the reranker's window fail
-  at `dcbb344`; the quality set and the bench queries' top 5 are unchanged.
+  at `dcbb344` (`5d40276` after the rebase); the quality set and the bench
+  queries' top 5 are unchanged.
 - **Benchmark** (h13a; `scripts/bench.py`, 2026-11-07, the reference tree's
-  copy, 10 queries, two alternating rounds; A master `af9321e`, B `8586aef`):
+  copy, 10 queries, two alternating rounds; A master `af9321e`, B `8586aef`,
+  `f5ec96c` after the rebase onto `8838e98`):
 
   | Measure | A: af9321e | B: 8586aef | B/A |
   |---|---|---|---|
@@ -897,13 +904,14 @@ a recheck.
   The warm read was higher in both of B's rounds (166 and 167 ms against 164
   and 159), so search alone was timed on a copy of the same index, the query
   vectors precomputed: 157 against 146 ms. Asking the KNN for each hit's
-  stored vector cost 10 ms; `10fd243` reads one only where a pair needs it.
+  stored vector cost 10 ms; `10fd243` (`9240d97`) reads one only where a pair needs it.
   After it, alternating, six runs a side with the machine busy: 147-166 ms
   (mean 154) against master's 147-166 (mean 157). The wake briefings are
   identical (9,495 characters), 13 tools on both sides. Top 5: at `8586aef`
   two queries differed ("morning message persona" 4 of 5 shared, "Beautiful
   Tree project" 3 of 5), by later versions taken from below the top 5; at
-  `10fd243`, which reorders only the results it returns, one does, computed
+  `10fd243`, which reorders only the results it returns, one does (and at the
+  branch's head too), computed
   on the same index copy: "Beautiful Tree project", places 2 and 5 swapped (a
   2026-09-19 note restating the 2026-07-18 one, 0.765 similar under MiniLM,
   the reference index's model), the place scores unchanged. No bench query
