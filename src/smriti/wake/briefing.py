@@ -23,7 +23,8 @@ project files, the journal, and a profile's sections that say so) can hold
 anything the agent once wrote down, a hostile page's text included, and it
 comes back in every session. Each such section is printed between
 ``<memory-ID>`` and ``</memory-ID>`` tags, where ID is a hash of the
-section's text, so nothing inside can close them; a line under the header
+section's text that appears nowhere in it (:func:`_frame`), so nothing
+inside can close them; a line under the header
 says that the tags quote data to read for context, not instructions. The
 identity summary isn't tagged: it is the agent's description of itself,
 changed only by a deliberate edit, and it is meant to shape how the agent
@@ -79,11 +80,26 @@ _TAG_HEX = 6
 FRAME_COST = len(f"<memory-{'0' * _TAG_HEX}>\n</memory-{'0' * _TAG_HEX}>\n") + 1
 
 
+def _frame_id(text: str, attempt: int) -> str:
+    data = text if attempt == 0 else f"{attempt}\n{text}"
+    return "memory-" + hashlib.sha1(data.encode("utf-8")).hexdigest()[:_TAG_HEX]
+
+
 def _frame(text: str) -> str:
-    """*text* between memory tags named for its hash, which nothing inside it can close."""
+    """*text* between memory tags whose id appears nowhere in it, so nothing inside can close them.
+
+    The id is a hash of the text. A hash alone isn't enough: six hex digits
+    are a 24-bit search, and a text can be made to hash to the tag it plants.
+    So an id the text holds anywhere (opening, closing or bare) is passed
+    over for the next, the text hashed with a counter.
+    """
     if not text.endswith("\n"):
         text += "\n"
-    tag = "memory-" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:_TAG_HEX]
+    attempt = 0
+    tag = _frame_id(text, attempt)
+    while tag in text:
+        attempt += 1
+        tag = _frame_id(text, attempt)
     return f"<{tag}>\n{text}</{tag}>\n"
 
 
