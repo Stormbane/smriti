@@ -122,13 +122,13 @@ def _harness_writes_during_the_edit(monkeypatch: pytest.MonkeyPatch, config: Pat
     real = cc_install.mcp_registration_matches
     calls: list[int] = []
 
-    def matches(entry: object) -> bool:
+    def matches(entry: object, memory_root: Path | None = None) -> bool:
         calls.append(1)
         if len(calls) <= times:
             data = _json(config)
             data[f"written_by_claude_code_{len(calls)}"] = True
             config.write_text(json.dumps(data), encoding="utf-8")
-        return real(entry)
+        return real(entry, memory_root)
 
     monkeypatch.setattr(cc_install, "mcp_registration_matches", matches)
     return calls

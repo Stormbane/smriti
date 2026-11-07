@@ -36,7 +36,6 @@ from smriti.integrations.common import (
     DEFICIENT,
     EQUIVALENT,
     SHARED_HOOKS_DIR,
-    SMRITI_MCP_COMMAND,
     ManagedDocError,
     classify_doc,
     classify_wake_hook,
@@ -49,6 +48,7 @@ from smriti.integrations.common import (
 )
 from smriti.integrations.common.config_file import edit_config
 from smriti.integrations.common.managed_doc import DocState
+from smriti.integrations.common.mcp_spec import registered
 
 HOOKS_SRC = Path(__file__).resolve().parent / "hooks"
 
@@ -125,10 +125,15 @@ def _edit_json(path: Path, tag: str,
     return True
 
 
-def register_mcp_server(home: Path | None = None) -> bool:
+def register_mcp_server(memory_root: Path | None = None, *,
+                        home: Path | None = None) -> bool:
     """Add the smriti MCP server to ``~/.claude.json`` at user scope.
 
-    False when the change couldn't be saved (Claude Code kept rewriting the file).
+    With ``memory_root``, the entry carries it (``env.SMRITI_ROOT``), so the
+    server uses that root whatever environment Claude Code starts it in; an
+    entry without it, or naming another root, is brought up to date, its
+    other keys and variables kept. False when the change couldn't be saved
+    (Claude Code kept rewriting the file).
     """
     config = claude_config_path(home)
     if not config.exists():
@@ -137,10 +142,10 @@ def register_mcp_server(home: Path | None = None) -> bool:
 
     def register(data: dict[str, Any], notes: list[str]) -> bool:
         servers = data.setdefault("mcpServers", {})
-        if mcp_registration_matches(servers.get("smriti")):
+        if mcp_registration_matches(servers.get("smriti"), memory_root):
             notes.append("smriti server already registered")
             return False
-        servers["smriti"] = dict(SMRITI_MCP_COMMAND)
+        servers["smriti"] = registered(servers.get("smriti"), memory_root)
         notes.append("registered smriti server")
         return True
 
@@ -388,7 +393,7 @@ def run_claude_code(
     install_hook_scripts(home)
     saved = True
     if not skip_mcp:
-        saved = register_mcp_server(home) and saved
+        saved = register_mcp_server(memory_root, home=home) and saved
     if not skip_settings:
         saved = patch_settings_json(memory_root, home) and saved
     write_claude_md(memory_root, home)

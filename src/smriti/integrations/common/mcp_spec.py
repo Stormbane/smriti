@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 
 class MCPCommand(TypedDict):
@@ -65,6 +65,23 @@ def mcp_registration(memory_root: Path | None = None) -> MCPRegistration:
     return entry
 
 
+def registered(existing: object, memory_root: Path | None = None) -> dict[str, Any]:
+    """The registry entry to write over *existing*: :func:`mcp_registration`'s command,
+    args and root, with *existing*'s other keys (a harness's annotations, such as
+    Codex's ``tools.*`` approval modes) and other variables kept."""
+    desired = mcp_registration(memory_root)
+    if not isinstance(existing, dict):
+        return dict(desired)
+    entry = dict(existing)
+    env = entry.get("env")
+    variables = dict(env) if isinstance(env, dict) else {}
+    variables.update(desired.get("env", {}))
+    entry.update(desired)
+    if variables:
+        entry["env"] = variables
+    return entry
+
+
 def _root_key(path: Path) -> str:
     return os.path.normcase(str(path.expanduser().resolve()))
 
@@ -94,4 +111,4 @@ def mcp_registration_matches(actual: object, memory_root: Path | None = None) ->
 
 
 __all__ = ["ROOT_VARIABLE", "SMRITI_MCP_COMMAND", "MCPRegistration", "mcp_registration",
-           "mcp_registration_matches"]
+           "mcp_registration_matches", "registered"]

@@ -90,6 +90,66 @@ class TestRegisterMCPServer:
         assert cfg.read_text(encoding="utf-8") == "{not valid json"
 
 
+    def test_the_registration_carries_the_memory_root(self, fake_home, capsys):
+        """H13.1: Claude Code starts the server in its own environment, where
+        SMRITI_ROOT may be unset or another root's: the entry names the root
+        installed, and a rerun leaves it, with no backup."""
+        cfg = fake_home / ".claude.json"
+        cfg.write_text(json.dumps({"some_other_key": "preserved"}), encoding="utf-8")
+        memory_root = fake_home / ".narada"
+
+        assert cc_install.register_mcp_server(memory_root) is True
+
+        data = json.loads(cfg.read_text(encoding="utf-8"))
+        assert data["some_other_key"] == "preserved"
+        assert data["mcpServers"]["smriti"] == {
+            "command": sys.executable,
+            "args": ["-m", "smriti.mcp_server"],
+            "env": {"SMRITI_ROOT": str(memory_root)},
+        }
+        [first] = backups(cfg)
+        capsys.readouterr()
+
+        assert cc_install.register_mcp_server(memory_root) is True
+        assert "already registered" in capsys.readouterr().out
+        assert backups(cfg) == [first]
+
+    def test_an_entry_from_before_gets_the_root_and_keeps_the_rest(self, fake_home):
+        """An entry without the root (every install before H13.1), or naming
+        another, is brought up to date under the lock, atomically, with a
+        backup of the file as it was; its other keys and variables stay."""
+        cfg = fake_home / ".claude.json"
+        before = {"mcpServers": {
+            "smriti": {"type": "stdio", "command": sys.executable,
+                       "args": ["-m", "smriti.mcp_server"],
+                       "env": {"SMRITI_LOG_QUERIES": "1",
+                               "SMRITI_ROOT": str(fake_home / "elsewhere")}},
+            "other_server": {"command": "node"}}}
+        cfg.write_text(json.dumps(before), encoding="utf-8")
+        memory_root = fake_home / ".narada"
+
+        assert cc_install.register_mcp_server(memory_root) is True
+
+        servers = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]
+        assert servers["smriti"] == {
+            "type": "stdio", "command": sys.executable, "args": ["-m", "smriti.mcp_server"],
+            "env": {"SMRITI_LOG_QUERIES": "1", "SMRITI_ROOT": str(memory_root)}}
+        assert servers["other_server"] == {"command": "node"}
+        [backup] = backups(cfg)
+        assert json.loads(backup.read_text(encoding="utf-8")) == before
+
+    def test_the_install_registers_the_root_it_installs(self, fake_home):
+        cfg = fake_home / ".claude.json"
+        cfg.write_text("{}", encoding="utf-8")
+        memory_root = fake_home / ".narada"
+        memory_root.mkdir()
+
+        assert cc_install.run_claude_code(memory_root, skip_settings=True) is True
+
+        entry = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]["smriti"]
+        assert entry["env"] == {"SMRITI_ROOT": str(memory_root)}
+
+
 # --- settings.json hook patching ----------------------------------------
 
 class TestPatchSettingsJSON:

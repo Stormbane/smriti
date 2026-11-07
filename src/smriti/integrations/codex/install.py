@@ -64,7 +64,7 @@ from smriti.integrations.common import (
 )
 from smriti.integrations.common.config_file import edit_config
 from smriti.integrations.common.managed_doc import DocState
-from smriti.integrations.common.mcp_spec import mcp_registration
+from smriti.integrations.common.mcp_spec import registered
 
 WAKE_FRAMING = "codex-json"
 SESSION_START_MATCHER = "startup|resume|clear|compact"
@@ -319,18 +319,9 @@ def _wire_config(data: dict[str, Any], notes: list[str], memory_root: Path,
     if mcp_registration_matches(mcp.get("smriti"), memory_root):
         notes.append("[mcp_servers.smriti] already registered")
     else:
-        existing = mcp.get("smriti")
-        desired = mcp_registration(memory_root)
-        if isinstance(existing, dict):
-            # Preserve user annotations (approval modes etc.) and the
-            # user's other variables; fix the command surface and the root.
-            env = existing.get("env")
-            merged_env = dict(env) if isinstance(env, dict) else {}
-            merged_env.update(desired.get("env", {}))
-            existing.update(desired)
-            existing["env"] = merged_env
-        else:
-            mcp["smriti"] = desired
+        # The user's annotations (approval modes etc.) and other variables
+        # stay; the command surface and the root are fixed.
+        mcp["smriti"] = registered(mcp.get("smriti"), memory_root)
         notes.append("[mcp_servers.smriti] registered")
         changed = True
 
