@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
-import struct
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -36,7 +35,7 @@ from smriti.embed.identity import (
     write_identity,
 )
 from smriti.store.index_policy import is_indexable, may_hold_indexable
-from smriti.store.schema import IndexDB, ensure_schema
+from smriti.store.schema import IndexDB, ensure_schema, serialize_f32
 
 log = logging.getLogger(__name__)
 
@@ -46,11 +45,6 @@ __all__ = ["FileIndexed", "fill_pending_vectors", "index_file", "index_file_resu
 # Embedding goes through smriti.embed.provider (the embedder, the provider
 # rule, the identity of each batch of vectors), which search and the
 # embedding service share.
-
-
-def _serialize_f32(vec: list[float]) -> bytes:
-    """Pack a float list into a little-endian f32 blob for sqlite-vec."""
-    return struct.pack(f"<{len(vec)}f", *vec)
 
 
 def _indexed_files(conn: IndexDB) -> dict[str, str]:
@@ -128,7 +122,7 @@ def _row(cid: str, chunk: Any, source: str, distance: int, vector: bytes | None)
 def _insert_chunk(conn: IndexDB, cid: str, chunk: Any, source: str, distance: int,
                   indexed_at: str, vector: list[float] | None) -> None:
     """Insert one chunk and its vector (index_file's path; see :func:`_insert_row`)."""
-    blob = _serialize_f32(vector) if vector is not None else None
+    blob = serialize_f32(vector) if vector is not None else None
     _insert_row(conn, _row(cid, chunk, source, distance, blob), indexed_at)
 
 
@@ -162,7 +156,7 @@ def _insert_row(conn: IndexDB, row: _Row, indexed_at: str) -> None:
 def _insert_vector(conn: IndexDB, rowid: int, vector: Sequence[float]) -> None:
     conn.execute(
         "INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)",
-        (rowid, _serialize_f32(list(vector))),
+        (rowid, serialize_f32(vector)),
     )
 
 
@@ -442,7 +436,7 @@ def _embed_files(provider: embedding.EmbeddingProvider, plan: _Plan, root: Path,
     def flush() -> None:
         nonlocal embedded
         vectors = embedding.embed(provider, [c.content for _, c, _, _ in waiting]).vectors
-        staged.add([_row(cid, c, src, dist, _serialize_f32(vector))
+        staged.add([_row(cid, c, src, dist, serialize_f32(vector))
                     for (cid, c, src, dist), vector in zip(waiting, vectors, strict=True)])
         embedded += len(waiting)
         waiting.clear()

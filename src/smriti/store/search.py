@@ -26,13 +26,12 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-import struct
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypedDict
 
-from smriti.store.schema import IndexDB
+from smriti.store.schema import IndexDB, serialize_f32
 
 if TYPE_CHECKING:
     from smriti.embed.identity import Embedded
@@ -135,10 +134,6 @@ class SearchOutcome:
             some = "1 source is" if self.pending == 1 else f"{self.pending} sources are"
             notes.append(f"note: {some} searchable by keyword only for now (vectors pending)")
         return notes
-
-
-def _serialize_f32(vec: list[float]) -> bytes:
-    return struct.pack(f"<{len(vec)}f", *vec)
 
 
 def _trunk_boost(distance: int) -> float:
@@ -413,7 +408,7 @@ def _vector_leg(conn: IndexDB, query: str, embedded: Embedded, candidate_k: int,
                FROM chunks_vec
                WHERE embedding MATCH ?
                AND k = ?""",
-            (_serialize_f32(embedded.vectors[0]), candidate_k),
+            (serialize_f32(embedded.vectors[0]), candidate_k),
         ).fetchall()
         normed = _normalize([1.0 - r[1] for r in rows])  # lower distance = higher
         found = _fetch_candidates(conn, [r[0] for r in rows])

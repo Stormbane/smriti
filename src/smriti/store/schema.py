@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import struct
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -23,6 +24,15 @@ log = logging.getLogger(__name__)
 # 3: sources.vectors (a source whose vectors are pending) and the embedding
 # identity in meta (smriti.embed.identity).
 SCHEMA_VERSION = 3
+
+
+def serialize_f32(vec: Sequence[float]) -> bytes:
+    """A vector as ``chunks_vec`` stores it: a little-endian f32 blob for sqlite-vec.
+
+    The one packing, for the indexer's writes and search's query vector alike.
+    """
+    return struct.pack(f"<{len(vec)}f", *vec)
+
 
 # The size chunks_vec gets when it must exist before any vector does (a first
 # write whose vectors are pending). The first vectors resize it to their own
