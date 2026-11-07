@@ -230,3 +230,50 @@ def test_keyword_only_is_not_calibrated(stub_index: Path, monkeypatch: pytest.Mo
     assert outcome.similarity is None and outcome.unrelated_below is None
     assert outcome.results[0].source == "projects/kite/2026/05-05.md"
     assert nothing.results == []
+
+
+@needs_vec
+def test_a_keyword_match_whose_vectors_are_pending_is_not_scored_down(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex review of hardening/h13a (P2). The best similarity measures only
+    chunks that have vectors: a write whose vectors are pending, found by an
+    exact keyword, was scored down with the unrelated notes (0.4 to about 0),
+    and the search said nothing was close. A write without vectors stays
+    searchable by keyword: it keeps its score, and only what was measured is
+    scored down."""
+    from smriti.store.indexer import index_file_result, index_tree
+
+    root = tmp_path / "tree"
+    (root / "notes").mkdir(parents=True)
+    (root / "notes" / "kite.md").write_text(
+        "# Kite\n\nThe enclosure uses captive screws.\n", encoding="utf-8")
+    stub = StubEmbedding()
+    monkeypatch.setattr(embedding, "embedder", lambda: stub)
+    db = root / ".smriti" / "index.db"
+    index_tree(root=root, db=db)
+
+    class Down:
+        model_name, dimension = stub.model_name, stub.dimension
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("the embedding service is starting")
+
+    written = root / "notes" / "quince.md"
+    written.write_text("# Quince\n\nSam's quince marmalade sets overnight.\n", encoding="utf-8")
+    monkeypatch.setattr(embedding, "embedder", lambda: Down())
+    assert index_file_result(written, root=root, db=db).vectors_pending
+    monkeypatch.setattr(embedding, "embedder", lambda: stub)
+
+    before = _search(db, "quince marmalade")
+    _calibrate(monkeypatch, unrelated_below=0.99, same_note=1.0)
+    after = _search(db, "quince marmalade")
+
+    assert after.pending == 1
+    assert {r.source for r in after.results} == {"notes/quince.md", "notes/kite.md"}
+    kept = {r.source: r.score for r in before.results}
+    found = {r.source: r.score for r in after.results}
+    assert found["notes/quince.md"] == kept["notes/quince.md"]  # not scored down
+    assert found["notes/kite.md"] == pytest.approx(kept["notes/kite.md"] * after.similarity)
+    assert after.results[0].source == "notes/quince.md"
+    assert after.unrelated_below == 0.99 and after.unmeasured == 1
+    assert "pending" in after.notes()[0] and "keep their scores" in after.notes()[0]

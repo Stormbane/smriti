@@ -11,7 +11,9 @@ The search flow:
 6. Optionally rerank with a cross-encoder.
 7. For a model with a :data:`CALIBRATIONS` entry: a later version of a note
    takes the place of the earlier one it restates, and a search whose best
-   hit is not close to the query at all says so, its scores scaled down.
+   hit is not close to the query at all says so, its scores scaled down
+   (except a keyword match whose vectors are pending, which no similarity
+   measured).
 8. Return top results.
 
 Every score above is relative to the candidates found (each leg is rescaled
@@ -109,6 +111,7 @@ class SearchOutcome:
     pending: int = 0  # sources searchable by keyword only for now: their vectors are pending
     similarity: float | None = None  # the best vector hit's raw cosine similarity to the query
     unrelated_below: float | None = None  # set when ``similarity`` was under the model's mark
+    unmeasured: int = 0  # results then kept as scored: found by keyword, their vectors pending
 
     def notes(self) -> list[str]:
         """What a reader must know when the search was less than hybrid, or found nothing close."""
@@ -116,9 +119,18 @@ class SearchOutcome:
             return [f"keyword-only: {self.keyword_only}"]
         notes = []
         if self.unrelated_below is not None and self.similarity is not None:
-            notes.append(f"note: nothing is close to the query (the best match's similarity "
-                         f"is {self.similarity:.2f}, under {self.unrelated_below:.2f}); "
-                         "these results are likely unrelated, and scored down")
+            if self.unmeasured:
+                some = "1 result" if self.unmeasured == 1 else f"{self.unmeasured} results"
+                notes.append(f"note: nothing with vectors is close to the query (the best "
+                             f"match's similarity is {self.similarity:.2f}, under "
+                             f"{self.unrelated_below:.2f}), and those results are scored "
+                             f"down; {some} found by keyword, vectors pending, keep their "
+                             "scores")
+            else:
+                notes.append(f"note: nothing is close to the query (the best match's "
+                             f"similarity is {self.similarity:.2f}, under "
+                             f"{self.unrelated_below:.2f}); these results are likely "
+                             "unrelated, and scored down")
         if self.pending:
             some = "1 source is" if self.pending == 1 else f"{self.pending} sources are"
             notes.append(f"note: {some} searchable by keyword only for now (vectors pending)")
@@ -468,6 +480,22 @@ def _newer_versions_first(conn: IndexDB, ranked: list[_Ranked], hits: set[int],
     return order
 
 
+def _pending_rowids(conn: IndexDB, ranked: list[_Ranked], hits: set[int]) -> set[int]:
+    """The ranked chunks no similarity measured: not vector hits, their source's vectors pending.
+
+    Only the keyword leg can find such a chunk. A chunk of a source with
+    vectors that isn't a hit is measured all the same: it is less similar
+    than the last hit.
+    """
+    sources = sorted({cand["source"] for rowid, _, cand in ranked if rowid not in hits})
+    if not sources:
+        return set()
+    marks = ",".join("?" * len(sources))
+    pending = {row[0] for row in conn.execute(
+        f"SELECT source FROM sources WHERE vectors = 0 AND source IN ({marks})", sources)}
+    return {rowid for rowid, _, cand in ranked if rowid not in hits and cand["source"] in pending}
+
+
 def _restates(conn: IndexDB, a: bytes | None, b: bytes | None, same_note: float) -> bool:
     """Whether two stored vectors are at least ``same_note`` similar (sqlite-vec's cosine)."""
     if a is None or b is None:
@@ -645,15 +673,24 @@ def search_with_status(
 
         # ── What the model's similarities say (a calibrated model only) ──
         calibration = CALIBRATIONS.get(hits.model) if has_vec else None
-        scale, unrelated_below = 1.0, None
+        unrelated_below: float | None = None
+        unmeasured: set[int] = set()
         if calibration is not None:
             ranked = _newer_versions_first(conn, ranked, hits.rowids, calibration.same_note)
             if hits.best is not None and hits.best < calibration.unrelated_below:
-                # Nothing is close: every score is scaled by the best similarity,
-                # so the best falls under the mark (and under any threshold above
-                # it), in the same order.
-                scale, unrelated_below = max(hits.best, 0.0), calibration.unrelated_below
-    results = [_result(cand, score * scale) for _, score, cand in ranked]
+                # Nothing with vectors is close: each score the best similarity
+                # speaks for is scaled by it, so it falls under the mark (and
+                # under any threshold above it), in the same order. A chunk found
+                # by keyword whose vectors are pending wasn't measured: a write
+                # without vectors stays searchable by keyword, so it keeps its
+                # score, and may now rank first.
+                unrelated_below = calibration.unrelated_below
+                unmeasured = _pending_rowids(conn, ranked, hits.rowids) if pending else set()
+                factor = max(hits.best, 0.0)
+                ranked = sorted(((rowid, score if rowid in unmeasured else score * factor, cand)
+                                 for rowid, score, cand in ranked),
+                                key=lambda x: x[1], reverse=True)
+    results = [_result(cand, score) for _, score, cand in ranked]
 
     from smriti.metrics import get_logger, query_fields
     get_logger().log(
@@ -670,7 +707,8 @@ def search_with_status(
         top_similarity=None if hits.best is None else round(hits.best, 4),
         unrelated=unrelated_below is not None,
     )
-    return SearchOutcome(results, keyword_only, pending, hits.best, unrelated_below)
+    return SearchOutcome(results, keyword_only, pending, hits.best, unrelated_below,
+                         len(unmeasured))
 
 
 def _result(cand: _Candidate, score: float) -> SearchResult:
