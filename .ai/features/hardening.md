@@ -541,6 +541,33 @@ What is still over the baseline, and why it stays:
   started by the first query, which a keyword answer meets at once; the bench
   polls every 0.5 s.
 
+## H13. From outside review #6 (at `5323e58`)
+
+Both reviewers ran at high effort on a tree with no history. Every claim below
+was checked against the code. The H12 invariant holds: no key function
+changes and nothing gets slower, unless Suti decides otherwise for an item
+marked *(decision)*.
+
+| # | Change | Acceptance |
+|---|---|---|
+| H13.1 | An index follows the root it is given: `index_tree(root=...)` and `index_file_result(root=...)` take their database (and embedding context) from that root, not from the environment, so a root B can't write into, or purge, root A's index. The installer's MCP registration carries the memory root. (Codex 1) | A test with two roots: each index holds only its own sources. |
+| H13.2 | Keyword search reads its candidates and their content in one snapshot (the vector leg's `_snapshot`, or one joined query), so a write between the two can't pair a hit with other text. (Codex 4) | Codex's reproduction as a test: a concurrent rewrite never returns another chunk's content. |
+| H13.3 | A failed `git status` is a failed backup: `has_changes` doesn't read it as "nothing to commit", and the status reports success only with the events that show it. (Codex 3) | A test with an unreadable index: the run is not ok and says why. |
+| H13.4 | The scrub masks quoted keys (`"password": "..."`, `"token":"..."`, YAML and JSON forms), with adversarial tests, keeping the literal-first speed. (Codex 2) | Masked; the fuzz equivalence test updated deliberately; the scrub bench no slower. |
+| H13.5 | The installer writes `~/.claude.json` and `~/.claude/settings.json` atomically, under a lock, keeping the first backup (timestamped, never overwritten); HOME is read when called. (Opus 4) | Tests; a second install keeps the original backup. |
+| H13.6 | `core` imports nothing from `store`, `daylog`, `embed` or `mcp`: the scrub and the day zone move to `core` (re-exported where they were), and `oslock` takes the runtime dir from `core.rundir`. A test fails on an import against that direction. (Opus 3) | The direction test. |
+| H13.7 | Durability: `write_atomic` fsyncs the temp file before the rename. *(decision: an fsync per write costs time; it is measured first and only kept if within noise, or with Suti's say)* (Opus 5) | The bench's write measure. |
+| H13.8 | The nightly's work stops growing with history: the stale-day scan is incremental (a marker of what was checked), the indexer gets its setting without changing the process environment, and `index_tree`'s purge joins the transaction its docstring promises. `read_day_turns` reports what it skipped. (Opus 5) | The nightly bench no slower; a test for the purge's transaction. |
+| H13.9 | The private store's legacy key: found in the old README location, it is moved to `.key` and the user is told the old key is in git history and should be rotated. (Opus 1) | A test of the migration and the warning. |
+| H13.10 | Comments state current design: the remaining history ("the connection-closed era", review numbers, H-item IDs in code) goes to commit messages; redundant local imports go (lazy imports that keep startup fast stay, with the reason). (Opus 2) | A scan that fails on review numbers and H-IDs in `src/`. |
+| H13.11 | *(decision)* The wake marks the agent-written memory it injects (handoff, journal, project blocks) as data, not instructions, against persistent prompt injection. It changes the text the agent wakes to. (Opus 1) | The wake's sections framed; nothing removed. |
+| H13.12 | *(decision)* Search quality from the eval set: a later note that corrects an earlier one ranks above it (1 of 4 corrections resolved today), and abstention uses raw similarity, which separates answerable from irrelevant queries (AUROC 0.99) where the rescaled score doesn't (no irrelevant query abstains). It changes search results. | The eval set's corrections and abstention scores up; the other cases no worse. |
+| H13.13 | Outside review #7. | Grades recorded. |
+
+Not doing: the codex fallback stays opt-in and documented (both reviewers
+call it a design risk, not a default); team and multi-user use is out of
+scope; the bus factor isn't a code change.
+
 ## Status
 
 Updated as phases land. Each phase had a Codex diff review, fixes for every
@@ -599,7 +626,8 @@ a recheck.
   while the service says it is starting.
 - **H11**: done. H11.8: outside review #5 at `bcec9a2`; its
   findings are H12.
-- **H12**: planned, awaiting approval.
+- **H12**: done (merged by 5323e58; H12.8 dropped). H12.10: outside review #6 at `5323e58`; its findings are H13.
+- **H13**: planned, awaiting approval.
 - **H12.0 implemented** (2026-11-06, `hardening/h12a`; not yet reviewed or
   merged): keep-alive, the profile cache, `scripts/bench.py`, and the
   fixes the benchmark found. The three slower measures are back at the
