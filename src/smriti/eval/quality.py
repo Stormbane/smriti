@@ -22,9 +22,11 @@ whose best score is under it, the share of answerable ones wrongly under
 it, and, threshold-free, the AUROC of the best score between the two
 (the chance an answerable query's best result outscores an irrelevant
 one's). Search normalises each leg's scores within the candidates, so its
-best result scores high whatever the query; the same measures on the
-cosine similarity between the query and its first result's text say what
-a threshold on raw similarity would do.
+best result scores high whatever the query, unless the model has a
+calibration (``smriti.store.search.CALIBRATIONS``, chosen on this set):
+then a search whose best hit's raw similarity is under the model's mark is
+scored down below it. The same measures on the cosine similarity between
+the query and its first result's text say what raw similarity separates.
 
 Change a case, or the corpus in a way that changes what a case asks, and
 :data:`QUALITY_SET_VERSION` changes with it: scores are compared within

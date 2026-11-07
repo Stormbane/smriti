@@ -9,7 +9,14 @@ The search flow:
 4. Merge and deduplicate both result sets.
 5. Score: ``alpha * vec_score + beta * fts_score + gamma * trunk_boost``.
 6. Optionally rerank with a cross-encoder.
-7. Return top results.
+7. For a model with a :data:`CALIBRATIONS` entry: a later version of a note
+   takes the place of the earlier one it restates, and a search whose best
+   hit is not close to the query at all says so, its scores scaled down.
+8. Return top results.
+
+Every score above is relative to the candidates found (each leg is rescaled
+to 0-1 among them), so the best result scores high whatever the query; only
+the raw similarity of the best vector hit says whether anything is close.
 """
 
 from __future__ import annotations
@@ -20,7 +27,7 @@ import sqlite3
 import struct
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from smriti.store.schema import IndexDB
@@ -35,6 +42,42 @@ log = logging.getLogger(__name__)
 VEC_WEIGHT = 0.5
 FTS_WEIGHT = 0.3
 TRUNK_WEIGHT = 0.2
+
+
+@dataclass(frozen=True)
+class Calibration:
+    """What one embedding model's raw cosine similarities mean, measured with it on
+    the eval set (``smriti eval``'s quality set, :mod:`smriti.eval.quality`).
+
+    ``unrelated_below``: under it, the best vector hit is not close to the query:
+    the irrelevant queries' best hits fall under it, every answerable one's above.
+    ``same_note``: two chunks at least this similar restate one note: on the
+    eval set every pair above it is a later note restating an earlier one, and
+    no other pair is.
+    """
+
+    unrelated_below: float
+    same_note: float
+
+
+# Per model: similarities don't compare across models, and a model without an
+# entry is searched exactly as before. Measured 2026-11-07 on quality set v1:
+# - bge-m3 (onnx, int8; new installs): irrelevant queries' best hits 0.32-0.43,
+#   answerable 0.42-0.76, the lowest a paraphrase (0.4206) under two irrelevant
+#   ones; 0.40 sits between the next irrelevant (0.387) and it, so four of six
+#   irrelevant queries are marked and no answerable one. Restating pairs
+#   0.777-0.848; the closest other pair 0.743.
+# - all-MiniLM-L6-v2 (local; indexes built before onnx was the default):
+#   irrelevant 0.121-0.243, answerable 0.178-0.849; 0.165 sits between 0.151
+#   and the lowest answerable (0.178): five of six marked, none answerable.
+#   Restating pairs 0.786-0.880; the closest other pair 0.726.
+CALIBRATIONS: dict[str, Calibration] = {
+    "gpahal/bge-m3-onnx-int8": Calibration(unrelated_below=0.40, same_note=0.75),
+    "all-MiniLM-L6-v2": Calibration(unrelated_below=0.165, same_note=0.75),
+}
+# A later version moves up only when it scores at least this share of the
+# place it takes: recency never outranks a clearly better match.
+NEWER_MIN_SHARE = 0.5
 
 
 @dataclass
@@ -64,15 +107,22 @@ class SearchOutcome:
     results: list[SearchResult]
     keyword_only: str = ""  # the reason; "" when the vector leg ran (or wasn't asked for)
     pending: int = 0  # sources searchable by keyword only for now: their vectors are pending
+    similarity: float | None = None  # the best vector hit's raw cosine similarity to the query
+    unrelated_below: float | None = None  # set when ``similarity`` was under the model's mark
 
     def notes(self) -> list[str]:
-        """What a reader must know when the search was less than hybrid."""
+        """What a reader must know when the search was less than hybrid, or found nothing close."""
         if self.keyword_only:
             return [f"keyword-only: {self.keyword_only}"]
+        notes = []
+        if self.unrelated_below is not None and self.similarity is not None:
+            notes.append(f"note: nothing is close to the query (the best match's similarity "
+                         f"is {self.similarity:.2f}, under {self.unrelated_below:.2f}); "
+                         "these results are likely unrelated, and scored down")
         if self.pending:
             some = "1 source is" if self.pending == 1 else f"{self.pending} sources are"
-            return [f"note: {some} searchable by keyword only for now (vectors pending)"]
-        return []
+            notes.append(f"note: {some} searchable by keyword only for now (vectors pending)")
+        return notes
 
 
 def _serialize_f32(vec: list[float]) -> bytes:
@@ -94,6 +144,36 @@ def _normalize(scores: list[float]) -> list[float]:
     if hi == lo:
         return [1.0] * len(scores)
     return [(s - lo) / (hi - lo) for s in scores]
+
+
+_ISO_DATE = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)")
+# journal/2026/05/week2/05-11.md, projects/kite/2026/05-13.md (the writer's paths)
+_PATH_MONTH_DAY = re.compile(
+    r"(?:^|/)(\d{4})/(?:\d{2}/)?(?:week\d+/)?(\d{2})-(\d{2})(?:[^/\d][^/]*)?$")
+# log/2026/05/13-digest.md (the day-log's)
+_PATH_DAY = re.compile(r"(?:^|/)(\d{4})/(\d{2})/(\d{2})(?:[^/\d][^/]*)?$")
+
+
+def chunk_date(source: str, content: str) -> str | None:
+    """The day a chunk speaks for, ``YYYY-MM-DD``, or None when it gives none.
+
+    From its file's path when the path is dated (the writer's daily files, the
+    day-log's digests, or an ISO date in a name), else from the first ISO date
+    in its text (a frontmatter ``date:``, a dated line). A living note with no
+    date anywhere has none.
+    """
+    for pattern in (_ISO_DATE, _PATH_MONTH_DAY, _PATH_DAY):
+        found = pattern.search(source)
+        if found and (day := _day(*found.groups())):
+            return day
+    found = _ISO_DATE.search(content)
+    return _day(*found.groups()) if found else None
+
+
+def _day(year: str, month: str, day: str) -> str | None:
+    if not ("01" <= month <= "12" and "01" <= day <= "31"):
+        return None
+    return f"{year}-{month}-{day}"
 
 
 FTS_MAX_TERMS = 12
@@ -278,9 +358,19 @@ def _candidate(row: Sequence[Any]) -> _Candidate:
             "trunk_distance": distance}
 
 
+@dataclass
+class _Hits:
+    """What the vector leg found besides its scores."""
+
+    why_not: str = ""  # why it found nothing, or ""
+    model: str = ""  # the model the query was embedded with
+    best: float | None = None  # the best hit's raw cosine similarity to the query
+    vectors: dict[int, bytes] = field(default_factory=dict)  # each hit's stored vector
+
+
 def _vector_leg(conn: IndexDB, query: str, embedded: Embedded, candidate_k: int,
-                scores: dict[int, float], candidates: dict[int, _Candidate]) -> str:
-    """Fill ``scores`` and ``candidates`` from the vectors; return why not, or "".
+                scores: dict[int, float], candidates: dict[int, _Candidate]) -> _Hits:
+    """Fill ``scores`` and ``candidates`` from the vectors; say why not, or what else it saw.
 
     Runs inside the search's snapshot. The query's embedding, made before
     it, carries the identity that made it, and it is compared with the
@@ -303,23 +393,82 @@ def _vector_leg(conn: IndexDB, query: str, embedded: Embedded, candidate_k: int,
                         f"the index with {recorded.describe()}")
             continue
         if vec_table_dimension(conn) is None:
-            return "the index has no vectors yet"
+            return _Hits("the index has no vectors yet")
+        query_vector = _serialize_f32(embedded.vectors[0])
         rows = conn.execute(
-            """SELECT rowid, distance
+            """SELECT rowid, distance, embedding
                FROM chunks_vec
                WHERE embedding MATCH ?
                AND k = ?""",
-            (_serialize_f32(embedded.vectors[0]), candidate_k),
+            (query_vector, candidate_k),
         ).fetchall()
         normed = _normalize([1.0 - r[1] for r in rows])  # lower distance = higher
         found = _fetch_candidates(conn, [r[0] for r in rows])
-        for (rowid, _), ns in zip(rows, normed, strict=True):
+        hits = _Hits(model=embedded.identity.model)
+        for (rowid, _, vector), ns in zip(rows, normed, strict=True):
             scores[rowid] = ns
+            hits.vectors[rowid] = vector
             if rowid in found:
                 candidates[rowid] = found[rowid]  # in the order found: it breaks ties
-        return ""
+        if rows:
+            hits.best = _similarity(conn, query_vector, rows[0][2])
+        return hits
     embedding.forget_provider()
-    return f"embedding identity mismatch: {mismatch}"
+    return _Hits(f"embedding identity mismatch: {mismatch}")
+
+
+def _similarity(conn: IndexDB, a: bytes, b: bytes) -> float:
+    """The cosine similarity of two stored vectors (sqlite-vec computes it)."""
+    return 1.0 - float(conn.execute("SELECT vec_distance_cosine(?, ?)", (a, b)).fetchone()[0])
+
+
+_Ranked = tuple[int, float, _Candidate]  # rowid, score, chunk
+
+
+def _newer_versions_first(conn: IndexDB, ranked: list[_Ranked], vectors: dict[int, bytes],
+                          same_note: float, depth: int) -> list[_Ranked]:
+    """Each of the first ``depth`` places goes to the newest later version of its chunk.
+
+    A later version: a chunk ranked below, at least ``same_note`` similar
+    (stored vectors), dated after it (:func:`chunk_date`), and scoring at
+    least :data:`NEWER_MIN_SHARE` of the place's score. It takes the place
+    and its score; the earlier chunk takes the later one's place and score.
+    Nothing else moves, so recency only ever reorders versions of one note;
+    an undated chunk never moves for it.
+    """
+    order = list(ranked)
+    dates: dict[int, str | None] = {}
+
+    def date_at(i: int) -> str | None:
+        rowid, _, cand = order[i]
+        if rowid not in dates:
+            dates[rowid] = chunk_date(cand["source"], cand["content"])
+        return dates[rowid]
+
+    for i in range(min(depth, len(order))):
+        while True:
+            rowid, score, _ = order[i]
+            date = date_at(i)
+            if date is None or rowid not in vectors:
+                break
+            newest: int | None = None
+            for j in range(i + 1, len(order)):
+                if order[j][1] < NEWER_MIN_SHARE * score:
+                    break  # each place keeps its score, so they still fall with the rank
+                if order[j][0] not in vectors:
+                    continue
+                later = date_at(j)
+                if later is None or later <= date:
+                    continue
+                if newest is not None and later <= (date_at(newest) or ""):
+                    continue
+                if _similarity(conn, vectors[rowid], vectors[order[j][0]]) >= same_note:
+                    newest = j
+            if newest is None:
+                break
+            (r_old, s_old, c_old), (r_new, s_new, c_new) = order[i], order[newest]
+            order[i], order[newest] = (r_new, s_old, c_new), (r_old, s_new, c_old)
+    return order
 
 
 def _keyword_leg(conn: IndexDB, query: str, candidate_k: int,
@@ -403,6 +552,7 @@ def search_with_status(
     keyword_only = "" if has_vec or not use_vectors else "sqlite-vec is not available"
     vec_scores: dict[int, float] = {}
     fts_scores: dict[int, float] = {}
+    hits = _Hits()
     pending = 0
 
     # The query is embedded before the snapshot opens: a read transaction
@@ -429,8 +579,9 @@ def search_with_status(
             pending = pending_vectors(conn)
             if embedded is not None:
                 try:
-                    keyword_only = _vector_leg(conn, query, embedded, candidate_k,
-                                               vec_scores, candidates)
+                    hits = _vector_leg(conn, query, embedded, candidate_k,
+                                       vec_scores, candidates)
+                    keyword_only = hits.why_not
                 except Exception as exc:  # noqa: BLE001 — logged and reported; keywords instead
                     log.warning("Vector search failed; searching by keyword only: %s", exc)
                     keyword_only = failure_reason(exc)
@@ -439,6 +590,7 @@ def search_with_status(
                 # vector weight stayed in the sum with nothing behind it, and
                 # every score silently lost half its range.
                 has_vec = False
+                hits = _Hits()
                 vec_scores.clear()
                 candidates.clear()
 
@@ -449,7 +601,7 @@ def search_with_status(
                 log.warning("FTS search failed: %s", exc)
 
     if not candidates:
-        return SearchOutcome([], keyword_only, pending)
+        return SearchOutcome([], keyword_only, pending, hits.best)
 
     # ── Combined scoring ─────────────────────────────────────────────
     scored: list[tuple[int, float, _Candidate]] = []
@@ -467,7 +619,7 @@ def search_with_status(
     scored.sort(key=lambda x: x[1], reverse=True)
 
     # ── Rerank (optional), else the top-k by combined score ─────────
-    results: list[SearchResult] | None = None
+    ranked: list[_Ranked] | None = None
     if use_reranker and len(scored) > 1:
         try:
             from smriti._vendored.memsearch.reranker import rerank
@@ -476,14 +628,27 @@ def search_with_status(
                 {"content": s[2]["content"], "_rowid": s[0], "_cand": s[2]}
                 for s in scored[:candidate_k]
             ]
-            results = [_result(item["_cand"], item.get("score", 0.0))
-                       for item in rerank(query, rerank_input, top_k=top_k)]
+            ranked = [(item["_rowid"], item.get("score", 0.0), item["_cand"])
+                      for item in rerank(query, rerank_input, top_k=top_k)]
         except Exception as exc:  # noqa: BLE001 — logged; the combined scores stand
             log.warning("Reranker failed; using the combined score: %s", exc)
-            results = None
-    reranked = results is not None
-    if results is None:
-        results = [_result(cand, score) for _, score, cand in scored[:top_k]]
+            ranked = None
+    reranked = ranked is not None
+    if ranked is None:
+        ranked = scored
+
+    # ── What the model's similarities say (a calibrated model only) ──
+    calibration = CALIBRATIONS.get(hits.model) if has_vec else None
+    scale, unrelated_below = 1.0, None
+    if calibration is not None:
+        ranked = _newer_versions_first(conn, ranked, hits.vectors, calibration.same_note,
+                                       depth=top_k)
+        if hits.best is not None and hits.best < calibration.unrelated_below:
+            # Nothing is close: every score is scaled by the best similarity, so
+            # the best falls under the mark (and under any threshold above it),
+            # in the same order.
+            scale, unrelated_below = max(hits.best, 0.0), calibration.unrelated_below
+    results = [_result(cand, score * scale) for _, score, cand in ranked[:top_k]]
 
     from smriti.metrics import get_logger, query_fields
     get_logger().log(
@@ -497,8 +662,10 @@ def search_with_status(
         elapsed_ms=int((_time.monotonic() - t0) * 1000),
         top_score=results[0].score if results else 0,
         top_source=results[0].source if results else "",
+        top_similarity=None if hits.best is None else round(hits.best, 4),
+        unrelated=unrelated_below is not None,
     )
-    return SearchOutcome(results[:top_k], keyword_only, pending)
+    return SearchOutcome(results, keyword_only, pending, hits.best, unrelated_below)
 
 
 def _result(cand: _Candidate, score: float) -> SearchResult:

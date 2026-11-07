@@ -175,8 +175,11 @@ def test_smriti_eval_prints_the_set(capsys: pytest.CaptureFixture[str]) -> None:
 @pytest.mark.needs_model
 def test_with_the_real_model_the_scores_hold(monkeypatch: pytest.MonkeyPatch) -> None:
     """Loose floors under the scores bge-m3 (onnx, int8) gave on 2026-11-07:
-    answerable hit@5 100%, MRR 0.83; paraphrase hit@3 100%; raw-similarity
-    AUROC 0.99. A model that stopped working would fall far below them."""
+    answerable hit@5 100%, MRR 0.86; paraphrase hit@3 100%; raw-similarity
+    AUROC 0.99. A model that stopped working would fall far below them.
+    And what its calibration (smriti.store.search.CALIBRATIONS) gives: two of
+    four corrections above what they correct (one before it), four of six
+    irrelevant queries scored under the threshold, no answerable one."""
     from tests._vec import can_load_vec
 
     if not can_load_vec():
@@ -190,3 +193,7 @@ def test_with_the_real_model_the_scores_hold(monkeypatch: pytest.MonkeyPatch) ->
     assert report.retrieval["paraphrase"]["hit@3"] >= 0.7
     similarity = report.abstention["similarity"]["auroc"]
     assert similarity is not None and similarity >= 0.85
+    assert report.disagreement["correction"]["resolved@5"] >= 0.5
+    score = report.abstention["search_score"]
+    assert score["abstained"] is not None and score["abstained"] >= 0.5
+    assert score["false_abstention"] == 0.0
