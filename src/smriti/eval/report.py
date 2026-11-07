@@ -149,19 +149,31 @@ def _rounded(value: Any) -> Any:
     return value
 
 
-def markdown_report(metrics: EvalMetrics, quality: QualityReport | None) -> str:
-    """The scores as Markdown tables, for a CI job summary."""
+def markdown_report(metrics: EvalMetrics, quality: QualityReport | None,
+                    digests: DigestReport | None = None) -> str:
+    """The scores as Markdown tables, for a CI job summary; the digests' too with ``--llm``."""
     lines = ["## smriti eval", "",
              f"Search cases: {metrics.search_passed}/{metrics.search_total} passed, "
              f"MRR {metrics.search_mrr:.2f}.", ""]
-    if quality is None:
-        return "\n".join(lines)
+    if quality is not None:
+        lines += _quality_markdown(quality) + [""]
+    if digests is not None:
+        lines += _digest_markdown(digests) + [""]
+    return "\n".join(lines)
+
+
+def _cell(text: str) -> str:
+    """*text* safe inside one Markdown table cell."""
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def _quality_markdown(quality: QualityReport) -> list[str]:
     d = quality.as_dict()
-    lines += [f"Quality set v{d['version']}, {d['cases']} cases; embedder "
-              f"`{d['embedder'] or 'none'}`"
-              + (f"; keyword-only: {d['keyword_only']}" if d["keyword_only"] else "") + ".",
-              "", "| kind | n | " + " | ".join(f"hit@{k}" for k in KS) + " | MRR |",
-              "|---|---|" + "---|" * len(KS) + "---|"]
+    lines = [f"Quality set v{d['version']}, {d['cases']} cases; embedder "
+             f"`{d['embedder'] or 'none'}`"
+             + (f"; keyword-only: {d['keyword_only']}" if d["keyword_only"] else "") + ".",
+             "", "| kind | n | " + " | ".join(f"hit@{k}" for k in KS) + " | MRR |",
+             "|---|---|" + "---|" * len(KS) + "---|"]
     for kind, row in d["retrieval"].items():
         hits = " | ".join(_pct(row[f"hit@{k}"]) for k in KS)
         lines.append(f"| {kind} | {int(row['n'])} | {hits} | {row['mrr']:.2f} |")
@@ -176,4 +188,24 @@ def markdown_report(metrics: EvalMetrics, quality: QualityReport | None) -> str:
         auroc = "-" if row.get("auroc") is None else f"{row['auroc']:.2f}"
         lines.append(f"| {label} | {_pct(row.get('abstained'))} | "
                      f"{_pct(row.get('false_abstention'))} | {auroc} |")
-    return "\n".join(lines) + "\n"
+    return lines
+
+
+def _digest_markdown(digests: DigestReport) -> list[str]:
+    """Each synthetic day's scores, or why it has none, then what each one missed."""
+    lines = ["Digests, made with a real LLM (`--llm`):", "",
+             "| digest | coverage | facts | traceable |", "|---|---|---|---|"]
+    for name, score in digests.days.items():
+        lines.append(f"| {name} | {_pct(score.coverage)} | {_pct(score.facts)} | "
+                     f"{_pct(score.traceable)} |")
+    for name, error in digests.errors.items():
+        lines.append(f"| {name} | FAILED: {_cell(error)} | | |")
+    means = digests.means()
+    if means:
+        lines.append(f"| mean | {_pct(means['coverage'])} | {_pct(means['facts'])} | "
+                     f"{_pct(means['traceable'])} |")
+    notes = [f"- {name}: missed: {fact}" for name, score in digests.days.items()
+             for fact in score.missed_facts]
+    notes += [f"- {name}: untraceable: {sentence[:100]}"
+              for name, score in digests.days.items() for sentence in score.untraceable]
+    return lines + ([""] + notes if notes else [])

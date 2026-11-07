@@ -109,3 +109,45 @@ def test_smriti_eval_llm(monkeypatch: pytest.MonkeyPatch,
     assert main(["eval", "--llm"]) == 0
     out = capsys.readouterr().out
     assert "DIGESTS" in out and "mean: coverage 100%, facts 100%, traceable 100%" in out
+
+
+@pytest.mark.parametrize("failing", [False, True])
+def test_smriti_eval_llm_markdown_carries_the_digests(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+        failing: bool) -> None:
+    """Codex review of H12.9 (P2): `--llm --markdown` ran the LLM calls and printed
+    none of their scores or errors, which went with the sandbox, so a failed call
+    gave exit 1 and a report that didn't say why."""
+    from smriti.cli import main
+    from tests.test_eval_sandbox import LocalEmbedding
+
+    class Failing(EchoModel):
+        def call(self, request: LLMRequest) -> LLMResponse:
+            raise LLMError("no seat today")
+
+    model = Failing() if failing else EchoModel()
+    monkeypatch.setattr("smriti.embed.provider.embedder", lambda: LocalEmbedding())
+    monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: model)
+    monkeypatch.setenv("SMRITI_NIGHTLY_FALLBACK", "")
+
+    assert main(["eval", "--llm", "--markdown"]) == (1 if failing else 0)
+    out = capsys.readouterr().out
+    assert "| digest | coverage | facts | traceable |" in out
+    for day in DIGEST_DAYS:
+        assert f"| {day.id} |" in out
+    if failing:
+        assert out.count("no seat today") == len(DIGEST_DAYS)
+    else:
+        assert "| mean | 100% | 100% | 100% |" in out
+
+
+def test_the_markdown_names_what_a_digest_missed() -> None:
+    from smriti.eval.digests import DigestReport
+    from smriti.eval.metrics import EvalMetrics
+    from smriti.eval.report import markdown_report
+
+    digest = FAITHFUL.replace("linen thread", "string")
+    report = DigestReport(days={"d-workshop": score_digest(
+        [t for _, t in WORKSHOP.turns], digest, WORKSHOP.facts)})
+    out = markdown_report(EvalMetrics(), None, report)
+    assert "missed: linen thread ordered" in out

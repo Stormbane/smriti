@@ -465,7 +465,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         if args.json:
             print(json_report(metrics, search_results, quality=quality, digests=digests))
         elif args.markdown:
-            print(markdown_report(metrics, quality))
+            print(markdown_report(metrics, quality, digests))
         else:
             print(terminal_report(metrics, search_results, verbose=args.verbose,
                                   quality=quality, digests=digests))
