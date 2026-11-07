@@ -627,7 +627,7 @@ a recheck.
 - **H11**: done. H11.8: outside review #5 at `bcec9a2`; its
   findings are H12.
 - **H12**: done (merged by 5323e58; H12.8 dropped). H12.10: outside review #6 at `5323e58`; its findings are H13.
-- **H13**: planned, awaiting approval.
+- **H13**: done (merged by 32ebc04; all CI green). H13.7 (fsync) measured and not kept: it slowed writes beyond noise. H13.13: outside review #7.
 - **H13.8, the nightly's part, implemented** (2026-11-07, `hardening/h13c`;
   not yet reviewed or merged). Opus's three findings held.
   - The stale-day scan read every day-file in the history every night to
