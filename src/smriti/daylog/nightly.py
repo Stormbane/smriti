@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -37,7 +38,7 @@ from smriti.daylog.render import (
 )
 from smriti.daylog.rollup import build_rollup, enumerate_stale_periods
 from smriti.daylog.state import DaylogState
-from smriti.daylog.writer import read_day_turns
+from smriti.daylog.writer import read_day, read_day_turns
 
 log = logging.getLogger(__name__)
 
@@ -59,9 +60,17 @@ def _all_log_days(cfg: DaylogConfig) -> set[str]:
     return days
 
 
-def _stale_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
-                target: date) -> list[str]:
-    """Days needing render/digest.
+@dataclass
+class _Scan:
+    """What the stale-day scan found."""
+
+    stale: list[str] = field(default_factory=list)  # days to render and digest, oldest first
+    corrupt: dict[str, int] = field(default_factory=dict)  # day -> its lines that aren't turns
+
+
+def _scan_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
+               target: date) -> _Scan:
+    """Days needing render/digest, and the day-files' lines that aren't turns.
 
     Candidates: reconcile-changed dates (any age), persisted dirty-day
     markers from daemon passes (a past day logd changed before this run
@@ -73,12 +82,20 @@ def _stale_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
     for back in range(_REPAIR_WINDOW_DAYS):
         candidates.add(day_key(target - timedelta(days=back)))
     fingerprint = digest_fingerprint(cfg)
-    stale: list[str] = []
+    scan = _Scan()
     for day in sorted(candidates):
-        turns = read_day_turns(cfg.day_jsonl(day))
-        if turns and not _day_is_current(cfg, day, turns, fingerprint):
-            stale.append(day)
-    return stale
+        read = read_day(cfg.day_jsonl(day))
+        if read.invalid:
+            scan.corrupt[day] = read.invalid
+        if read.turns and not _day_is_current(cfg, day, read.turns, fingerprint):
+            scan.stale.append(day)
+    return scan
+
+
+def _stale_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
+                target: date) -> list[str]:
+    """Days needing render/digest (:func:`_scan_days`)."""
+    return _scan_days(cfg, changed, dirty, target).stale
 
 
 def _day_is_current(cfg: DaylogConfig, day: str, turns: list[Turn], fingerprint: str) -> bool:
@@ -175,7 +192,8 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
     digested: list[str] = []
     digest_errors: dict[str, str] = {}
     try:
-        stale = _stale_days(cfg, changed, dirty, target)
+        scan = _scan_days(cfg, changed, dirty, target)
+        stale = scan.stale
         # Render everything (cheap, deterministic); digest newest-first
         # under a per-night cap so a large backfill catches up over a
         # few nights instead of burning the seat in one.
@@ -199,7 +217,11 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
                 digest_errors[day] = str(exc)[:300]
             del snapshot  # one day's turns in memory at a time
         rendered.sort()
-        steps["render"] = {"ok": True, "days": rendered}
+        render_step: dict[str, object] = {"ok": True, "days": rendered}
+        if scan.corrupt:
+            # Lines the day's readers skip (render, digest): counted, so they're seen.
+            render_step["corrupt_lines"] = scan.corrupt
+        steps["render"] = render_step
         # A failed digest is a failed night: the wake briefing must say
         # so, and the CLI must exit nonzero.
         steps["digest"] = {"ok": not digest_errors, "days": digested,

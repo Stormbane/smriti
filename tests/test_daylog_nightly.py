@@ -411,10 +411,57 @@ def test_nightly_renders_digests_and_writes_status(
     saved = json.loads(cfg.nightly_status_path.read_text(encoding="utf-8"))
     assert saved["steps"]["digest"]["days"] == ["2026-09-04"]
     assert saved["ok"] is True
+    assert "corrupt_lines" not in saved["steps"]["render"]  # said only when there are some
     # Second run is a no-op (idempotent by input hash).
     status2 = run_nightly(cfg, witness=False, now=datetime(2026, 9, 4, 17, 10, tzinfo=timezone.utc),
                           reindex=False)
     assert status2["steps"]["digest"]["days"] == []  # type: ignore[index]
+
+
+def _append_lines(path: Path, *lines: str) -> None:
+    with path.open("a", encoding="utf-8", newline="\n") as f:
+        f.writelines(line + "\n" for line in lines)
+
+
+def test_read_day_counts_the_lines_it_skips(tmp_path: Path) -> None:
+    from smriti.daylog.writer import read_day
+
+    cfg = _cfg(tmp_path)
+    _seed_day(cfg)
+    path = cfg.day_jsonl("2026-09-04")
+    first = path.read_text(encoding="utf-8").splitlines()[0]
+    _append_lines(
+        path,
+        '{"id": "voice:s1:torn", "ts": "2026-09-04T03:0',  # cut short: not JSON
+        "",  # blank: not counted
+        "[1, 2]",  # not an object
+        '{"id": "voice:s1:x1", "ts": "not a time", "text": "t"}',  # no valid time
+        '{"id": "voice:s1:x2", "ts": "2026-09-04T03:00:00Z"}',  # no text
+        first,  # a turn repeated by id: dedup, not corrupt
+    )
+    read = read_day(path)
+    assert [t.text for t in read.turns] == [
+        "morning question", "morning answer", "loop iteration output"]
+    assert read.invalid == 4
+    assert read_day_turns(path) == read.turns
+    assert read_day(tmp_path / "missing.jsonl").invalid == 0
+
+
+def test_the_nightly_status_counts_each_days_lines_that_are_not_turns(
+    tmp_path: Path, fake_llm: FakeProvider
+) -> None:
+    """The readers skip such lines; the night says how many, per day, and isn't failed."""
+    cfg = _cfg(tmp_path)
+    _seed_day(cfg, "2026-09-03")
+    _seed_day(cfg, "2026-09-04")
+    _append_lines(cfg.day_jsonl("2026-09-03"), "not json", '{"id": 3')
+    status = run_nightly(cfg, witness=False, now=datetime(2026, 9, 4, 17, 5, tzinfo=timezone.utc),
+                         reindex=False)
+    assert status["steps"]["render"]["corrupt_lines"] == {"2026-09-03": 2}  # type: ignore[index]
+    saved = json.loads(cfg.nightly_status_path.read_text(encoding="utf-8"))
+    assert saved["steps"]["render"]["corrupt_lines"] == {"2026-09-03": 2}
+    assert saved["ok"] is True
+    assert sorted(saved["steps"]["digest"]["days"]) == ["2026-09-03", "2026-09-04"]
 
 
 def test_nightly_survives_digest_failure_and_reports_it(

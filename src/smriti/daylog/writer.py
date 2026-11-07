@@ -105,24 +105,49 @@ def load_day_ids(path: Path) -> set[str]:
     return scan_day(path).ids
 
 
-def read_day_turns(path: Path) -> list[Turn]:
-    """Read a day-file's turns, deduped by id, sorted by event time."""
+@dataclass
+class DayTurns:
+    """What one read of a day-file's turns found."""
+
+    turns: list[Turn] = field(default_factory=list)  # deduped by id, sorted by event time
+    invalid: int = 0  # non-blank lines that aren't a turn, skipped
+
+
+def read_day(path: Path) -> DayTurns:
+    """Read a day-file's turns, and count the lines skipped as not being one.
+
+    A line is skipped when it isn't JSON, isn't an object, or has no valid
+    time or no text; the count is what capture's :attr:`DayScan.invalid`
+    counts, plus objects that have an id but aren't a turn. Blank lines and a
+    turn repeated by id aren't counted. A missing file has no turns.
+    """
     turns: dict[str, Turn] = {}
+    invalid = 0
     try:
         with path.open("r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
+                    if line.strip():
+                        invalid += 1
                     continue
-                if not isinstance(obj, dict):
-                    continue
-                turn = Turn.from_json(obj)
-                if turn is not None and turn.id not in turns:
+                turn = Turn.from_json(obj) if isinstance(obj, dict) else None
+                if turn is None:
+                    invalid += 1
+                elif turn.id not in turns:
                     turns[turn.id] = turn
     except OSError:
         pass
-    return sorted(turns.values(), key=lambda t: (t.ts, t.id))
+    return DayTurns(sorted(turns.values(), key=lambda t: (t.ts, t.id)), invalid)
+
+
+def read_day_turns(path: Path) -> list[Turn]:
+    """Read a day-file's turns, deduped by id, sorted by event time.
+
+    Lines that aren't turns are skipped; :func:`read_day` also counts them.
+    """
+    return read_day(path).turns
 
 
 def _append_bytes(f: BinaryIO, data: bytes) -> None:
