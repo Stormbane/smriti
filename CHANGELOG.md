@@ -89,6 +89,20 @@ All notable changes to this project are documented here, following
 - The agent doc the installer writes (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`)
   no longer says memory arrives when a file is touched; rerun the installer to
   refresh it.
+- A memory root with no `.smriti/wake-context.md`, as every new install is
+  (nothing creates it), wakes with an identity section: `identity.md` then
+  `mind/mind.md`, as they are. A root that has the file wakes as before.
+- `SMRITI_CLAUDE_TIMEOUT` sets the `claude -p` timeout, in seconds (default
+  300); `NARADA_CLAUDE_TIMEOUT`, its old name, is still read when it isn't set.
+- Memory text is fsynced: every write through `smriti.core.memwrite` (entries,
+  notes, todos, findings, decisions, feature specs, the handoff, the outbox,
+  renders, digests and rollups) and every write of the morning's ledger is on
+  the disk before the call returns, with its directory on POSIX. The `index.md`
+  listings, the index and state files aren't. It costs about 0.8 ms a write at
+  the median, and now and then a flush that waits for the disk.
+- A nightly that can't open its lock file doesn't run: it skips, fails (exit 1),
+  and its status, which the wake shows, says why. It ran without exclusion
+  before.
 
 ### Removed
 
@@ -166,6 +180,16 @@ The code of each is in the git history.
   failed compose sent nothing that day. `smriti morning --dry-run` falls back the
   same way.
 
+- A day-file the nightly could read only partway was rendered and digested from
+  what was read, replacing the day's render and digest with part of them. It now
+  publishes nothing from such a read: the render and digest stay, the status and
+  the wake name the day, and the next night reads it again.
+- A digest's `tz_offset` was `None` for a named zone and, for the system's zone,
+  the offset on the night it ran rather than on the day it digests. It is the
+  digested day's now; a zone behind UTC is written with a sign (`-5:00:00`).
+- `smriti_write_handoff` could say it overwrote a letter a wake had just
+  archived.
+
 ### Security
 
 - Every write of memory text into the tree is masked at one chokepoint,
@@ -189,6 +213,9 @@ The code of each is in the git history.
   `smriti status` repeats it until `private/KEY-WAS-COMMITTED.txt` is deleted.
   `docs/PRIVACY.md` has the steps. The move happens once, under a lock, with
   `.key` in `private/.gitignore` before the key is written.
+- The nightly's status file (`log/.nightly-status.json`, which backups commit and
+  push) held provider errors as they were, so a credential a CLI's error quoted
+  reached the remote. Every string in it is masked, as the morning's status was.
 
 ## [0.2.0] - 2026-11-06
 

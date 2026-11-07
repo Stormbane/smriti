@@ -649,7 +649,7 @@ a recheck.
   findings are H12.
 - **H12**: done (merged by 5323e58; H12.8 dropped). H12.10: outside review #6 at `5323e58`; its findings are H13.
 - **H13**: done (merged by 32ebc04; all CI green). H13.7 (fsync) measured and not kept: it slowed writes beyond noise. H13.13: outside review #7 at `9247509`; its findings are H14.
-- **H14**: planned, awaiting approval.
+- **H14**: approved. H14.7 and H14.8 merged by `46e4b11`; H14.1-H14.6 implemented on `hardening/h14a` (not yet reviewed or merged). H14.9, outside review #8, follows.
 - **H14.7 done** (2026-11-08, `hardening/h14b`; not yet reviewed or merged). Three
   removals, each its own commit with its tests; the code is in the git history.
   - The private store: `smriti.private`, the CLI's init on every command,
@@ -694,6 +694,85 @@ a recheck.
   file goes in `%TEMP%\smriti-locks`, which holds 26,159 never-deleted files
   today, and the branch no longer touches it. The rest is within the run's
   noise (0.90-1.10); the top-5 results and the wake text are the same.
+- **H14.1 implemented** (2026-11-08, `hardening/h14a`, rebased onto
+  `46e4b11`; not yet reviewed or merged). Codex's finding held. The
+  morning's recursive scrub is `smriti.core.scrub.scrub_json`, and both
+  status writers use it: every string at any depth, dict keys too, and a
+  value JSON has no type for as its `str`. The run's in-memory status is unchanged; only the file is masked. A
+  test has a provider raise with a synthetic key and token in its message: the
+  status file holds `[redacted]` in `llm_attempts` and the digest's error,
+  and neither canary.
+- **H14.2 implemented** (same branch). UNAVAILABLE now skips the night: no
+  steps, `skipped`, not ok, `run_lock: "unavailable"` and a `reason`, written
+  to the status file, which the wake shows as `NIGHTLY SKIPPED for <day>:
+  <reason>`; `smriti nightly` exits 1. BUSY is unchanged (ok, exit 0, the
+  status file left alone). The test that pinned the old behaviour was replaced
+  on purpose by one that expects the skip.
+- **H14.3 implemented** (same branch). Codex's finding held, reproduced with
+  a file that gives one line and then raises. `writer.read_whole_day` raises
+  `DayUnreadable` (an OSError) on an incomplete read; the render and the
+  digest (without a snapshot) read with it. The scan no longer judges a day it
+  couldn't read whole (a prefix's hash said "stale" and sent it to the
+  render). A day unreadable at the scan or at the render keeps its render and
+  digest, is listed in the render step's `unreadable`, keeps its dirty marker
+  (which is also cleared only from a whole read), and is read again the next
+  night. Beyond the brief: an ok night's while-you-slept line names the days
+  it couldn't read, so their staleness isn't silent; the night stays ok, as the
+  scan's unreadable days already left it (H13.8's test). Rollups read digests,
+  which no longer come from a partial read, and already fail on a member they
+  can't read. `read_day_turns` stays, documented as returning the prefix, for
+  presence.
+- **H14.4 implemented** (same branch). Without `.smriti/wake-context.md` the
+  identity section is `identity.md` then `mind/mind.md`, each as it is under
+  its path (a missing or empty one left out; neither, no section). Same cap,
+  floor and shrink order; the cut notice names the files shown. The template's
+  comments stay in: in a new root they tell the agent the file is its to
+  write. With the file present nothing changes: on a copy of the reference
+  tree, master's and this branch's identity blocks and notices are identical.
+  Beyond the brief: an audience overlay is now shown when `wake-context.md` is
+  missing (it was dropped with it).
+- **H14.5 implemented** (same branch), one commit each.
+  1. `SMRITI_CLAUDE_TIMEOUT`, then `NARADA_CLAUDE_TIMEOUT`, then 300 s; a blank
+     value counts as unset. INSTALL.md says so.
+  2. `tz_offset` is the zone's offset at the digested day's local noon.
+     Written as before for a zone ahead of UTC (`10:00:00`); a zone behind is
+     `-5:00:00`, not `-1 day, 19:00:00`. Tested with Europe/London either side
+     of 2026-03-29 (skipped where Python has no tz database).
+  3. `fts_terms`' docstring says the vocab table is in main, with the temp one
+     only for an older index.
+  4. The handoff's `overwriting` is read under the handoff lock.
+  5. `store.schema.serialize_f32`, used by the indexer and search.
+  6. The style pass, the branch's last commit: see its own entry.
+  Not done: "the private store is set up only by commands that use it" (H14.7
+  removes the store).
+- **H14.6 implemented** (same branch; Suti's decision). `write_atomic` and
+  `create_new` take `durable` (default False); memwrite's three writes are
+  durable by default (entries, notes, todos, findings, decisions, specs, the
+  handoff, the outbox, and the nightly's renders, digests and rollups: a dozen
+  fsyncs a night, and a digest costs an LLM call to redo). `index.md` listings
+  pass `durable=False` (rebuilt by the next write in the directory, and every
+  write pays for them). The morning's ledger is durable at every write.
+  Durable: the temp file fsynced before `os.replace`, the directory after on
+  POSIX (best effort; nothing on Windows); an append fsyncs before its lock is
+  let go, and the directory when the file was new.
+  Measured. `scripts/bench.py`, master `b4ba2c9` against the branch at
+  `dad61da` (before the rebase, so both sides still took the shared temp-dir
+  lock that H14.8 removed), on fresh copies of the reference tree, 13 queries,
+  two alternating rounds: `smriti_write` p50 64 → 117 ms, max 140 → 171 ms. By
+  round, A 64.7 and 62.3 ms, B 173.2 and 61.7: B's first round had three writes
+  of 173, 257 and 260 ms, its second matched A's. Nothing else beyond noise
+  (warm read p50 197/201 ms, the wake 830/812 ms, `smriti index` 17.5/17.6 s);
+  the top 5 the same for every query, the wake 9,448 characters on both sides.
+  So the median cost is small and the tail isn't; timed alone (300 alternating
+  calls each, in a scratch directory on the same SSD): `append_memory` (1 kB,
+  under its edit lock) median 7.79 → 8.55 ms, p99 20 → 50 ms; `write_memory`
+  (5 kB) 1.22 → 2.04 ms, p99 6.2 → 49.5 ms, max 46 → 106 ms. About 0.8 ms a
+  write, and now and then a flush that waits for the disk, up to a few hundred
+  milliseconds. Suti accepted the cost before it was measured.
+- **`read_day_turns` removed** (same branch, after the rebase). Its last
+  caller, `daylog.presence`, went with H14.7, and a reader that returns a
+  prefix as the day is the trap H14.3 closed; the tests read with
+  `read_whole_day`.
 - **H13.8, the nightly's part, implemented** (2026-11-07, `hardening/h13c`;
   not yet reviewed or merged). Opus's three findings held.
   - The stale-day scan read every day-file in the history every night to
