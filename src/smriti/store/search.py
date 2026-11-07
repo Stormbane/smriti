@@ -18,12 +18,15 @@ import logging
 import re
 import sqlite3
 import struct
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from smriti.store.schema import IndexDB
+
+if TYPE_CHECKING:
+    from smriti.embed.identity import Embedded
 
 log = logging.getLogger(__name__)
 
@@ -258,57 +261,95 @@ def _snapshot(conn: IndexDB) -> Iterator[None]:
         raw.commit()
 
 
-def _fetch_candidate(conn: IndexDB, rowid: int) -> _Candidate | None:
-    row = conn.execute(
-        "SELECT id, source, heading, content, trunk_distance FROM chunks WHERE rowid = ?",
-        (rowid,),
-    ).fetchone()
-    if not row:
-        return None
-    return {"chunk_id": row[0], "source": row[1], "heading": row[2], "content": row[3],
-            "trunk_distance": row[4]}
+def _fetch_candidates(conn: IndexDB, rowids: list[int]) -> dict[int, _Candidate]:
+    """The chunks at ``rowids``, by rowid (one statement; a rowid with no chunk is left out)."""
+    if not rowids:
+        return {}
+    marks = ",".join("?" * len(rowids))
+    rows = conn.execute(
+        "SELECT rowid, id, source, heading, content, trunk_distance FROM chunks "
+        f"WHERE rowid IN ({marks})", rowids).fetchall()
+    return {row[0]: _candidate(row[1:]) for row in rows}
 
 
-def _vector_leg(conn: IndexDB, query: str, candidate_k: int,
+def _candidate(row: Sequence[Any]) -> _Candidate:
+    chunk_id, source, heading, content, distance = row
+    return {"chunk_id": chunk_id, "source": source, "heading": heading, "content": content,
+            "trunk_distance": distance}
+
+
+def _vector_leg(conn: IndexDB, query: str, embedded: Embedded, candidate_k: int,
                 scores: dict[int, float], candidates: dict[int, _Candidate]) -> str:
     """Fill ``scores`` and ``candidates`` from the vectors; return why not, or "".
 
-    The query's embedding carries the identity that made it, and it is
-    compared with the identity the index records in the same snapshot the
-    vectors are then read from: vectors of two models are never compared.
-    A mismatch is stale work (the model loaded here, or the service, came
-    before a migration): it is tried once more on a fresh embedding.
+    Runs inside the search's snapshot. The query's embedding, made before
+    it, carries the identity that made it, and it is compared with the
+    identity the index records in the snapshot the vectors are then read
+    from: vectors of two models are never compared. A mismatch is stale
+    work (the model loaded here, or the service, came before a migration):
+    the query is embedded once more, afresh.
     """
     from smriti.embed import provider as embedding
     from smriti.embed.identity import recorded_identity, vec_table_dimension
 
     mismatch = ""
-    for _attempt in range(2):
-        embedded = embedding.embed(embedding.embedder(), [query], "query")
-        with _snapshot(conn):
-            recorded = recorded_identity(conn)
-            if recorded is not None and not recorded.compatible(embedded.identity):
-                mismatch = (f"the query was embedded with {embedded.identity.describe()}, "
-                            f"the index with {recorded.describe()}")
-            elif vec_table_dimension(conn) is None:
-                return "the index has no vectors yet"
-            else:
-                rows = conn.execute(
-                    """SELECT rowid, distance
-                       FROM chunks_vec
-                       WHERE embedding MATCH ?
-                       AND k = ?""",
-                    (_serialize_f32(embedded.vectors[0]), candidate_k),
-                ).fetchall()
-                normed = _normalize([1.0 - r[1] for r in rows])  # lower distance = higher
-                for (rowid, _), ns in zip(rows, normed, strict=True):
-                    scores[rowid] = ns
-                    cand = _fetch_candidate(conn, rowid)
-                    if cand is not None:
-                        candidates[rowid] = cand
-                return ""
-        embedding.forget_provider()
+    for attempt in range(2):
+        if attempt:
+            embedding.forget_provider()
+            embedded = embedding.embed(embedding.embedder(), [query], "query")
+        recorded = recorded_identity(conn)
+        if recorded is not None and not recorded.compatible(embedded.identity):
+            mismatch = (f"the query was embedded with {embedded.identity.describe()}, "
+                        f"the index with {recorded.describe()}")
+            continue
+        if vec_table_dimension(conn) is None:
+            return "the index has no vectors yet"
+        rows = conn.execute(
+            """SELECT rowid, distance
+               FROM chunks_vec
+               WHERE embedding MATCH ?
+               AND k = ?""",
+            (_serialize_f32(embedded.vectors[0]), candidate_k),
+        ).fetchall()
+        normed = _normalize([1.0 - r[1] for r in rows])  # lower distance = higher
+        found = _fetch_candidates(conn, [r[0] for r in rows])
+        for (rowid, _), ns in zip(rows, normed, strict=True):
+            scores[rowid] = ns
+            if rowid in found:
+                candidates[rowid] = found[rowid]  # in the order found: it breaks ties
+        return ""
+    embedding.forget_provider()
     return f"embedding identity mismatch: {mismatch}"
+
+
+def _keyword_leg(conn: IndexDB, query: str, candidate_k: int,
+                 scores: dict[int, float], candidates: dict[int, _Candidate]) -> None:
+    """Fill ``scores``, and ``candidates`` with the chunks only it found, from FTS5.
+
+    Inside the search's snapshot, so the chunks read are the ones matched: a
+    writer replacing chunks meanwhile (SQLite reuses their rowids) can't
+    pair one chunk's rank with another's text.
+    """
+    # Each term a quoted phrase, ORed for broad recall: quoted, no
+    # query ("claude -p 120s", `e.g.`, `it's`, NEAR) can break the parser.
+    fts_query = fts_match(fts_terms(conn, query))
+    if not fts_query:
+        return
+    rows = conn.execute(
+        """SELECT rowid, rank
+           FROM chunks_fts
+           WHERE chunks_fts MATCH ?
+           ORDER BY rank
+           LIMIT ?""",
+        (fts_query, candidate_k),
+    ).fetchall()
+    # FTS5 rank is negative (lower = better), flip for normalization
+    normed = _normalize([-r[1] for r in rows])
+    found = _fetch_candidates(conn, [r[0] for r in rows if r[0] not in candidates])
+    for (rowid, _), ns in zip(rows, normed, strict=True):
+        scores[rowid] = ns
+        if rowid in found:
+            candidates[rowid] = found[rowid]
 
 
 def search(
@@ -358,59 +399,54 @@ def search_with_status(
     t0 = _time.monotonic()
 
     candidates: dict[int, _Candidate] = {}  # rowid → {source, heading, content, ...}
-
-    # ── Vector search ────────────────────────────────────────────────
     has_vec = conn.has_vec and use_vectors
     keyword_only = "" if has_vec or not use_vectors else "sqlite-vec is not available"
     vec_scores: dict[int, float] = {}
-
+    fts_scores: dict[int, float] = {}
     pending = 0
-    if has_vec:
-        from smriti.embed.provider import failure_reason
-        from smriti.store.schema import pending_vectors
 
-        pending = pending_vectors(conn)
+    # The query is embedded before the snapshot opens: a read transaction
+    # held while the embedder answers would only pin the WAL.
+    embedded: Embedded | None = None
+    if has_vec:
+        from smriti.embed import provider as embedding
+
         try:
-            keyword_only = _vector_leg(conn, query, candidate_k, vec_scores, candidates)
+            embedded = embedding.embed(embedding.embedder(), [query], "query")
         except Exception as exc:  # noqa: BLE001 — logged and reported; falls back to keywords
             log.warning("Vector search failed; searching by keyword only: %s", exc)
-            keyword_only = failure_reason(exc)
-        if keyword_only:
-            # Fall back to exactly a keyword-only search: without this the
-            # vector weight stayed in the sum with nothing behind it, and
-            # every score silently lost half its range.
-            has_vec = False
-            vec_scores.clear()
-            candidates.clear()
+            keyword_only = embedding.failure_reason(exc)
 
-    # ── FTS search ───────────────────────────────────────────────────
-    has_fts = conn.has_fts
-    fts_scores: dict[int, float] = {}
+    # Every read of the index, both legs, in one snapshot: a writer that
+    # replaces chunks meanwhile can't pair one chunk's score with another's
+    # text, nor the two legs' scores of a rowid with two chunks. WAL lets
+    # writers commit meanwhile; this search just doesn't see them.
+    with _snapshot(conn):
+        if has_vec:
+            from smriti.embed.provider import failure_reason
+            from smriti.store.schema import pending_vectors
 
-    if has_fts:
-        try:
-            # Each term a quoted phrase, ORed for broad recall: quoted, no
-            # query ("claude -p 120s", `e.g.`, `it's`, NEAR) can break the parser.
-            fts_query = fts_match(fts_terms(conn, query))
-            if fts_query:
-                rows = conn.execute(
-                    """SELECT rowid, rank
-                       FROM chunks_fts
-                       WHERE chunks_fts MATCH ?
-                       ORDER BY rank
-                       LIMIT ?""",
-                    (fts_query, candidate_k),
-                ).fetchall()
-                # FTS5 rank is negative (lower = better), flip for normalization
-                normed = _normalize([-r[1] for r in rows])
-                for (rowid, _), ns in zip(rows, normed, strict=True):
-                    fts_scores[rowid] = ns
-                    if rowid not in candidates:
-                        cand = _fetch_candidate(conn, rowid)
-                        if cand is not None:
-                            candidates[rowid] = cand
-        except sqlite3.Error as exc:
-            log.warning("FTS search failed: %s", exc)
+            pending = pending_vectors(conn)
+            if embedded is not None:
+                try:
+                    keyword_only = _vector_leg(conn, query, embedded, candidate_k,
+                                               vec_scores, candidates)
+                except Exception as exc:  # noqa: BLE001 — logged and reported; keywords instead
+                    log.warning("Vector search failed; searching by keyword only: %s", exc)
+                    keyword_only = failure_reason(exc)
+            if keyword_only:
+                # Fall back to exactly a keyword-only search: without this the
+                # vector weight stayed in the sum with nothing behind it, and
+                # every score silently lost half its range.
+                has_vec = False
+                vec_scores.clear()
+                candidates.clear()
+
+        if conn.has_fts:
+            try:
+                _keyword_leg(conn, query, candidate_k, fts_scores, candidates)
+            except sqlite3.Error as exc:
+                log.warning("FTS search failed: %s", exc)
 
     if not candidates:
         return SearchOutcome([], keyword_only, pending)
