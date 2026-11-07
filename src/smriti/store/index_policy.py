@@ -5,7 +5,7 @@ pass in ``index_tree`` drops chunks of any source that's gone from disk or
 that the policy now excludes, so tightening the policy also cleans indexes
 built before it.
 
-Excluded, and why (retrieval eval, 2026-11-04):
+Excluded, and why (from the retrieval eval):
 
 - ``.smriti/``, ``.git/``: system state, not memory.
 - ``private/``: the encrypted private store. Its key is in ``private/.key``,

@@ -12,6 +12,9 @@ from smriti.mcp.tool import Arguments, Tool, ToolError
 if TYPE_CHECKING:
     from smriti_reference.notify import Delivery
 
+# Each handler imports what it writes or sends with when it is called: the
+# server imports this module to list its tools, and listing them stays cheap.
+
 Sender = Callable[[str, str], "Delivery"]
 
 # Tests replace this (or pass ``sender=``) so no real message is sent.
@@ -54,8 +57,8 @@ def handle_tell_suti(arguments: Arguments, sender: Sender | None = None) -> str:
 def handle_ask_suti(arguments: Arguments) -> str:
     """Append a structured question/decision-request to ~/.narada/outbox/suti-comms.md.
 
-    outbox/ holds Narada->Suti communications. It was kept out of the
-    consolidation pass's input, which went with the deep pipeline (H3).
+    outbox/ holds Narada->Suti communications, not memory to search or
+    summarise.
     """
     from datetime import datetime, timezone
 
@@ -100,8 +103,8 @@ def handle_ask_suti(arguments: Arguments) -> str:
 def handle_propose_goal_shift(arguments: Arguments) -> str:
     """Append a goal-shift proposal to ~/.narada/outbox/goals-proposals-{date}.md.
 
-    Lives in outbox/, not inbox/: the removed consolidation pass (H3) read
-    inbox/ as external research, and these are Narada's own proposals.
+    Lives in outbox/, not inbox/: inbox/ holds external research, and these
+    are Narada's own proposals.
     """
     from datetime import datetime
 
@@ -111,7 +114,7 @@ def handle_propose_goal_shift(arguments: Arguments) -> str:
     from smriti.daylog.scrub import scrub
 
     # Masked here, not only in the file: the reply names the entry by its title,
-    # and resolving it looks for the heading as written (Codex review of H12.1).
+    # and resolving it looks for the heading as written.
     title = scrub(one_line(arguments.get("title", "")))
     rationale = arguments.get("rationale", "").strip()
     proposed_change = arguments.get("proposed_change", "").strip()

@@ -7,6 +7,10 @@ from typing import TYPE_CHECKING
 from smriti.core.frontmatter import one_line
 from smriti.mcp.tool import Arguments, Tool, ToolError
 
+# Each handler imports the store, the writer and search when it is called: the
+# server imports this module to list its tools, and listing them stays cheap
+# (tests/test_import_costs.py).
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -22,9 +26,9 @@ MAX_TOP_K = 50
 def _get_db() -> IndexDB:
     """Read-only handle for search. The MCP server never does schema
     work: ensure_schema WRITES (meta upserts, DDL, an FTS write-probe),
-    and with one server per Claude/codex session those writes deadlocked
-    reads across the fleet ("database is locked", 2026-08-27). The
-    indexer owns the schema; this process only reads it."""
+    and with one server per Claude/codex session those writes would lock
+    out each other's reads ("database is locked"). The indexer owns the
+    schema; this process only reads it."""
     global _db, _db_path
     from smriti.core.tree import smriti_db_path
     from smriti.store.schema import open_readonly

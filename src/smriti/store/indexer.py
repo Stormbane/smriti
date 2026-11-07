@@ -150,7 +150,7 @@ def _insert_row(conn: IndexDB, row: _Row, indexed_at: str) -> None:
     rowid = conn.execute("SELECT rowid FROM chunks WHERE id = ?", (cid,)).fetchone()[0]
     # Guard against orphaned vec rows: INSERT OR REPLACE on chunks frees a
     # rowid without any trigger cleaning its chunks_vec row (vec0 has no
-    # triggers), and crash-era partial commits left such orphans behind.
+    # triggers), and an index written in parts can hold more such orphans.
     # When SQLite recycles one of those rowids the plain INSERT hits "UNIQUE
     # constraint failed on chunks_vec" and the whole incremental index fails.
     # Delete-then-insert is idempotent.
@@ -475,9 +475,10 @@ def _commit(conn: IndexDB, ours: EmbeddingIdentity, dim: int, full: bool, root: 
             stats: dict[str, int]) -> None:
     """Write the run in one transaction, reconciled with what other writers recorded."""
     # Searches keep seeing the old index until this commits, and a run
-    # that fails anywhere leaves it as it was: a full run used to
-    # commit its delete-everything before the embed (minutes), so
-    # search found nothing meanwhile, and nothing at all if it crashed.
+    # that fails anywhere leaves it as it was: a full run's delete of
+    # everything is in this transaction, never committed before the embed
+    # (minutes), when search would find nothing, or nothing at all after
+    # a crash.
     now = datetime.now(timezone.utc).isoformat()
     conn.commit()
     conn.execute("BEGIN IMMEDIATE")
@@ -582,10 +583,9 @@ def index_file_result(path: Path, *, root: Path | None = None,
                       db: Path | None = None) -> FileIndexed:
     """Index exactly one file — the write-path fast lane.
 
-    ``smriti_write`` used to run a full ``index_tree`` inside every
-    session's MCP server: an embedding-model load plus a ~7000-file
-    scan per write, with N concurrent servers contending for the one
-    write lock (the "connection closed" era, ended 2026-09-06). This
+    A full ``index_tree`` per ``smriti_write`` would be an embedding-model
+    load plus a ~7000-file scan in every session's MCP server, with
+    concurrent servers contending for the one write lock. This
     upserts a single source in one short transaction: chunk, embed
     only its chunks, delete-then-insert. Same leak guard as
     ``index_tree`` — never leave a transaction open on failure.

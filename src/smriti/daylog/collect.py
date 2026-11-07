@@ -35,7 +35,7 @@ turn. A state file that can't be read counts as a fresh one: everything
 is read again from the start, and dedup absorbs it.
 
 A record longer than one read (``_MAX_CHUNK``; a pasted image is one
-base64 line) is skipped (H12.6). A whole read without a newline makes
+base64 line) is skipped. A whole read without a newline makes
 the pass look for the record's end, ``_SCAN_CHUNK`` at a time, holding
 no more than that in memory; at its newline the offset moves past it,
 and the skip counts as a parse error, is logged, and is recorded in the
@@ -128,7 +128,7 @@ def rescan_source(cfg: DaylogConfig, name: str, *, lock_timeout_s: float = 60.0)
     Only the capture state changes: each file's offset goes back to 0, so
     the next pass reads it all again, and the writer drops every turn the
     day-log already holds. It is how turns that an older adapter couldn't
-    read are backfilled (H12.17).
+    read are backfilled.
     """
     with writer_lock(cfg.lock_path, timeout_s=lock_timeout_s):
         state = DaylogState.load(cfg.state_path)

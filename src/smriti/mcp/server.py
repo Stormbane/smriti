@@ -121,10 +121,10 @@ def answer_line(line: str) -> Message | None:
 
     A line that isn't JSON gets JSON-RPC's parse error (-32700), and JSON that
     isn't an object its invalid request (-32600), each with a null id, since
-    none can be read (JSON-RPC 2.0, section 5.1); before, both went unanswered.
+    none can be read (JSON-RPC 2.0, section 5.1); neither goes unanswered.
     A line that isn't UTF-8 is not JSON either. ``main`` reads stdin with
     ``surrogateescape``, which keeps such bytes as lone surrogates instead of
-    raising (one bad byte used to end the server), and only they can put a
+    raising (a bad byte must not end the server), and only they can put a
     surrogate in a line read from stdin.
     """
     if not line.isascii():

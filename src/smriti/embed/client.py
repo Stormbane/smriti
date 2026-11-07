@@ -27,9 +27,9 @@ thread sends a ``hold`` at once and then every ``idle_s / 3`` (the service's
 own idle exit, from its answer), each on a connection of its own, so a hold
 never takes the one kept for requests. When a hold is due and the service
 is gone or draining, the thread starts the next one (throttled like any
-start), so the model is warm again before the next search. A service from
-before holds answers "unknown op": that instance isn't held again, and the
-next one is. ``smriti read``, hooks and the nightly don't hold.
+start), so the model is warm again before the next search. An older
+service, without holds, answers "unknown op": that instance isn't held
+again, and the next one is. ``smriti read``, hooks and the nightly don't hold.
 """
 
 from __future__ import annotations
@@ -462,9 +462,9 @@ class ServiceEmbedding:
         """The ready service's discovery record, starting one if needed, by ``deadline``.
 
         A query that finds the service still starting doesn't wait for it:
-        loading the model takes far longer than a query's 3 s, so every search
-        during a cold start used to spend all of them before falling back to
-        keywords. It falls back at once instead; a query that starts the
+        loading the model takes far longer than a query's 3 s, so waiting
+        would spend all of them before falling back to keywords. It falls
+        back at once instead; a query that starts the
         service waits only until the service says it is starting. A write
         still waits, up to its 30 s.
         """

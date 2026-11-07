@@ -285,8 +285,8 @@ def run_nightly(
             status.update(skipped=True, ok=True, reason="another nightly is running")
             return status
         if lock == UNAVAILABLE:
-            # No lock file could be opened (smriti.core.oslock says when): run as
-            # every nightly did before the lock, and say so.
+            # No lock file could be opened (smriti.core.oslock says when): run
+            # without it, and say so.
             log.warning("nightly: the run lock can't be taken; running without it")
             status["run_lock"] = "unavailable"
         _run_steps(cfg, status, target, rollup_cap=rollup_cap, digest_cap=digest_cap,
@@ -296,7 +296,12 @@ def run_nightly(
 
 def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
                rollup_cap: int, digest_cap: int, reindex: bool, witness: bool) -> None:
-    """Every step of one night, then the status file; under the run lock."""
+    """Every step of one night, then the status file; under the run lock.
+
+    The reconcile, witness and backup steps import their modules inside
+    their own ``try``, so a module that can't be imported fails that step,
+    in the status, and not the night.
+    """
     steps: dict[str, object] = status["steps"]  # type: ignore[assignment]
     attempts: list[dict[str, str]] = status["llm_attempts"]  # type: ignore[assignment]
 
@@ -336,7 +341,7 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
             if day not in to_digest and render_day(cfg, day) is not None:
                 rendered.append(day)
         # A digested day is rendered and digested from one read of its turns,
-        # so its digest hashes exactly what it summarised (H12.11).
+        # so its digest hashes exactly what it summarised.
         for day in digest_days:
             snapshot = render_snapshot(cfg, day)
             if snapshot is None:
@@ -399,8 +404,8 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
 
     # 8. Backup: the last commit and push the backup log records, whoever made
     # them (this night's witness, the hourly task), so a failing backup fails
-    # the night where the wake sees it (H12.13). A tree with nowhere to push
-    # isn't failing.
+    # the night where the wake sees it. A tree with nowhere to push isn't
+    # failing.
     try:
         from smriti.backup import backup_status
 
@@ -472,6 +477,6 @@ def _clear_dirty(cfg: DaylogConfig, dirty: set[str], digest_errors: dict[str, st
 
 
 def _write_status(path: Path, status: dict[str, object]) -> None:
-    # A temp name of its own (pid and thread): the name used to be the second,
-    # which two writers in the same second shared.
+    # write_atomic's temp name is the process's and thread's, so two writers
+    # never share one.
     write_atomic(path, json.dumps(status, indent=1, default=str))

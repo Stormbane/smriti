@@ -95,7 +95,7 @@ def open_readonly(db_path: Path, *, vectors: bool = True) -> IndexDB:
     write lock, busy_timeout rides out checkpoints, and no schema work
     happens — the indexer owns the schema, searchers just read it.
     Capability flags come from *what exists in the index*, not from
-    write-probes (the old FTS5 probe created a table, which a reader
+    write-probes (an FTS5 write-probe creates a table, which a reader
     neither can nor should).
 
     ``vectors=False`` skips loading sqlite-vec, for a reader of counts and

@@ -9,7 +9,7 @@ config edit, never a code change. Overrides live in
      "notify_cmd": ["...", "..."],
      "user_name": "Sam", "agent_name": "Ari"}
 
-Capture is off until it is configured (hardening H11.1). Without a
+Capture is off until it is configured. Without a
 daylog.json, or with one that names no source, nothing is captured; the
 same goes for a file that can't be read, isn't JSON or isn't an object,
 and :attr:`DaylogConfig.capture_off` says why. ``"capture": true`` turns
@@ -36,7 +36,7 @@ web for headlines; off, that call gets no tools at all.
 
 ``nightly_fallback`` (default none) names the provider the nightly's
 digests and rollups, and the morning message, fall back to when Claude
-Code fails, e.g. ``"codex_cli"``. It is opt-in (hardening H12.2): codex's
+Code fails, e.g. ``"codex_cli"``. It is opt-in: codex's
 read-only sandbox still reads the user's files, while the call reads
 untrusted transcripts. ``SMRITI_NIGHTLY_FALLBACK``, when set, wins
 (see :func:`smriti.daylog.digest.nightly_fallback`).
@@ -80,7 +80,7 @@ class DaylogConfig:
     # The morning call may search the web for headlines only when this is on;
     # off, it gets no tools at all, like the digest (see daylog.morning).
     morning_web_search: bool = False
-    # The provider to fall back to when claude_cli fails; "" means none (H12.2).
+    # The provider to fall back to when claude_cli fails; "" means none (opt-in).
     nightly_fallback: str = ""
 
     def speaker(self, who: str) -> str:
@@ -201,9 +201,8 @@ def load_config(root: Path | None = None) -> DaylogConfig:
 def _sources(raw: dict[str, object]) -> tuple[list[SourceSpec], str]:
     """What daylog.json captures: the sources, and why there are none when there are none.
 
-    Nothing unless the file says so: capturing every transcript on the
-    machine was the default until H11.1, so an install that never chose
-    copied them all.
+    Nothing unless the file says so, so an install that never chose
+    captures no transcript.
     """
     capture = raw.get("capture")
     if capture is False:

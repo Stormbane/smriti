@@ -34,10 +34,10 @@ class MCPRegistration(MCPCommand, total=False):
 # the installer — the one guaranteed to have smriti importable. A bare
 # "python" resolves against the SPAWNING process's PATH, and sessions
 # launched by other daemons (the hermes gateway leads PATH with its own
-# venv Scripts/) resolved it to an interpreter without smriti: instant
-# ModuleNotFoundError, surfaced to the harness as "Connection closed"
-# (brain/chat sessions, 2026-09-06). An existing bare-"python"
-# registration no longer matches, so installers repair it in place.
+# venv Scripts/) resolve it to an interpreter without smriti: an instant
+# ModuleNotFoundError, which the harness reports as "Connection closed".
+# A bare-"python" registration doesn't match, so installers repair it in
+# place.
 SMRITI_MCP_COMMAND: MCPCommand = {
     "command": sys.executable,
     "args": ["-m", "smriti.mcp_server"],

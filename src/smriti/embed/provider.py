@@ -65,7 +65,7 @@ def recorded_provider(db: Path | None = None) -> str | None:
     (vec search silently degrades to FTS) and at worst mixes native
     runtimes: trying onnxruntime first and then importing torch into the
     same process aborted intermittently with 0xC0000409 mid-model-load,
-    which the harness surfaced as "Connection closed" (2026-09-06).
+    which ends an MCP server (its harness reports "Connection closed").
     """
     if db is None:
         from smriti.core.tree import smriti_db_path
@@ -83,7 +83,7 @@ def recorded_provider(db: Path | None = None) -> str | None:
             ).fetchone()
             if row:
                 return cast(str | None, row[0])
-            # Indexes built before the provider was recorded (< e8d98c2)
+            # Indexes built before the provider was recorded
             # still name their model: infer the provider from it rather
             # than let the auto order pick a different one and strand
             # the vectors behind the dimension guard.
@@ -111,9 +111,9 @@ def provider_keys(db: Path | None = None, *, rebuild: bool = False) -> tuple[str
        --full``, which migrates the index to that provider).
     3. The auto order (:data:`AUTO_ORDER`).
 
-    So the override never makes a process embed against an index of another
-    model: before H12.5 the indexer let it win and the service didn't.
-    A rebuild without the override keeps the recorded provider.
+    So the override never makes a process, the indexer or the service, embed
+    against an index of another model. A rebuild without the override keeps
+    the recorded provider.
     """
     override = os.environ.get(OVERRIDE_ENV, "").strip().lower()
     if rebuild and override:

@@ -53,7 +53,7 @@ def compose_agent_doc(
     body = AGENT_MD_PATH.read_text(encoding="utf-8")
 
     # Drop the AGENT.md preamble (title + intro paragraph). The first
-    # H2 marks where the actual contract begins.
+    # ``##`` heading marks where the actual contract begins.
     marker = "\n## "
     idx = body.find(marker)
     if idx > 0:

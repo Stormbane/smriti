@@ -2,7 +2,7 @@
 
 Primary seat: ``claude_cli``, a subscription seat. A
 fallback seat, usually ``codex_cli``, only when configured
-(:func:`nightly_fallback`; opt-in since hardening H12.2). The subprocess
+(:func:`nightly_fallback`; opt-in). The subprocess
 is constrained to no tools/MCP — it holds no ``smriti_write`` license;
 anything notable belongs in the digest file itself, which lives in the
 tree and gets indexed.
@@ -129,11 +129,10 @@ def nightly_fallback(cfg: DaylogConfig | None) -> str:
     """The provider to fall back to when the primary fails, or "" for none.
 
     ``SMRITI_NIGHTLY_FALLBACK`` wins when it is set (empty: none); else
-    ``"nightly_fallback"`` in daylog.json; else none. Until H12.2 it was
-    ``codex_cli`` unless turned off, but codex's read-only sandbox still
-    lets it read any file the user can, and run commands that only read,
-    while it reads untrusted transcripts: a prompt injection in one could
-    make it copy a local file into a digest. So it is opt-in.
+    ``"nightly_fallback"`` in daylog.json; else none. It is opt-in because
+    codex's read-only sandbox still lets it read any file the user can, and
+    run commands that only read, while it reads untrusted transcripts: a
+    prompt injection in one could make it copy a local file into a digest.
     """
     env = os.environ.get("SMRITI_NIGHTLY_FALLBACK")
     if env is not None:
@@ -151,13 +150,13 @@ def _providers(cfg: DaylogConfig | None) -> list[str]:
 
 
 def prompt_fingerprint(cfg: DaylogConfig | None, *shaping: object) -> str:
-    """What shapes a nightly artifact besides its inputs, as a short hash (H12.12).
+    """What shapes a nightly artifact besides its inputs, as a short hash.
 
     *shaping* is the artifact's own: its prompts and the budgets that decide
     what its call sees. To it come the provider chain and the two speakers'
     names. An artifact records this as ``prompt_fp``; one whose recorded
     fingerprint differs from the current one is stale. One that records
-    none, written before H12.12, is judged without it.
+    none was written before artifacts carried it, and is judged without it.
     """
     user = cfg.user_name if cfg is not None else DEFAULT_USER_NAME
     agent = cfg.agent_name if cfg is not None else DEFAULT_AGENT_NAME
@@ -443,7 +442,7 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]], 
     """Write ``DD-digest.md`` for *day*. Returns None if there is no log.
 
     The digest records the input hash of the turns behind the text it
-    summarised, so it is stale whenever that text is (H12.11). The nightly
+    summarised, so it is stale whenever that text is. The nightly
     passes the *snapshot* it rendered the day from: the rendered text, the
     turns it was rendered from and their hash, all from one read. Without
     one, the digest summarises ``DD.md`` as it is and records the hash that

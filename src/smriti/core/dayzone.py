@@ -126,10 +126,10 @@ _zone_looks: dict[Path | None, _ZoneLook] = {}
 def _configured_zone(root: Path | None) -> tzinfo | None:
     """daylog.json's ``timezone`` for ``root`` (the process's memory root when None).
 
-    Within :data:`ZONE_RECHECK_S` of the last look this is a dict lookup:
-    before the hardening the zone was an environment lookup only, and a
-    ``stat`` per captured turn made a 10,000-turn reconcile's day lookups
-    20 times slower. After it, the root is worked out again (it follows
+    Within :data:`ZONE_RECHECK_S` of the last look this is a dict lookup, so
+    a reconcile that places 10,000 turns doesn't pay a ``stat`` for each
+    (that made its day lookups 20 times slower). After it, the root is
+    worked out again (it follows
     ``SMRITI_ROOT``, so a change of root is seen within the second too) and
     one ``stat`` says whether the file changed; it is read and parsed again
     only when it did.

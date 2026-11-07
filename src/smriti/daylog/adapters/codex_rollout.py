@@ -17,8 +17,8 @@ either, or both (a thread started in one and continued in the other):
   ``payload.item`` is a ``UserMessage`` (text in its ``content`` blocks
   of type ``text``) or an ``AgentMessage`` (blocks of type ``Text``, the
   phase in ``item.phase``). It writes no ``user_message`` or
-  ``agent_message`` record, which is why nothing was captured from it
-  until H12.17.
+  ``agent_message`` record, so an adapter that read only those would
+  capture nothing from it.
 
 Kept, in either: the user's messages (role ``user``) and the agent's
 whose phase is ``final_answer`` or absent (role ``agent``).

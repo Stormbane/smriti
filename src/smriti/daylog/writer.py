@@ -10,8 +10,8 @@ power cut) can leave a day-file ending in part of a record. Before
 appending, the writer looks at whether the file ends in a newline and
 writes one first when it doesn't, so the fragment becomes a line of its
 own, which readers skip as invalid, and the records after it stay whole
-(before H12.6 the next record was glued onto the fragment and readers
-lost both). The torn turn itself comes back: the capture state that
+(glued onto the fragment, the next record would be lost with it). The
+torn turn itself comes back: the capture state that
 covers it is saved only after the append (see :mod:`smriti.daylog.collect`),
 so the next pass reads it again, and its id isn't among the ids the
 day-file holds.

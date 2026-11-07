@@ -329,7 +329,7 @@ def _wire_config(data: dict[str, Any], notes: list[str], memory_root: Path,
 
 
 def _agents_md_block(memory_root: Path, home: Path | None = None) -> str:
-    # The block carries no H1 — the title line belongs to the document
+    # The block carries no ``#`` title — the title line belongs to the document
     # (kept on migration, supplied via ``title=`` on creation).
     memory_rel = f"~/{memory_root.relative_to(_home(home)).as_posix()}"
     return compose_agent_doc(

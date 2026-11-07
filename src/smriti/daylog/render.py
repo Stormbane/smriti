@@ -9,7 +9,7 @@ The nightly renders a day from one read of its turns
 (:func:`render_snapshot`) and digests that rendered text, so a digest's
 hash is the hash of the turns it summarised: a turn appended after the
 read leaves both artifacts stale, never a digest that claims a turn its
-text lacks (hardening H12.11).
+text lacks.
 
 Autonomous sessions (zero human turns in this day) collapse to one
 marker line — derived here at render time, never written into the

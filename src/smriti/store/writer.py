@@ -260,9 +260,9 @@ def _append_entry(path: Path, entry_block: str) -> None:
 def _reindex_one(path: Path, root: Path) -> Written:
     """Index just the written file — the write path's fast lane.
 
-    A full ``index_tree`` here meant every MCP server did a ~7000-file
-    scan per write while contending for the one write lock (the
-    "connection closed" era). ``index_file`` embeds only this entry's
+    A full ``index_tree`` here would be a ~7000-file scan per write in
+    every MCP server, all contending for the one write lock. ``index_file``
+    embeds only this entry's
     chunks in one short transaction. Without vectors it is still indexed
     for keyword search, its vectors pending; the nightly full pass remains
     the backstop for anything a failed index leaves behind.

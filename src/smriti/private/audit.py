@@ -7,10 +7,8 @@ missing-key errors, permission errors. It never records:
 - Content (ciphertext or plaintext)
 - What the entity was thinking when it wrote
 
-Per Suti's 2026-04-12 decision on audit scope:
-
-> "failures are fine. lets not check audit every wake cycle but rather
->  during sleep (pruning)"
+The scope is the user's decision: failures only, and the log is looked
+at when it is pruned, never at every wake.
 
 The log lives at `<memory_root>/private/.audit.log` and is plain tab-
 separated text so the operator can tail it without parsing tools:

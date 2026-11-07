@@ -1,9 +1,8 @@
 """The reference profile's morning prompt: its agent's persona, the wandering sage.
 
-With web search on (``morning_web_search``), the text is the one ``smriti
-morning`` used before the persona became the profile's, word for word; only
-the location comes from config. Without it, the persona is the same and the
-prompt offers no news it couldn't fetch.
+With web search on (``morning_web_search``), the prompt asks for a few
+headlines; only the location comes from config. Without it, the persona is
+the same and the prompt offers no news it couldn't fetch.
 """
 
 from __future__ import annotations

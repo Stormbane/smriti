@@ -285,7 +285,7 @@ def run_witness(root: Path, night: str, *, push: bool = True) -> dict[str, objec
         calendars = stamp(write_manifest(root, night))
         if calendars < _MIN_CALENDARS:
             result["error"] = f"only {calendars} calendar(s) accepted the stamp"
-        # What the push did (H12.13); the nightly's backup step judges it.
+        # What the push did; the nightly's backup step judges it.
         result["push"] = _commit(root, "witness", push=push)
 
     unpushed = _git(root, "rev-list", "--count", "@{u}..HEAD").stdout.strip()

@@ -10,8 +10,8 @@ no further, and the next trigger catches up. The script appends every
 outcome to ``<git dir>/smriti-backup.jsonl``. :func:`trigger` reads back
 what its own run did (the nightly's witness step records it), and
 :func:`backup_status` the last commit and push, whoever ran them (the
-hourly task, the nightly), for ``smriti status`` and the nightly's status
-(hardening H12.13: before, a failed push was only in that log).
+hourly task, the nightly), for ``smriti status`` and the nightly's status,
+so a failed push shows where the wake and the CLI look, not only in that log.
 """
 from __future__ import annotations
 
@@ -25,6 +25,10 @@ from datetime import datetime, timezone, tzinfo
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+# subprocess is imported by the functions that run git or the script:
+# `smriti status` reads the backup log through this module and doesn't
+# import it (tests/test_import_costs.py).
 
 LOG_NAME = "smriti-backup.jsonl"  # the script's LOG_NAME
 _RUN_ENV = "SMRITI_BACKUP_RUN"  # the script puts it on each line of the run

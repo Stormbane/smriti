@@ -20,8 +20,8 @@ new memory root captures nothing, because capture can be turned on later
 (the nightly then reads the transcripts still on disk) while a push can't
 be taken back; an existing root keeps what its ``daylog.json`` says. A
 person's answers are recorded in ``<root>/.smriti/privacy.json``, so a
-rerun doesn't ask again. A "yes" recorded before capture needed saying so
-in ``daylog.json`` (it used to be the default) is written out there.
+rerun doesn't ask again. A "yes" an older install recorded, when capture
+needed no word in ``daylog.json``, is written out there.
 
 The installer calls :func:`decide` before it changes anything, then
 :func:`apply` after the core install, and prints :func:`summary` last.
@@ -86,8 +86,8 @@ PROMPT = "prompt"
 KEPT = "kept"
 DEFAULT = "default"
 SKIPPED = "skipped"
-# An answer recorded before H11.1, written into daylog.json: until then a
-# "yes" left daylog.json to the default sources, which now capture nothing.
+# A recorded "yes" written into daylog.json: an older install recorded it
+# and left daylog.json to the default sources, which capture nothing now.
 RECORDED = "recorded"
 _ANSWERED = (FLAG, PROMPT)
 
@@ -852,8 +852,8 @@ def decide(
     elif (answered is not None and answered.get("enabled") is True
           and (daylog is None or not {"capture", "sources"} & daylog.keys())):
         # Answered yes when a daylog.json without "capture" or "sources" (or
-        # none at all) meant the default sources; since H11.1 it means
-        # nothing (or only extra_sources), so the recorded answer is written out.
+        # none at all) meant the default sources; now it means nothing (or
+        # only extra_sources), so the recorded answer is written out.
         choice = Choice(True, RECORDED)
         notices.append(
             'capture is on, as you answered before (.smriti/privacy.json): .smriti/daylog.json '

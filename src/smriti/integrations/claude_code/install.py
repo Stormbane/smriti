@@ -317,7 +317,7 @@ Use plain Grep on the memory tree only for literal string match.
 
 
 def _claude_md_block(memory_root: Path, home: Path | None = None) -> str:
-    # The block carries no H1 — the title line belongs to the user's
+    # The block carries no ``#`` title — the title line belongs to the user's
     # document (kept on migration, supplied via ``title=`` on creation).
     memory_rel = f"~/{memory_root.relative_to(_home(home)).as_posix()}"
     return compose_agent_doc(

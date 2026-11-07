@@ -1,9 +1,8 @@
 """Codex CLI provider — shells out to ``codex exec``.
 
 The nightly cycle's fallback seat when one is configured (spec:
-subscription seats only, no per-token billing; opt-in since hardening
-H12.2). ``codex exec`` runs one non-interactive turn and prints the final
-message to stdout.
+subscription seats only, no per-token billing; opt-in). ``codex exec``
+runs one non-interactive turn and prints the final message to stdout.
 
 Isolation, and what it doesn't cover:
 

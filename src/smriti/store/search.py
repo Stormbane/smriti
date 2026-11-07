@@ -63,7 +63,7 @@ class Calibration:
 
 
 # Per model: similarities don't compare across models, and a model without an
-# entry is searched exactly as before. Measured 2026-11-07 on quality set v1:
+# entry is searched with neither adjustment. Measured on quality set v1:
 # - bge-m3 (onnx, int8; new installs): irrelevant queries' best hits 0.32-0.43,
 #   answerable 0.42-0.76, the lowest a paraphrase (0.4206) under two irrelevant
 #   ones; 0.40 sits between the next irrelevant (0.387) and it, so four of six
@@ -203,8 +203,8 @@ def fts_terms(conn: IndexDB | sqlite3.Connection, query: str, k: int = FTS_MAX_T
     """The query's keyword terms for FTS5: deduplicated, stopwords dropped, rarest *k* kept.
 
     ORing every word of a long prompt made FTS5 rank most of the index: p90
-    13 s on real prompts, against 31 ms with the 12 rarest terms (retrieval
-    eval, 2026-11-04). Rarity comes from a temp-schema fts5vocab table, so a
+    13 s on real prompts, against 31 ms with the 12 rarest terms (the
+    retrieval eval). Rarity comes from a temp-schema fts5vocab table, so a
     read-only connection works and index.db is never modified. Each term is
     matched as a quoted phrase (:func:`fts_match`); see :func:`_query_word`
     for what a word becomes.
@@ -260,10 +260,9 @@ def _query_word(word: str) -> str:
     A word with a letter or digit outside ASCII (``café``, ``स्मृति``, ``記憶``)
     is kept whole, less the punctuation at its ends: quoted, it reaches FTS5's
     unicode61 tokenizer, which splits and folds it as it did the indexed text
-    (``café`` is the token ``cafe``). Stripped to ``[A-Za-z0-9_]``, as every word
-    was before H12.3, ``café`` became ``caf`` and a Devanagari or CJK word
-    nothing. Any other word is stripped to those characters as before, so an
-    ASCII query asks for exactly what it always did: ``e.g.`` is ``eg``.
+    (``café`` is the token ``cafe``); stripped to ``[A-Za-z0-9_]``, ``café``
+    would be ``caf`` and a Devanagari or CJK word nothing. Any other word is
+    stripped to those characters: ``e.g.`` is ``eg``.
     """
     if word.isascii() or not any(c.isalnum() and not c.isascii() for c in word):
         return _ASCII_NONWORD.sub("", word)

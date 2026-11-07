@@ -11,7 +11,7 @@ legitimately quiet channel is distinguishable from a stalled tail.
 
 The day-log's own health rides along: how many lines of each day-file
 aren't records, as the writer last read it (a torn append leaves one),
-and how many torn last lines the writer has closed (H12.6). Both are
+and how many torn last lines the writer has closed. Both are
 written only when there is something to say, so a healthy state file
 looks as it did. An entry that can't be read is dropped, and that file
 is read again from the start; dedup absorbs the overlap.

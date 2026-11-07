@@ -4,7 +4,7 @@ Rollups are found by SCANNING for closed periods that are missing or
 stale, never by boundary-triggering — a missed night can't permanently
 skip a week.
 
-Staleness follows what made a rollup (hardening H12.12). Its frontmatter
+Staleness follows what made a rollup. Its frontmatter
 records ``members_hash``, a manifest of its members' content, taken from
 the bytes it read for its call and before that call: any change to a
 member, a digest regenerated from the same turns included, makes it
@@ -12,11 +12,11 @@ stale, and a regenerated week makes its month stale in turn. It records
 ``prompt_fp`` too (:func:`rollup_fingerprint`: its prompt, budgets,
 provider chain and names), and a different one now makes it stale.
 
-A rollup written before H12.12 has only ``inputs_hash``, a manifest of
-its members' input hashes (a file hash for a member that has none, as a
-rollup does). It is judged by that rule until it is regenerated for a
-reason that rule sees, so the upgrade itself regenerates nothing; from
-then on it carries the new fields. New rollups write ``inputs_hash`` too,
+A rollup in the older format, with no ``members_hash``, has only
+``inputs_hash``, a manifest of its members' input hashes (a file hash for
+a member that has none, as a rollup does). It is judged by that rule until
+it is regenerated for a reason that rule sees, so an upgrade regenerates
+nothing; from then on it carries the new fields. New rollups write ``inputs_hash`` too,
 so an older smriti still reads them as current.
 
 Week convention matches the journal tree: week N covers days
@@ -39,7 +39,7 @@ from smriti.daylog.digest import compose, prompt_fingerprint
 from smriti.daylog.render import head_field, head_of, input_hash_of, read_head
 
 _DIGEST_NAME_RE = re.compile(r"^(\d{2})-digest\.md$")
-_INPUTS_FIELD = "inputs_hash"  # the members' input hashes: the rule before H12.12
+_INPUTS_FIELD = "inputs_hash"  # the members' input hashes: the older format's rule
 _MEMBERS_FIELD = "members_hash"  # the members' content
 _PROMPT_FIELD = "prompt_fp"  # what made it besides its members (prompt_fingerprint)
 
@@ -79,7 +79,7 @@ class _Member:
         return "" if self.data is None else _short_hash(self.data.replace(b"\r\n", b"\n"))
 
     def input_hash(self) -> str:
-        """The rule before H12.12: the input hash it records, else its file's hash."""
+        """For the older format's rule: the input hash it records, else its file's hash."""
         if self.data is None:
             return ""
         return input_hash_of(head_of(self.data[:8192])) or _short_hash(self.data)
@@ -104,7 +104,7 @@ def _manifest(lines: Iterable[str]) -> str:
 
 
 def _input_manifest(members: list[_Member]) -> str:
-    """``inputs_hash``: the manifest of the members' input hashes (the rule before H12.12)."""
+    """``inputs_hash``: the manifest of the members' input hashes (the older format's rule)."""
     return _manifest(f"{m.path.name}:{m.input_hash()}" for m in members)
 
 
@@ -120,7 +120,7 @@ class Period:
     inputs: list[Path]  # member digest/rollup files, all existing
 
     def manifest_hash(self) -> str:
-        """The manifest of the members' input hashes: ``inputs_hash``, the rule before H12.12."""
+        """The manifest of the members' input hashes: ``inputs_hash``, the older format's rule."""
         return _input_manifest(_read_members(self.inputs))
 
     def is_current(self, cfg: DaylogConfig | None = None) -> bool:
@@ -135,7 +135,7 @@ class Period:
         recorded = head_field(head, _MEMBERS_FIELD)
         if recorded:
             return recorded == _content_manifest(members)
-        # Written before H12.12: its own rule, until it is regenerated.
+        # The older format (no members_hash): its own rule, until it is regenerated.
         return head_field(head, _INPUTS_FIELD) == _input_manifest(members)
 
 

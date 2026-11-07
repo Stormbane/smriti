@@ -22,6 +22,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from smriti.daylog.state import SourceState
 
+# Each command imports what it uses when it runs: every command is a new
+# process, and `smriti status` mustn't pay for the indexer, sqlite-vec or
+# numpy (tests/test_import_costs.py).
+
 # Ensure UTF-8 output on Windows
 if sys.platform == "win32":
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
@@ -91,8 +95,6 @@ def _cmd_read(args: argparse.Namespace) -> int:
 
 
 def _cmd_write(args: argparse.Namespace) -> int:
-    import sys
-
     from smriti.store.writer import write_entry
 
     # Content from argument or stdin
@@ -185,7 +187,7 @@ def _print_private_warning(root: Path) -> None:
 
 
 def _print_backup_status(root: Path) -> None:
-    """The last backup commit and push, from the backup script's log (H12.13)."""
+    """The last backup commit and push, from the backup script's log."""
     try:
         from smriti.backup import backup_status
         from smriti.daylog.model import day_tz
@@ -628,8 +630,8 @@ def main(argv: list[str] | None = None) -> int:
     p_eval = sub.add_parser(
         "eval", help="Run the search cases and the quality set against a synthetic fixture"
     )
-    # The search cases have run by default since the other modes went (H3); the
-    # flag that chose them still parses, so a script written for it runs the same.
+    # The search cases always run; --search is accepted and changes nothing, so a
+    # script that passes it runs the same.
     p_eval.add_argument("--search", action="store_true",
                         help="the search cases and the quality set (the default)")
     p_eval.add_argument("--llm", action="store_true",

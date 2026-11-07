@@ -31,7 +31,7 @@ from pathlib import Path
 MANAGED_BEGIN = "<!-- smriti:managed:begin -->"
 MANAGED_END = "<!-- smriti:managed:end -->"
 
-# Every H2 title smriti has ever generated into an agent doc, across
+# Every ``##`` title smriti has ever generated into an agent doc, across
 # template versions. Migration removes sections with these exact titles
 # (including their ### children) and replaces the first with the marked
 # block. Titles are matched on the text after "## ", stripped.
@@ -115,7 +115,7 @@ def classify_doc(path: Path) -> DocState:
 def write_managed_doc(path: Path, block_content: str, *, title: str | None = None) -> bool:
     """Create or rewrite the managed block; user content is untouchable.
 
-    ``title`` is the H1 line used only when creating a missing file —
+    ``title`` is the ``#`` title line used only when creating a missing file —
     the title belongs to the user's document, not to the block, so an
     existing doc always keeps its own.
 
@@ -148,8 +148,8 @@ _H2_RE = re.compile(r"^## +(.*?)\s*$", re.MULTILINE)
 def migrate_agent_doc(path: Path, block_content: str) -> Path:
     """One-time conversion of a legacy (unmarked) doc to the marked form.
 
-    Removes every H2 section whose title is in LEGACY_SECTION_TITLES
-    (heading through the line before the next H2, so ### children go
+    Removes every ``##`` section whose title is in LEGACY_SECTION_TITLES
+    (heading through the line before the next ``##``, so ### children go
     with their parent), inserts the marked block at the position of the
     first removed section, and preserves all other content byte-for-byte.
     If no legacy section is found the block is appended.
@@ -169,7 +169,7 @@ def migrate_agent_doc(path: Path, block_content: str) -> Path:
     text = path.read_text(encoding="utf-8")
     matches = list(_H2_RE.finditer(text))
 
-    # Section span: heading start → next H2 start (or EOF).
+    # Section span: heading start → next ``##`` heading's start (or EOF).
     spans_to_remove: list[tuple[int, int]] = []
     for i, m in enumerate(matches):
         if m.group(1).strip() in LEGACY_SECTION_TITLES:

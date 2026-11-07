@@ -108,14 +108,14 @@ class ClaudeCliProvider:
         except OSError as exc:
             raise LLMError(f"cannot create isolated LLM workdir: {exc}") from exc
 
-        # Isolation (renewal plan 0.4). The nightly audit found every internal
-        # call carrying the user's global CLAUDE.md and its hooks (a "SESSION
-        # ENDING ... MUST smriti_write" prompt hook, a Stop hook), which made
-        # digests open with preambles instead of content. --setting-sources
-        # drops user settings and their hooks; the workdir's own settings file
-        # (llm_workdir) excludes every CLAUDE.md; and smriti's instructions
-        # become the actual system prompt instead of riding in the user turn
-        # under Claude Code's agentic one. The file form is needed because
+        # Isolation (renewal plan 0.4): an internal call must not carry the
+        # user's global CLAUDE.md and hooks (a prompt hook that demands a
+        # smriti_write, a Stop hook), which make a digest open with a preamble
+        # instead of content. --setting-sources drops user settings and their
+        # hooks; the workdir's own settings file (llm_workdir) excludes every
+        # CLAUDE.md; and smriti's instructions become the actual system prompt
+        # instead of riding in the user turn under Claude Code's agentic one.
+        # The file form is needed because
         # cmd.exe would cut a multi-line argv value at its first newline.
         cmd.extend(["--setting-sources", "project,local"])
         if "--strict-mcp-config" not in cmd:  # user-scope MCP servers load regardless of settings

@@ -8,6 +8,10 @@ from pathlib import Path
 from smriti.core.frontmatter import one_line
 from smriti.mcp.tool import Arguments, Tool, ToolError
 
+# Each handler imports what it writes with when it is called: the server
+# imports this module to list its tools, and listing them stays cheap
+# (tests/test_import_costs.py).
+
 # Characters that would end or split the frontmatter's [tag, tag] list.
 _LIST_SYNTAX = str.maketrans("[],", "   ")
 
@@ -23,9 +27,8 @@ def _mentions(text: str, phrase: str) -> bool:
 
 def _slugify(text: str, max_len: int = 60) -> str:
     """Convert a title to a kebab-case slug."""
-    import re as _re
-    slug = _re.sub(r"[^\w\s-]", "", text.lower())
-    slug = _re.sub(r"[\s_]+", "-", slug).strip("-")
+    slug = re.sub(r"[^\w\s-]", "", text.lower())
+    slug = re.sub(r"[\s_]+", "-", slug).strip("-")
     return slug[:max_len] or "untitled"
 
 
@@ -60,8 +63,6 @@ def _feature_owners() -> tuple[str, str, str]:
 
 def handle_add_todo(arguments: Arguments) -> str:
     """Append to mirrors/{project}/ai/todo.md. Fails loud on unknown project."""
-    import re
-
     from smriti.core.files import edit_lock
     from smriti.core.memwrite import mask, write_memory
     from smriti.core.tree import tree_root
@@ -99,8 +100,8 @@ def handle_add_todo(arguments: Arguments) -> str:
         except OSError as exc:
             raise ToolError(f"could not read {todo_path}: {exc}") from exc
 
-        # The topic as a whole phrase, not a substring: "fix" used to match
-        # "prefix", and so almost anything.
+        # The topic as a whole phrase, not a substring: as a substring "fix"
+        # matches "prefix", and so almost anything.
         if _mentions(content, topic):
             return f"Skipped (topic already present): {topic[:60]}"
 
@@ -364,7 +365,6 @@ def handle_record_feature(arguments: Arguments) -> str:
 def handle_update_feature_status(arguments: Arguments) -> str:
     """Move a feature between active/shipped/abandoned and update frontmatter."""
     from datetime import datetime
-    import re as _re
 
     project = arguments.get("project", "").strip()
     slug = arguments.get("slug", "").strip()
@@ -410,13 +410,13 @@ def handle_update_feature_status(arguments: Arguments) -> str:
 
         # Read, mutate frontmatter
         text = current_path.read_text(encoding="utf-8")
-        text = _re.sub(
-            r"^status:\s*\S+", f"status: {new_status}", text, count=1, flags=_re.MULTILINE
+        text = re.sub(
+            r"^status:\s*\S+", f"status: {new_status}", text, count=1, flags=re.MULTILINE
         )
         if new_status == "shipped":
             date_str = datetime.now().astimezone().strftime("%Y-%m-%d")
-            text = _re.sub(
-                r"^shipped:\s*\S*", f"shipped: {date_str}", text, count=1, flags=_re.MULTILINE
+            text = re.sub(
+                r"^shipped:\s*\S*", f"shipped: {date_str}", text, count=1, flags=re.MULTILINE
             )
 
         # Append notes if provided
@@ -427,8 +427,8 @@ def handle_update_feature_status(arguments: Arguments) -> str:
                 else "## Status notes"
             )
             # Replace stub if it's the placeholder; else append
-            stub_re = _re.compile(
-                rf"^{_re.escape(section_title)}\n\n_Filled during build\._", _re.MULTILINE
+            stub_re = re.compile(
+                rf"^{re.escape(section_title)}\n\n_Filled during build\._", re.MULTILINE
             )
             if stub_re.search(text):
                 text = stub_re.sub(f"{section_title}\n\n{notes}", text)
