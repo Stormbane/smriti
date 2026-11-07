@@ -44,7 +44,8 @@ to `~/.<entity>/` as part of `python scripts/install.py`.
   notes/                          general observations
 
   .smriti/                        system state (not indexed)
-    wake-context.md               identity briefing for wake (edited by hand)
+    wake-context.md               identity briefing for wake (edited by hand; optional:
+                                  without it the wake shows identity.md and mind/mind.md)
     index.db                      search index (sqlite-vec + FTS5)
     metrics.jsonl                 event log
 ```

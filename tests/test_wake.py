@@ -203,3 +203,59 @@ class TestWakeEdgeCases:
         assert len(result.stdout) <= 10000, (
             f"Wake output {len(result.stdout)} chars exceeds 10K limit"
         )
+
+
+class TestIdentityFallback:
+    """H14.4 (Opus, outside review #7): nothing creates ``.smriti/wake-context.md``, so a
+    new root woke with no identity section. Without it, the section is the trunk's
+    identity files; with it, the wake is what it was."""
+
+    def test_a_fresh_root_from_the_template_shows_its_identity(
+            self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        from smriti.install.core import install_memory_template
+        from smriti.wake.briefing import briefing
+
+        root = tmp_path / "root"
+        root.mkdir()
+        install_memory_template(root)
+        capsys.readouterr()
+        assert not (root / ".smriti" / "wake-context.md").exists()
+        identity = (root / "identity.md").read_text(encoding="utf-8").strip()
+        mind = (root / "mind" / "mind.md").read_text(encoding="utf-8").strip()
+        assert "This file should be authored" in identity
+
+        text = briefing(root, cwd=tmp_path)
+        section = text.split("--- IDENTITY ---\n", 1)[1]
+        assert section.startswith(
+            f"### identity.md\n{identity}\n\n### mind/mind.md\n{mind}\n")
+
+    def test_a_long_identity_is_capped_and_named_in_the_notices(
+            self, tmp_path: Path) -> None:
+        from smriti.wake.briefing import CONTEXT_CAP, briefing
+
+        (tmp_path / "identity.md").write_text(
+            "# Identity\n" + "I am Ari, and I keep notes for Sam.\n" * 300, encoding="utf-8")
+        text = briefing(tmp_path, cwd=tmp_path)
+        start = text.index("--- IDENTITY ---\n")
+        section = text[start:text.index("\n\n", start)]
+        assert section.startswith("--- IDENTITY ---\n### identity.md\n# Identity\n")
+        assert len(section) <= len("--- IDENTITY ---\n") + CONTEXT_CAP
+        assert f"Read full: {tmp_path / 'identity.md'}" in text  # mind.md is absent
+
+    def test_no_identity_files_and_no_context_means_no_section(self, tmp_path: Path) -> None:
+        from smriti.wake.briefing import briefing
+
+        (tmp_path / "identity.md").write_text("  \n", encoding="utf-8")  # empty: left out
+        assert "--- IDENTITY ---" not in briefing(tmp_path, cwd=tmp_path)
+
+    def test_a_wake_context_is_used_as_it_was_whatever_the_identity_files_hold(
+            self, wake_tree: Path) -> None:
+        from smriti.wake.briefing import briefing
+
+        context = (wake_tree / ".smriti" / "wake-context.md").read_text(encoding="utf-8")
+        with_files = briefing(wake_tree, cwd=wake_tree)
+        assert f"--- IDENTITY ---\n{context.rstrip()}\n" in with_files
+        assert "### identity.md" not in with_files
+        (wake_tree / "identity.md").unlink()
+        (wake_tree / "mind" / "mind.md").unlink()
+        assert briefing(wake_tree, cwd=wake_tree) == with_files

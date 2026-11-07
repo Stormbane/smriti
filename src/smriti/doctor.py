@@ -136,7 +136,7 @@ def _briefing_checks(memory_root: Path, project: Path) -> list[Check]:
     agent = load_config(memory_root).agent_name
     return [
         Check("Core context", "--- IDENTITY ---" in payload,
-              "wake briefing (.smriti/wake-context.md)"),
+              "wake briefing (.smriti/wake-context.md, else identity.md)"),
         Check(
             "Hermes routing excluded",
             f"You are {agent}'s **receptionist**" not in payload,

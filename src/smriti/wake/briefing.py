@@ -9,7 +9,8 @@ package, ``profiles/reference/``.)
 
 Output order:
     1. PROJECT/SESSION header line, then any handoff letter
-    2. .smriti/wake-context.md (identity + threads briefing)
+    2. The identity section: .smriti/wake-context.md (identity + threads
+       briefing), else the trunk's identity.md and mind/mind.md
     3. While-you-slept line from the last nightly run
     4. System line from the last doctor run (host/doctor.json), if any
     5. The profile's sections, when daylog.json names a profile
@@ -177,15 +178,46 @@ def _read(path: Path) -> str | None:
         return None
 
 
-def _context_blocks(memory_root: Path, audience: str) -> list[_Block]:
+# The trunk's identity files, in the order the identity section shows them when
+# .smriti/wake-context.md is missing: who the agent is, then the synthesis of its
+# beliefs, values, desires and practices. A root made from memory_template/ has both.
+IDENTITY_FILES = ("identity.md", "mind/mind.md")
+
+
+def _identity_source(memory_root: Path) -> tuple[str, str] | None:
+    """The identity section's text, and its notice when cut ("Read full: ...").
+
+    ``.smriti/wake-context.md`` as it is, when it exists. Nothing in smriti
+    writes that file, so a new root has none, and its wake had no identity;
+    then the section is :data:`IDENTITY_FILES` as they are, each under its
+    path (a missing or empty one left out). None when there is neither.
+    """
     path = memory_root / ".smriti" / "wake-context.md"
     content = _read(path)
-    if content is None:
-        return []
-    blocks = [_Block(
-        "identity", "--- IDENTITY ---\n" + _cut(content, CONTEXT_CAP).rstrip("\n") + "\n",
-        floor=IDENTITY_FLOOR, label=f"Read full: {path}",
-    )]
+    if content is not None:
+        return content, f"Read full: {path}"
+    parts: list[str] = []
+    paths: list[str] = []
+    for rel in IDENTITY_FILES:
+        text = _read(memory_root / rel)
+        if text is None or not text.strip():
+            continue
+        parts.append(f"### {rel}\n{text.strip()}\n")
+        paths.append(str(memory_root / rel))
+    if not parts:
+        return None
+    return "\n".join(parts), f"Read full: {', '.join(paths)}"
+
+
+def _context_blocks(memory_root: Path, audience: str) -> list[_Block]:
+    blocks: list[_Block] = []
+    source = _identity_source(memory_root)
+    if source is not None:
+        content, label = source
+        blocks.append(_Block(
+            "identity", "--- IDENTITY ---\n" + _cut(content, CONTEXT_CAP).rstrip("\n") + "\n",
+            floor=IDENTITY_FLOOR, label=label,
+        ))
     targeted = memory_root / ".smriti" / "context" / f"{audience}.md"
     targeted_content = _read(targeted)
     if targeted_content is not None:
@@ -201,11 +233,13 @@ def _context_blocks(memory_root: Path, audience: str) -> list[_Block]:
 def _context_overflow_notices(memory_root: Path, audience: str) -> list[str]:
     """Identity files longer than CONTEXT_CAP were cut before sizing."""
     notices = []
-    for path in (memory_root / ".smriti" / "wake-context.md",
-                 memory_root / ".smriti" / "context" / f"{audience}.md"):
-        content = _read(path)
-        if content is not None and len(content) > CONTEXT_CAP:
-            notices.append(f"Read full: {path}")
+    source = _identity_source(memory_root)
+    if source is not None and len(source[0]) > CONTEXT_CAP:
+        notices.append(source[1])
+    targeted = memory_root / ".smriti" / "context" / f"{audience}.md"
+    content = _read(targeted)
+    if content is not None and len(content) > CONTEXT_CAP:
+        notices.append(f"Read full: {targeted}")
     return notices
 
 
