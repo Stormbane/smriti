@@ -103,7 +103,10 @@ class WakeSection:
     instead, so a broken source never breaks the wake. A ``pinned``
     section is never cut; any other is cut to ``floor`` after the
     journal and the project files, and before the identity summary.
-    ``label`` is the truncation notice shown when it is cut.
+    ``label`` is the truncation notice shown when it is cut. A ``memory``
+    section shows recorded text (notes, captured conversations, another
+    tool's records), so the briefing quotes it as data between memory tags,
+    as it does the journal (see :mod:`smriti.wake.briefing`).
     """
 
     name: str
@@ -113,6 +116,7 @@ class WakeSection:
     floor: int = 0
     pinned: bool = False
     label: str = ""
+    memory: bool = False
 
 
 @dataclass(frozen=True)

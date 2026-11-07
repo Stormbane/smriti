@@ -1,9 +1,10 @@
 """The reference profile's wake-briefing sections: HANDS, SUTI NOW, ACROSS SURFACES.
 
-Order, caps and pinning are the ones the briefing used before these
-sections became the profile's: Hands and Suti now are pinned (never
-cut), and Across surfaces is cut after the journal and the project
-files, down to ``ACROSS_FLOOR``, before identity is touched.
+Hands and Suti now are pinned (never cut), and Across surfaces is cut
+after the journal and the project files, down to ``ACROSS_FLOOR``, before
+identity is touched. Suti now (akhada's records, people notes) and Across
+surfaces (captured messages) are recorded text, quoted as data in memory
+tags; Hands is generated from the configuration and says how to act.
 """
 
 from __future__ import annotations
@@ -23,8 +24,10 @@ def wake_sections(ctx: WakeContext) -> list[WakeSection]:
     # The builders are looked up when called, so a test can replace one.
     return [
         WakeSection("hands", "HANDS", lambda: presence.hands_section(src), pinned=True),
-        WakeSection("suti", "SUTI NOW", lambda: presence.suti_now_section(src), pinned=True),
+        WakeSection("suti", "SUTI NOW", lambda: presence.suti_now_section(src), pinned=True,
+                    memory=True),
         WakeSection("across", "ACROSS SURFACES, last 24h",
                     lambda: presence.across_section(src),
-                    cap=presence.ACROSS_CAP, floor=ACROSS_FLOOR, label=ACROSS_LABEL),
+                    cap=presence.ACROSS_CAP, floor=ACROSS_FLOOR, label=ACROSS_LABEL,
+                    memory=True),
     ]
