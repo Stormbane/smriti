@@ -14,6 +14,7 @@ import os
 import stat
 import sys
 import tomllib
+import types
 from pathlib import Path
 
 import pytest
@@ -232,6 +233,36 @@ def test_a_linked_config_stays_a_link(home: Path) -> None:
     assert link.is_symlink()
     assert "smriti" in _json(target)["mcpServers"]  # type: ignore[operator]
     assert len(backups(target)) == 1
+
+
+def test_a_backup_that_fails_part_way_is_removed_and_the_file_left(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A part-written backup (a full disk) would otherwise be kept for ever as the first."""
+    path = tmp_path / "settings.json"
+    path.write_text('{"theme": "dark"}', encoding="utf-8")
+    real_fdopen = os.fdopen
+
+    class Full:
+        def __init__(self, fd: int) -> None:
+            self.f = real_fdopen(fd, "wb")
+
+        def __enter__(self) -> Full:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self.f.close()
+
+        def write(self, data: bytes) -> int:
+            self.f.write(data[:3])
+            raise OSError(28, "No space left on device")
+
+    # config_file's own os, so the locks and everything else keep the real one.
+    proxy = types.SimpleNamespace(**{k: getattr(os, k) for k in dir(os) if not k.startswith("__")})
+    proxy.fdopen = lambda fd, mode: Full(fd)
+    monkeypatch.setattr(config_file, "os", proxy)
+    done = edit_config(path, lambda text: '{"theme": "light"}')
+    assert not done.changed and "No space left" in done.refused
+    assert backups(path) == [] and path.read_text(encoding="utf-8") == '{"theme": "dark"}'
 
 
 def test_the_backups_are_pruned_oldest_kept(tmp_path: Path) -> None:

@@ -106,10 +106,14 @@ def _backup(path: Path, data: bytes) -> Path:
                          0o600)
         except FileExistsError:
             continue
-        with os.fdopen(fd, "wb") as f:
-            if mode is not None:
-                os.chmod(backup, mode)
-            f.write(data)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                if mode is not None:
+                    os.chmod(backup, mode)
+                f.write(data)
+        except BaseException:  # noqa: BLE001 — a part-written backup would pass for the first; re-raised
+            backup.unlink(missing_ok=True)
+            raise
         break
     else:
         raise FileExistsError(f"no free backup name for {path}")
