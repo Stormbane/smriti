@@ -251,7 +251,9 @@ file can be opened at all, the night runs as before and its status says
    The result is the full scan's. The status's render step says what the
    scan did (`scan`: the day-files, how many were read, whether it was full)
    and, when there are any, each day's lines that aren't turns
-   (`corrupt_lines`), which the readers skip.
+   (`corrupt_lines`), which the readers skip. A day-file that can't be read
+   (an OSError other than a missing file) isn't recorded in the marker, so the
+   next night reads it again; the render step names it (`unreadable`).
 3. **Render** `DD.md` from the sorted JSONL. A day that is digested tonight is
    rendered from one read of its turns, and the digest gets that rendered
    text, those turns and their hash (H12.11): a turn appended after the read
