@@ -133,8 +133,8 @@ def smoke(wheel: Path, work: Path, extras: str) -> None:
 
     print("== install", flush=True)
     out = run([python, "-m", "smriti.install", "--harness", "none", "--memory-root", str(root),
-               "--projects-root", str(projects), "--capture", "--remote-is-private",
-               "--skip-recall-daemon"], cwd=work, env=env)
+               "--projects-root", str(projects), "--capture", "--remote-is-private"],
+              cwd=work, env=env)
     print(out)
     check((root / "identity.md").is_file(), "the memory template was copied")
     check((root / "journal").is_dir(), "its empty directories were made")
@@ -147,8 +147,8 @@ def smoke(wheel: Path, work: Path, extras: str) -> None:
     check(daylog.get("capture") is True, "capture was turned on by --capture", str(daylog))
     check(out.rstrip().splitlines()[-1].startswith("  (the backup and the nightly run")
           or "\nprivacy:\n" in out, "the privacy summary was printed", out)
-    out = run([python, "-m", "smriti.install", "--harness", "none", "--memory-root", str(root),
-               "--skip-recall-daemon"], cwd=work, env=env)
+    out = run([python, "-m", "smriti.install", "--harness", "none", "--memory-root", str(root)],
+              cwd=work, env=env)
     check("[wake] wake.py up to date" in out, "a rerun finds the scripts up to date", out)
 
     print("== write, read, status", flush=True)

@@ -30,21 +30,16 @@ def run_recall(
     cfg: RecallConfig | None = None,
     log_extra: dict[str, Any] | None = None,
 ) -> RecallResponse:
-    """Run a recall query against the configured backend, logging the fire.
+    """Run a recall query against smriti's index, logging the fire.
 
     ``log_extra`` is merged into the JSONL log entry — typically the
     triggering tool name and file path from the PostToolUse payload.
     """
     cfg = cfg or load_config()
 
-    if cfg.backend == "smriti":
-        from smriti.recall.backends import smriti_be
-        backend_query = smriti_be.query
-    else:
-        from smriti.recall.backends import qmd
-        backend_query = qmd.query
+    from smriti.recall.backends import smriti_be
 
-    response = backend_query(
+    response = smriti_be.query(
         query, top_k=cfg.top_k, timeout_s=cfg.timeout_s, rerank=cfg.rerank,
     )
 
@@ -61,7 +56,6 @@ def run_recall(
         relevant = _trunk_rerank(
             relevant,
             alpha=cfg.trunk_alpha,
-            collection=cfg.collection,
         )
 
     injected_chars = 0

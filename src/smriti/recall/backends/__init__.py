@@ -1,1 +1,1 @@
-"""Recall backends. Pick one via ``SMRITI_RECALL_BACKEND``."""
+"""The recall backend: smriti's own index (``smriti_be``)."""

@@ -643,7 +643,7 @@ def main(argv: list[str] | None = None) -> int:
     # ── recall ────────────────────────────────────────────────────────
     p_recall = sub.add_parser(
         "recall",
-        help="Associative recall: ad-hoc query, status, stats, index",
+        help="Associative recall: ad-hoc query, status, stats",
     )
     p_recall_sub = p_recall.add_subparsers(dest="recall_cmd")
     p_recall_query = p_recall_sub.add_parser("query", help="Run a recall query")
@@ -653,14 +653,6 @@ def main(argv: list[str] | None = None) -> int:
     p_recall_stats = p_recall_sub.add_parser("stats", help="Aggregate stats over recall.jsonl")
     p_recall_stats.add_argument("--hours", type=float, default=None)
     p_recall_stats.add_argument("--top", type=int, default=10)
-    p_recall_index = p_recall_sub.add_parser(
-        "index", help="(Re)build the recall index (qmd embed)",
-    )
-    p_recall_index.add_argument("--force", action="store_true", help="Pass -f to qmd embed")
-    p_recall_daemon = p_recall_sub.add_parser(
-        "daemon", help="Start/stop/status of qmd's HTTP daemon",
-    )
-    p_recall_daemon.add_argument("action", choices=["start", "stop", "status"])
 
     args = parser.parse_args(argv)
 
@@ -709,7 +701,7 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def _cmd_recall(args: argparse.Namespace) -> int:
-    """Recall subcommands: query, status, stats, index."""
+    """Recall subcommands: query, status, stats."""
     sub = getattr(args, "recall_cmd", None)
     if sub == "query":
         from smriti.recall import load_config, run_recall
@@ -724,23 +716,15 @@ def _cmd_recall(args: argparse.Namespace) -> int:
         return 0
     if sub == "status":
         from smriti.recall import load_config
-        from smriti.recall.backends import qmd as qmd_be
         from smriti.recall.backends import smriti_be as smriti_be
         cfg = load_config()
-        daemon_up = qmd_be.daemon_health(timeout_s=0.5)
-        print(f"backend (configured): {cfg.backend}")
-        print(f"  qmd available:    {qmd_be.is_available()}")
-        print(f"  qmd daemon up:    {daemon_up}  ({cfg.qmd_url})")
-        print(f"  smriti available: {smriti_be.is_available()}")
+        print(f"smriti available: {smriti_be.is_available()}")
         print(f"threshold:    {cfg.threshold}")
         print(f"top_k:        {cfg.top_k}")
         print(f"max_inject:   {cfg.max_inject}")
         print(f"timeout_s:    {cfg.timeout_s}")
-        print(f"qmd rerank:   {cfg.rerank}  (qmd's LLM reranker; off by default per #519)")
+        print(f"rerank:       {cfg.rerank}  (with SMRITI_RECALL_VECTORS=1)")
         print(f"trunk_alpha:  {cfg.trunk_alpha}  (0 disables trunk-distance rerank)")
-        print(f"collection:   {cfg.collection}")
-        print(f"intent:       {cfg.intent or '(none)'}")
-        print(f"no_http:      {cfg.no_http}")
         print(f"log_path:     {cfg.log_path}  (exists: {cfg.log_path.exists()})")
         return 0
     if sub == "stats":
@@ -751,51 +735,7 @@ def _cmd_recall(args: argparse.Namespace) -> int:
         if args.top:
             argv += ["--top", str(args.top)]
         return stats_main(argv)
-    if sub == "index":
-        import subprocess
-        from smriti.recall.backends.qmd import resolve_qmd_cmd
-        cmd = resolve_qmd_cmd()
-        if not cmd:
-            print("qmd not found. install via: npm install -g @tobilu/qmd", file=sys.stderr)
-            return 1
-        from smriti.core.tree import tree_root
-
-        memory_root = tree_root()
-        if not memory_root.exists():
-            print(f"memory tree not found at {memory_root}", file=sys.stderr)
-            return 1
-        existing = subprocess.run(
-            [*cmd, "collection", "list"], capture_output=True, text=True,
-        )
-        if "narada" not in (existing.stdout or ""):
-            print(f"creating qmd collection 'narada' for {memory_root} ...")
-            r = subprocess.run(
-                [*cmd, "collection", "add", str(memory_root), "--name", "narada"],
-                text=True,
-            )
-            if r.returncode != 0:
-                return r.returncode
-        print("running qmd embed ...")
-        embed_args = [*cmd, "embed"]
-        if args.force:
-            embed_args.append("-f")
-        r = subprocess.run(embed_args, text=True)
-        return r.returncode
-    if sub == "daemon":
-        from smriti.recall.backends import qmd as qmd_be
-        if args.action == "status":
-            up = qmd_be.daemon_health(timeout_s=1.0)
-            print(f"qmd daemon: {'up' if up else 'down'}")
-            return 0 if up else 1
-        if args.action == "start":
-            ok, msg = qmd_be.daemon_start()
-            print(f"qmd daemon start: {msg}")
-            return 0 if ok else 1
-        if args.action == "stop":
-            ok, msg = qmd_be.daemon_stop()
-            print(f"qmd daemon stop: {msg}")
-            return 0 if ok else 1
-    print("usage: smriti recall {query|status|stats|index|daemon}", file=sys.stderr)
+    print("usage: smriti recall {query|status|stats}", file=sys.stderr)
     return 2
 
 

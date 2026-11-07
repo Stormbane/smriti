@@ -61,43 +61,22 @@ def _running_pid(cfg: DaylogConfig) -> int:
     return pid if pid_alive(pid) else 0
 
 
-def _ensure_qmd_daemon() -> None:
-    """Best-effort: keep the qmd recall daemon warm alongside logd.
-
-    The ambient recall hook fires on every Read/Edit/Write in every
-    session; with the daemon up it answers over HTTP in under a second,
-    and with it down every fire pays a 10-24s cold `qmd` CLI subprocess,
-    whose timeouts return nothing. Nothing else restarts the daemon after a
-    crash or reboot; this 10-minute keepalive tick is its supervisor.
-    """
-    try:
-        from smriti.recall.backends import qmd
-
-        ok, msg = qmd.daemon_start()  # health-checks first; no-op when up
-        if not ok:
-            log.warning("qmd daemon keepalive: %s", msg)
-    except Exception as exc:  # noqa: BLE001 — never break the logd keepalive
-        log.warning("qmd daemon keepalive failed: %s", exc)
-
-
 def ensure_running(cfg: DaylogConfig | None = None) -> bool:
     """Keepalive entry point: start a detached logd if none is alive.
 
     Returns True if a daemon is (now) running. Called by the scheduled
     ``smriti logd --ensure`` task every 10 minutes — this is the
     self-recovery mechanism: a crashed daemon is restarted on the next
-    tick, and the idempotent passes make the gap harmless. The same
-    tick keeps the qmd recall daemon warm.
+    tick, and the idempotent passes make the gap harmless.
     """
     import subprocess
     import sys
 
     cfg = cfg or load_config()
-    _ensure_qmd_daemon()
     if _running_pid(cfg):
         return True
     # A hidden console, not DETACHED_PROCESS: a daemon with no console makes
-    # every console child it runs (git, qmd) open a visible window.
+    # every console child it runs (git) open a visible window.
     flags = 0
     if sys.platform == "win32":  # not hasattr: type checkers narrow sys.platform on every OS
         flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP

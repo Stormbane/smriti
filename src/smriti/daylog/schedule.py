@@ -31,7 +31,7 @@ def _windowless_python() -> str:
 def _smriti_cmd(args: str, *, windowless: bool = False) -> str:
     """Task command line. ``windowless`` uses pythonw so the task doesn't
     show a console window for its whole run. Only safe because every
-    background spawn in smriti (claude/codex calls, git, qmd, backup,
+    background spawn in smriti (claude/codex calls, git, backup,
     notify) passes CREATE_NO_WINDOW: a console child of a windowless
     parent otherwise allocates its OWN visible console, which flashes
     more under pythonw, not less. A new spawn site must do the same.

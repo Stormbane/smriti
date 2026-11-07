@@ -1,8 +1,7 @@
 """Associative recall — pluggable backends for ambient memory injection.
 
-The PostToolUse hook on Read/Edit/Write tools queries the configured
-backend (qmd by default, smriti's embedded search as a fallback) and
-injects high-relevance matches into the assistant's context as a
+The PostToolUse hook on Read/Edit/Write tools queries smriti's own
+index and injects high-relevance matches into the assistant's context as a
 ``<system-reminder>`` block.
 
 Public API:

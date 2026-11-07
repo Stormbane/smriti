@@ -59,7 +59,7 @@ def installer() -> ModuleType:
 def install(root: Path, monkeypatch: pytest.MonkeyPatch, *flags: str) -> int:
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
     result = installer().main(["--harness", "none", "--memory-root", str(root),
-                               "--skip-recall-daemon", "--no-capture", *flags])
+                               "--no-capture", *flags])
     assert isinstance(result, int)
     return result
 

@@ -1004,7 +1004,6 @@ def run_installer(installer: ModuleType, root: Path, *flags: str) -> int:
         "--harness", "none",
         "--memory-root", str(root),
         "--projects-root", str(root.parent / "no-projects"),
-        "--skip-recall-daemon",
         *flags,
     ]
     result = installer.main(argv)

@@ -398,9 +398,7 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
     except Exception as exc:  # noqa: BLE001 — recorded in the status; the night goes on
         steps["rollups"] = {"ok": False, "error": str(exc)[:300]}
 
-    # 6. Reindex (smriti index, incremental). No qmd refresh follows: its
-    # only consumer, the ambient-recall hook, is off (plan item 0.1), and
-    # `qmd embed` could fail without saying so.
+    # 6. Reindex (smriti index, incremental).
     if reindex:
         steps["index"] = _index_with_retries(cfg)
 

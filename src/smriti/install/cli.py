@@ -1,7 +1,7 @@
 """The installer: ``python -m smriti.install`` (``scripts/install.py`` in a checkout).
 
 Runs the harness-neutral core install (memory tree, wake templates,
-mirror junctions, qmd recall daemon), then dispatches to a per-harness
+mirror junctions), then dispatches to a per-harness
 installer chosen via ``--harness``.
 
 Defaults to ``--harness=claude_code`` for back-compat with prior
@@ -94,11 +94,6 @@ def main(argv: list[str] | None = None) -> int:
         help="(harness=codex) Don't patch ~/.codex/config.toml",
     )
     parser.add_argument(
-        "--skip-recall-daemon",
-        action="store_true",
-        help="Don't auto-start qmd's HTTP daemon for associative recall",
-    )
-    parser.add_argument(
         "--migrate-agent-doc",
         action="store_true",
         help="One-time conversion of a legacy (unmarked) agent doc "
@@ -186,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
 
     projects = resolve_projects_root(memory_root, args.projects_root)
     try:
-        run_core(memory_root, projects.path, skip_recall_daemon=args.skip_recall_daemon)
+        run_core(memory_root, projects.path)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -242,11 +237,7 @@ def main(argv: list[str] | None = None) -> int:
         mod.run(memory_root)
 
     print(f"\ndone ({harness}). start a new session in your harness to verify.")
-    print("recall config: SMRITI_RECALL_BACKEND={qmd|smriti}, "
-          "SMRITI_RECALL_THRESHOLD, SMRITI_RECALL_QMD_URL, SMRITI_RECALL_NO_HTTP.")
     print("LLM provider:  SMRITI_LLM_PROVIDER={anthropic_api|claude_cli|openai_api|ollama}.")
-    print("optional: `smriti recall index` to (re)build the qmd index of the memory root "
-          "(`smriti status` shows which).")
     print(privacy.summary(memory_root, plan))
     return 0
 

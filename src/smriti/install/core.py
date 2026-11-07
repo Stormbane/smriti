@@ -2,7 +2,7 @@
 
 These run regardless of which agent harness will eventually drive
 smriti. They set up the memory tree, copy wake templates, link
-project mirrors, and (optionally) start the qmd recall daemon.
+and project mirrors.
 
 The files copied come from :mod:`smriti.install.templates`: the
 package's own copies in a wheel, the checkout's otherwise. The projects
@@ -400,29 +400,10 @@ def install_wake_files(memory_root: Path) -> None:
         print(f"[wake] upgraded {dst.name} (backup: {backup.name})")
 
 
-def start_recall_daemon() -> None:
-    """Start qmd's HTTP daemon so recall hits the warm path."""
-    try:
-        from smriti.recall.backends import qmd as qmd_be
-    except ImportError:
-        print("[recall] smriti.recall not importable; skipping daemon start")
-        return
-    if not qmd_be.is_available():
-        print("[recall] qmd not on PATH; install via `npm install -g @tobilu/qmd` "
-              "then run `smriti recall daemon start`")
-        return
-    if qmd_be.daemon_health(timeout_s=0.5):
-        print("[recall] qmd daemon already up")
-        return
-    ok, msg = qmd_be.daemon_start()
-    print(f"[recall] qmd daemon start: {msg}")
-
-
 # ── Top-level core entry point ──────────────────────────────────────
 
 
-def run_core(memory_root: Path, projects_root: Path | None, *,
-             skip_recall_daemon: bool = False) -> None:
+def run_core(memory_root: Path, projects_root: Path | None) -> None:
     """Run all core install steps. Idempotent.
 
     With no *projects_root*, no project mirrors are linked.
@@ -442,5 +423,3 @@ def run_core(memory_root: Path, projects_root: Path | None, *,
     install_wake_files(memory_root)
     if projects_root is not None:
         setup_mirrors(memory_root, projects_root)
-    if not skip_recall_daemon:
-        start_recall_daemon()

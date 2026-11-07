@@ -53,8 +53,8 @@ _EXT_ALLOW = {
 # stays fast even on large files.
 _CONTENT_PROBE_BYTES = 2048
 
-# Cap content slice contributed to the query so qmd's embedding model
-# isn't fed a long chunk that drowns the stem signal.
+# Cap content slice contributed to the query so a long chunk doesn't
+# drown the stem signal.
 _CONTENT_QUERY_CHARS = 400
 
 # Codex apply_patch directive lines look like:

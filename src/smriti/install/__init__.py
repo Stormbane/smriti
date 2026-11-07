@@ -1,7 +1,7 @@
 """Install steps separated by harness-neutrality.
 
 ``smriti.install.core`` — memory tree skeleton, wake-script
-templates, mirror junctions, qmd recall daemon. Anything that should
+templates, mirror junctions. Anything that should
 run regardless of which agent harness (Claude Code, Cursor, custom
 Python agent, ...) the user wires smriti into.
 
