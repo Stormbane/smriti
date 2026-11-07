@@ -19,6 +19,7 @@ import pytest
 from smriti.core.tree import tree_root
 from smriti.embed.runtime import (
     Discovery,
+    clear_discovery,
     read_discovery,
     runtime_dir,
     service_paths,
@@ -73,3 +74,24 @@ def test_a_missing_file_is_no_service_at_once(paths: Any) -> None:
     t0 = time.monotonic()
     assert read_discovery(paths) is None
     assert time.monotonic() - t0 < 0.04
+
+
+def test_a_removal_refused_while_a_client_reads_is_tried_again(
+        paths: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A service that exits removes its record; Windows refuses the delete while
+    a client has the file open to read it, and the record of a service gone
+    stayed behind (seen once in test_one_service_however_many_clients_hold_it)."""
+    real = Path.unlink
+    refused: list[Path] = []
+
+    def unlink(self: Path, *a: Any, **k: Any) -> None:
+        if self == paths.discovery and len(refused) < 2:
+            refused.append(self)
+            raise PermissionError(32, "The process cannot access the file", str(self))
+        real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    clear_discovery(paths, "another")  # not this instance's record: kept
+    assert paths.discovery.exists() and not refused
+    clear_discovery(paths, "ab12")
+    assert len(refused) == 2 and not paths.discovery.exists()

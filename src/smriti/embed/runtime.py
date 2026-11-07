@@ -183,13 +183,30 @@ def write_discovery(paths: ServicePaths, d: Discovery) -> None:
 
 
 def clear_discovery(paths: ServicePaths, instance: str) -> None:
-    """Remove the discovery file if it is still this instance's."""
+    """Remove the discovery file if it is still this instance's.
+
+    Windows refuses to delete a file another process has open, as a client
+    has for the moment it reads it: the removal is tried again for up to
+    50 ms, as a refused read is, or the record of a service that has exited
+    would stay behind.
+    """
     current = read_discovery(paths)
-    if current is not None and current.instance == instance:
+    if current is None or current.instance != instance:
+        return
+    for wait in (*_REFUSED_WAITS_S, None):
         try:
             paths.discovery.unlink()
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError as exc:
+            if wait is None:
+                log.warning("could not remove %s: %s", paths.discovery, exc)
+                return
+            time.sleep(wait)
         except OSError as exc:
             log.warning("could not remove %s: %s", paths.discovery, exc)
+            return
 
 
 def pid_alive(pid: int) -> bool:
