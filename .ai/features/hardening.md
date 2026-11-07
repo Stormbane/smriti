@@ -750,6 +750,145 @@ a recheck.
   holds for a `.key` with another key; one with the same key is a migration
   cut short, and the README is cleaned, or the key would stay in every
   later commit.
+- **H13.1 implemented** (2026-11-07, `hardening/h13a`; not yet reviewed or
+  merged). Codex's finding held: `index_tree(root=B)` and
+  `index_file_result(path, root=B)` took `smriti_db_path()`, the
+  environment's, so B's files went into A's index and the purge deleted A's
+  sources (`smriti index --root B` too). The database defaults to
+  `<root>/.smriti/index.db` (`core.tree.index_db_path`). `index_file` embeds
+  inside `embed.provider.embedding_root(root)`: through the service it asks
+  B's service, never SMRITI_ROOT's; in-process, the kept model is checked
+  against the provider B's index records (one meta read the first time an
+  index is seen) and the other one loaded when it differs. The index, write
+  and index-page events go to the root's own `metrics.jsonl`
+  (`metrics.logger_for`). The nightly passes `cfg.root`, which is
+  `tree_root()`: unchanged. The installer's registration: `mcp_spec.mcp_registration(root)`
+  puts `SMRITI_ROOT` (absolute, not resolved) in the entry's `env`, and
+  `mcp_registration_matches(entry, root)` asks for it, so a rerun updates an
+  entry without it; the Codex installer uses both and keeps the entry's other
+  variables and annotations. **Not done here:** the Claude Code installer
+  (`integrations/claude_code/install.py`, the H13.5 stream's file) still
+  registers without the root: its `register_mcp_server` needs `memory_root`
+  and these two calls. The reference install (no SMRITI_ROOT, `~/.narada`)
+  registers `C:\Users\<user>\.narada`, which resolves to the root it uses now.
+  Tests: two roots, each holding only its own sources, purge included; a run
+  on B leaves A's index and metrics alone; `index_file` on B asks B's service;
+  `smriti index --root`; the provider per index; the registration.
+- **H13.2 implemented** (same branch). The query is embedded first; then the
+  pending count, the identity check, the vector hits, the keyword hits and
+  every chunk's text are read in one read transaction (`_snapshot`), each
+  leg's chunks in one `rowid IN` statement in the leg's order (ties break as
+  before; the FTS statement is unchanged). Only the rare re-embedding after
+  an identity mismatch runs inside it. On the read-only connection (`mode=ro`,
+  `query_only`) `BEGIN` works, and in WAL a writer commits while the snapshot
+  is open: the tests' writer connects with `timeout=0` and commits
+  mid-search. Codex's interleaving as tests, a write between the keyword
+  match and the fetch and one between the two legs, run from inside the
+  search: both return exactly what they return without a writer, and both
+  fail at `af9321e`. The eval's results are identical.
+- **H13.8, the indexer part, implemented** (same branch). Opus's finding held:
+  `_plan` deleted the gone and excluded sources and committed before the
+  embedding, so a failed run had already purged them. Not committing would
+  have been worse (the DELETEs open the write transaction, held through the
+  embedding). `_plan` now only decides the purge; `_commit` writes it under
+  `BEGIN IMMEDIATE`, for each source still gone on disk that no other writer
+  recorded since. Tests: a run whose embedding fails leaves the deleted file's
+  chunks and held no write lock; a file written and indexed again mid-run
+  stays. The nightly's scan, its environment variable and `read_day_turns`
+  are left to the stream that owns `daylog/`.
+- **H13.12 implemented** (same branch; Suti's decision). For a model with a
+  calibration (`search.CALIBRATIONS`, keyed by the model that embedded the
+  query, chosen on the quality set with it), two adjustments; a model without
+  one, keyword-only search and the keyword fallback are as before.
+  - A later version first: among the results returned (the first `top_k`),
+    each place goes to the newest chunk below it that restates it (stored
+    vectors at least `same_note` similar), is dated after it (`chunk_date`: a
+    dated path, else the first ISO date in its text) and scores at least half
+    the place's score; it takes the place and the score, the earlier chunk the
+    later's. Nothing else moves; an undated chunk never moves for it.
+    `same_note` 0.75 for both models: on the set every pair above it restates
+    an earlier note (bge-m3 0.777-0.848, MiniLM 0.786-0.880), and the closest
+    other pair is 0.743 (0.726). A stored vector costs about 0.5 ms to read
+    (sqlite-vec reads it out of its chunk), so one is read only for a pair the
+    dates and scores allow: 0-4 a query on the bench's ten.
+  - Abstention on raw similarity: when the best vector hit's cosine
+    similarity is under the model's mark, every score is multiplied by it
+    (same order; the best falls under the mark and any threshold above), and
+    `SearchOutcome` says so (`similarity`, `unrelated_below`, a note the MCP
+    tool and the CLI print). The similarity is the KNN distance's cosine
+    (1 - d^2/2, exact for unit vectors), so it costs nothing. bge-m3 0.40: irrelevant best hits 0.319-0.430,
+    answerable 0.421-0.759; the lowest answerable (a paraphrase, 0.4206) sits
+    under two irrelevant ones, so the mark is set under it, above the next
+    irrelevant (0.387). MiniLM 0.165: irrelevant 0.121-0.243, answerable
+    0.178-0.849.
+  - Keyword-only has no similarity to judge by; it finds nothing only when no
+    keyword matches. On the set that is all six irrelevant queries (they share
+    no word with the corpus) and five answerable ones (paraphrases).
+  - The reference install's index is MiniLM (`local`), so the second
+    calibration is what reaches it.
+
+  The quality set (`smriti eval`), before and after:
+
+  | bge-m3 (onnx) | before | after |
+  |---|---|---|
+  | direct hit@1 / hit@3 / MRR | 1.00 / 1.00 / 1.00 | 1.00 / 1.00 / 1.00 |
+  | paraphrase hit@1 / hit@3 / MRR | 0.71 / 1.00 / 0.86 | 0.71 / 1.00 / 0.86 |
+  | contradiction MRR; resolved@5; newer first | 0.78; 100%; 67% | 0.78; 100%; 67% |
+  | correction MRR; resolved@5; newer first | 0.58; 25%; 25% | 0.71; 50%; 50% |
+  | irrelevant abstained at 0.45; answerable abstained | 0%; 0% | 67%; 0% |
+  | AUROC of the best score (raw similarity) | 0.85 (0.99) | 0.93 (0.99) |
+  | search cases passed; MRR | 13/14; 0.96 | 13/14; 0.92 |
+
+  | MiniLM (local) | before | after |
+  |---|---|---|
+  | direct hit@1 / hit@3 / MRR | 1.00 / 1.00 / 1.00 | 1.00 / 1.00 / 1.00 |
+  | paraphrase hit@1 / hit@3 / MRR | 0.57 / 0.86 / 0.73 | 0.57 / 0.86 / 0.73 |
+  | contradiction MRR; resolved@5; newer first | 0.75; 100%; 67% | 0.75; 100%; 67% |
+  | correction MRR; resolved@5; newer first | 0.58; 25%; 25% | 0.71; 50%; 50% |
+  | irrelevant abstained at 0.45; answerable abstained | 0%; 0% | 83%; 0% |
+  | AUROC of the best score (raw similarity) | 0.93 (0.98) | 0.996 (0.98) |
+  | search cases passed; MRR | 13/14; 1.00 | 13/14; 0.96 |
+
+  The battery correction resolves now. Still not: the awls one (the note it
+  corrects has no date) and the hinge-glue one (that pair is 0.667 similar;
+  a mark low enough to reach it put a later note above the open question that
+  "glue dry open question" asks for, a direct case). s07 ("Kite replaceable
+  battery") still passes, its note now second, under the correction of it:
+  the intended change, which is the search cases' MRR drop. s14 (no answer)
+  still fails: results are scored down, not withheld. The needs_model test
+  holds bge-m3's floors (corrections and abstention at least 50%, no
+  answerable query under the mark).
+- **Benchmark** (h13a; `scripts/bench.py`, 2026-11-07, the reference tree's
+  copy, 10 queries, two alternating rounds; A master `af9321e`, B `8586aef`):
+
+  | Measure | A: af9321e | B: 8586aef | B/A |
+  |---|---|---|---|
+  | MCP server: start and initialize | 156 ms | 161 ms | 1.03 |
+  | tools/list, first / warm | 26 / 2 ms | 26 / 2 ms | 0.99 / 1.02 |
+  | smriti_read: first query | 707 ms | 566 ms | 0.80 |
+  | smriti_read: until vector results | 15.61 s | 14.60 s | 0.94 |
+  | smriti_read: warm p50 / p90 | 161 / 172 ms | 166 / 174 ms | 1.03 / 1.01 |
+  | smriti_write: p50 / max | 45 / 106 ms | 45 / 92 ms | 0.99 / 0.87 |
+  | wake hook (median of 3) | 682 ms | 672 ms | 0.99 |
+  | `smriti status` | 286 ms | 273 ms | 0.95 |
+  | CLI `smriti read` (median of 3) | 10.55 s | 10.14 s | 0.96 |
+  | `smriti index`, nothing changed / 5 new files | 15.43 / 15.68 s | 15.31 / 15.57 s | 0.99 / 0.99 |
+  | MCP server / embedding service memory | 43 / 1035 MB | 43 / 1035 MB | 1.00 |
+
+  The warm read was higher in both of B's rounds (166 and 167 ms against 164
+  and 159), so search alone was timed on a copy of the same index, the query
+  vectors precomputed: 157 against 146 ms. Asking the KNN for each hit's
+  stored vector cost 10 ms; `10fd243` reads one only where a pair needs it.
+  After it, alternating, six runs a side with the machine busy: 147-166 ms
+  (mean 154) against master's 147-166 (mean 157). The wake briefings are
+  identical (9,495 characters), 13 tools on both sides. Top 5: at `8586aef`
+  two queries differed ("morning message persona" 4 of 5 shared, "Beautiful
+  Tree project" 3 of 5), by later versions taken from below the top 5; at
+  `10fd243`, which reorders only the results it returns, one does, computed
+  on the same index copy: "Beautiful Tree project", places 2 and 5 swapped (a
+  2026-09-19 note restating the 2026-07-18 one, 0.765 similar under MiniLM,
+  the reference index's model), the place scores unchanged. No bench query
+  falls under MiniLM's mark (their best hits 0.467-0.820).
 - **H12.0 implemented** (2026-11-06, `hardening/h12a`; not yet reviewed or
   merged): keep-alive, the profile cache, `scripts/bench.py`, and the
   fixes the benchmark found. The three slower measures are back at the
