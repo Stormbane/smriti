@@ -144,9 +144,12 @@ def test_runs_for_different_roots_do_not_exclude_each_other(
     assert "skipped" not in status and status["ok"] is True
 
 
-def test_a_run_lock_that_cannot_be_opened_does_not_stop_the_night(
+def test_a_run_lock_that_cannot_be_opened_skips_the_night_and_says_why(
         tmp_path: Path, fake_llm: FakeProvider, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No lock file can be opened at all: the night runs as it did before the lock."""
+    """No lock file can be opened at all: nothing can exclude a second run, so this one
+    does no work (H14.2, Codex in review #7; it ran unexcluded before). It fails, and
+    its status, which the wake reads, says why."""
+    from smriti.wake.briefing import _nightly_line
 
     @contextmanager
     def unavailable(key: object, wait_s: float = 0) -> Iterator[str]:
@@ -156,8 +159,35 @@ def test_a_run_lock_that_cannot_be_opened_does_not_stop_the_night(
     cfg = _cfg(tmp_path)
     _seed(cfg, "2026-09-04")
     status = _run(cfg, NIGHT_1)
-    assert status["ok"] is True and status["run_lock"] == "unavailable"
-    assert json.loads(cfg.nightly_status_path.read_text(encoding="utf-8"))["ok"] is True
+    assert status["skipped"] is True and status["ok"] is False
+    assert status["run_lock"] == "unavailable" and "run lock" in str(status["reason"])
+    assert status["steps"] == {} and fake_llm.requests == []
+    assert not cfg.day_md("2026-09-04").exists() and not cfg.day_digest("2026-09-04").exists()
+    saved = json.loads(cfg.nightly_status_path.read_text(encoding="utf-8"))
+    assert saved["ok"] is False and saved["reason"] == status["reason"]
+    line = _nightly_line(cfg.root)
+    assert line.startswith("--- WHILE YOU SLEPT: NIGHTLY SKIPPED for 2026-09-04: the run lock")
+
+
+def test_the_cli_exits_nonzero_for_a_night_skipped_without_a_lock(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    import argparse
+
+    from smriti import cli
+
+    def skipped(**kw: object) -> dict[str, object]:
+        return {"skipped": True, "ok": False, "target_day": "2026-09-04", "reason": "no lock"}
+
+    def busy(**kw: object) -> dict[str, object]:
+        return {"skipped": True, "ok": True, "target_day": "2026-09-04",
+                "reason": "another nightly is running"}
+
+    args = argparse.Namespace(rollup_cap=2, digest_cap=10, no_reindex=True, no_witness=True)
+    monkeypatch.setattr(nightly, "run_nightly", skipped)
+    assert cli._cmd_nightly(args) == 1
+    monkeypatch.setattr(nightly, "run_nightly", busy)
+    assert cli._cmd_nightly(args) == 0
+    assert "another nightly is running" in capsys.readouterr().out
 
 
 def _in_threads(n: int, work: object) -> list[BaseException]:

@@ -48,6 +48,10 @@ _REPAIR_WINDOW_DAYS = 7
 # How long a second run waits for the first to finish before it skips. A run
 # with digests takes minutes, so this only covers one that is just finishing.
 _LOCK_WAIT_S = 10.0
+# Why a run that can't open its lock file skips; the wake shows it.
+_LOCK_UNAVAILABLE = ("the run lock can't be taken (no lock file could be opened: check the "
+                     "runtime directory, SMRITI_RUNTIME_DIR), so the night was skipped "
+                     "rather than run without it")
 
 
 def _target_day(now: datetime, root: Path | None = None) -> date:
@@ -279,6 +283,12 @@ def run_nightly(
     run lock waits up to ``lock_wait_s``, then returns a status that says it
     skipped (``"skipped": true``, and ok, since nothing failed) without
     writing the status file, which stays the running night's.
+
+    A run that can't take the lock at all (no lock file could be opened,
+    :data:`smriti.core.oslock.UNAVAILABLE`) can't exclude another run either,
+    so it does no work: it skips, not ok, and writes a status that says why,
+    so the wake names it and the CLI exits nonzero. The night's work waits
+    for a run that can take the lock.
     """
     cfg = cfg or load_config()
     now = now or datetime.now(tz=day_tz(cfg.root))
@@ -295,10 +305,15 @@ def run_nightly(
             status.update(skipped=True, ok=True, reason="another nightly is running")
             return status
         if lock == UNAVAILABLE:
-            # No lock file could be opened (smriti.core.oslock says when): run
-            # without it, and say so.
-            log.warning("nightly: the run lock can't be taken; running without it")
-            status["run_lock"] = "unavailable"
+            # No lock file could be opened (smriti.core.oslock says when), so
+            # nothing excludes a second run: two would rewrite the same renders,
+            # digests and rollups at once.
+            log.error("nightly skipped: the run lock can't be taken for %s", cfg.root)
+            status.update(skipped=True, ok=False, run_lock="unavailable",
+                          reason=_LOCK_UNAVAILABLE)
+            status["finished"] = datetime.now(tz=day_tz(cfg.root)).isoformat()
+            _write_status(cfg.nightly_status_path, status)
+            return status
         _run_steps(cfg, status, target, rollup_cap=rollup_cap, digest_cap=digest_cap,
                    reindex=reindex, witness=witness)
     return status

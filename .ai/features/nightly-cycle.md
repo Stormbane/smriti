@@ -219,8 +219,10 @@ from its first step to its status file, so a manual run and the scheduled one
 never overlap (H12.11; the writer lock this said it took was only ever held
 per write burst). A second run waits 10 s, then returns a status that says it
 skipped, ok and not failed, writes no status file and exits 0. When no lock
-file can be opened at all, the night runs as before and its status says
-`"run_lock": "unavailable"`. Target date: the just-closed local (UTC+10) day;
+file can be opened at all, nothing could exclude a second run, so the run
+does no work (H14.2; it ran unexcluded before): it skips, not ok, writes a
+status that says why (`"run_lock": "unavailable"` and a `reason`), which the
+wake shows as `NIGHTLY SKIPPED for <day>: <reason>`, and exits 1. Target date: the just-closed local (UTC+10) day;
 03:00 is the cutoff for that day's digest.
 
 1. **Reconcile sweep** — collector logic over the same per-source state and

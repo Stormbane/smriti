@@ -356,6 +356,9 @@ def _handoff_block(memory_root: Path) -> _Block | None:
     return _Block("handoff", head + body + "\n", pinned=True, memory=True)
 
 
+NIGHTLY_REASON_CAP = 300  # a skipped run's reason, in the while-you-slept line
+
+
 def _nightly_line(memory_root: Path) -> str:
     """One 'while you slept' line from the last nightly run.
 
@@ -378,7 +381,11 @@ def _nightly_line(memory_root: Path) -> str:
             digest_days = digest.get("days") or []
     ok = bool(status.get("ok")) if isinstance(status, dict) else False
     target = status.get("target_day", "?") if isinstance(status, dict) else "?"
-    if ok:
+    reason = status.get("reason") if isinstance(status, dict) else None
+    if not ok and isinstance(status, dict) and status.get("skipped") and isinstance(reason, str):
+        # A run that couldn't take its lock did nothing; it says why.
+        summary = f"NIGHTLY SKIPPED for {target}: {reason[:NIGHTLY_REASON_CAP]}"
+    elif ok:
         summary = f"nightly ok for {target}"
         if digest_days:
             summary += f" (digested: {', '.join(digest_days)} — see log/ for digests)"
