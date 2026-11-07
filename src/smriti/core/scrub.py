@@ -132,6 +132,7 @@ def _ends_in_name() -> str:
         looks.append(rf"(?<=[a-z0-9]{name[0].upper()}(?ai:{name[1:]}))")
     return "(?:" + "|".join(looks) + ")"
 
+
 # Every name ends in one of these (lower case), and either form follows it
 # with = or :, a quoted key's closing quote between (after its level's
 # backslashes). Group 1 is that quote.

@@ -108,12 +108,17 @@ target-version = "py311"
 # Stated, not inherited: ruff's default rule set changes between releases.
 # E501 enforces the line length; B (bugbear) catches likely bugs; BLE flags
 # blind excepts: narrow one, or keep it with `# noqa: BLE001 — <reason>`.
-select = ["E4", "E7", "E9", "F", "E501", "B", "BLE"]
+# E1, E2, E3 and W check indentation, whitespace and blank lines. In the
+# pinned ruff most of E1, all of E2 and E3, and W391 are preview rules, so
+# preview is on; it also turns on bugbear's preview rules (B043, B901, B903,
+# B909), and changes nothing else that is selected here.
+select = ["E1", "E2", "E3", "E4", "E7", "E9", "W", "F", "E501", "B", "BLE"]
+preview = true
 
 [tool.ruff.lint.per-file-ignores]
 # Vendored third-party code (memsearch, MIT) stays close to upstream, so it
 # is not restyled: it is exempt from the rules added for our own code only.
-"src/smriti/_vendored/**" = ["E501", "B", "BLE"]
+"src/smriti/_vendored/**" = ["E1", "E2", "E3", "W", "E501", "B", "BLE"]
 
 [tool.mypy]
 python_version = "3.11"

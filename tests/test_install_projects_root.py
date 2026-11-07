@@ -269,7 +269,7 @@ def test_only_a_record_without_the_key_predates_it(
 
 def test_a_relative_root_with_dot_dot_is_normalised(
         root: Path, home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Codex review of H12.4 (P2): from C:\Projects\smriti, --projects-root ..
+    r"""Codex review of H12.4 (P2): from C:\Projects\smriti, --projects-root ..
     stayed C:\Projects\smriti\.. once made absolute, so Claude Code's directory
     for kite was looked up as C--Projects-smriti----kite: a project with only
     Claude memory was missed, and others lost their auto-memory link."""

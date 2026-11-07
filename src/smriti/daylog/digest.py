@@ -79,6 +79,7 @@ def _system_prompt(cfg: DaylogConfig) -> str:
     """The one-call digest prompt, naming ``cfg``'s user and agent."""
     return _SYSTEM.format(user=cfg.user_name, agent=cfg.agent_name) + _SECTIONS
 
+
 _PART_SYSTEM = (
     "You are the first pass of a nightly digest writer. One day's communication "
     "log across every channel is too long for one call, so it is split into "
@@ -518,7 +519,7 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]], 
                    f"markers_total: {coverage.markers_total}"]
     if notes_cut:
         fields.append(f"notes_cut: {notes_cut}")
-    header ="\n".join([*fields, "generated_by: smriti nightly (digest)", "---", ""])
+    header = "\n".join([*fields, "generated_by: smriti nightly (digest)", "---", ""])
     # Masked: the model reads untrusted transcripts, and an injection can make
     # it copy a credential shape into the digest, which is indexed and pushed.
     write_memory(out, header + text + "\n")

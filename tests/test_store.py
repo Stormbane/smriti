@@ -707,7 +707,6 @@ def test_only_a_full_reindex_changes_the_vector_dimension(
         mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import sqlite3
 
-
     db_path = mini_tree / ".smriti" / "index.db"
     index_tree(root=mini_tree, db=db_path)
 
@@ -849,5 +848,3 @@ def test_index_file_follows_the_same_policy(mini_tree: Path) -> None:
     raw.write_text("# Day log\n\nraw turns\n", encoding="utf-8")
     assert index_file(raw, root=mini_tree, db=db_path) == 0
     assert "log/2026/11/03.md" not in _sources(db_path)
-
-

@@ -773,6 +773,17 @@ a recheck.
   caller, `daylog.presence`, went with H14.7, and a reader that returns a
   prefix as the day is the trap H14.3 closed; the tests read with
   `read_whole_day`.
+- **H14.5.6 implemented** (same branch, its last commit, on the code left
+  after the rebase onto `46e4b11`). Ruff selects `E1`, `E2`, `E3` and `W`. In
+  ruff 0.15.8 (pinned) most of `E1`, all of `E2` and `E3`, and `W391` are
+  preview rules, which a selection doesn't reach without `preview = true`, so
+  it is on; it also brings bugbear's four preview rules (B043, B901, B903,
+  B909), and nothing else selected changes (the old selection under preview:
+  no findings). Vendored code is exempt from the new rules too. 17 findings,
+  all mended by `ruff check --fix`: blank lines (E302, E303, E305, W391), the
+  `header ="\n"` in `digest.py` (E225), and a test docstring's Windows paths
+  (W605, now a raw string). CLAUDE.md, AGENTS.md, CONTRIBUTING.md and
+  conventions.md list the rules.
 - **H13.8, the nightly's part, implemented** (2026-11-07, `hardening/h13c`;
   not yet reviewed or merged). Opus's three findings held.
   - The stale-day scan read every day-file in the history every night to

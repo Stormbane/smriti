@@ -76,9 +76,11 @@ python -m mypy --strict --platform linux src/smriti profiles/reference/src
 python scripts/doc_facts.py --write
 ```
 
-Ruff checks pyflakes (`F`) and the `E4`, `E7` and `E9` errors, plus the
-100-character line length (`E501`), bugbear (`B`) and blind excepts (`BLE`);
-vendored code is exempt from the last three. Narrow an `except Exception` to
+Ruff checks pyflakes (`F`), the `E4`, `E7` and `E9` errors, indentation,
+whitespace and blank lines (`E1`, `E2`, `E3`, `W`; preview rules in the pinned
+ruff, so preview is on), the 100-character line length (`E501`), bugbear
+(`B`) and blind excepts (`BLE`); vendored code is exempt from all but `E4`,
+`E7`, `E9` and `F`. `ruff check --fix` mends most style findings. Narrow an `except Exception` to
 the exceptions that can occur. Where any failure must be survived (a top-level
 handler, a hook, a non-critical step), keep it with `# noqa: BLE001 — <reason>`,
 and log the failure or record it in a status the caller sees.

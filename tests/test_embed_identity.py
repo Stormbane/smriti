@@ -736,4 +736,3 @@ def test_a_local_providers_revision_is_its_hub_snapshot(
     monkeypatch.setattr(hub, "try_to_load_from_cache", cached)
     assert identity.model_revision("local", "all-MiniLM-L6-v2") == "abc123"
     assert identity.model_revision("stub", "stub-384") == ""
-

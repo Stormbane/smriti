@@ -89,7 +89,6 @@ class TestRegisterMCPServer:
         # File untouched.
         assert cfg.read_text(encoding="utf-8") == "{not valid json"
 
-
     def test_the_registration_carries_the_memory_root(self, fake_home, capsys):
         """H13.1: Claude Code starts the server in its own environment, where
         SMRITI_ROOT may be unset or another root's: the entry names the root

@@ -706,7 +706,6 @@ class TestSummary:
         assert f"pushed:    the memory tree, to {REMOTE}, in plaintext" in text
         assert "WARNING" not in text  # no conversations go
 
-
     @needs_git
     def test_tracked_days_are_still_pushed_after_log_is_ignored(self, root: Path) -> None:
         git_repo(root, REMOTE)

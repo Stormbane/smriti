@@ -49,6 +49,7 @@ _REGISTRY: dict[str, Callable[[], LLMProvider]] = {
     "codex": _load_codex_cli,           # alias
 }
 
+
 def _load_test_stub() -> LLMProvider:
     from smriti.llm.providers.stub import StubLLMProvider
     return StubLLMProvider()  # raises LLMError outside a test

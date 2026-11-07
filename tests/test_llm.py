@@ -304,7 +304,6 @@ def test_claude_cli_isolates_internal_calls(monkeypatch, tmp_path):
     assert not os.path.exists(seen["path"]), "system prompt file left behind"
 
 
-
 @pytest.mark.parametrize(("env", "expected"), [
     ({}, 300),
     ({"SMRITI_CLAUDE_TIMEOUT": "45"}, 45),

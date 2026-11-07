@@ -88,7 +88,7 @@ python -m pytest -q --ignore=tests/test_perf.py tests profiles/reference/tests  
 python -m pytest -q --ignore=tests/test_perf.py --cov tests profiles/reference/tests  # with branch coverage, as CI measures it
 python -m pytest -q -m needs_model tests          # with the real embedding model (unset SMRITI_EMBED_PROVIDER), as the weekly job runs
 python scripts/wheel_smoke.py <wheel> --work <new dir>  # the built wheel in a fresh venv, as CI's wheel job runs it
-ruff check <files>                                # line length 100, bugbear, blind excepts
+ruff check <files>                                # whitespace and style, line length 100, bugbear, blind excepts
 mypy <files>                                      # strict
 python scripts/doc_facts.py --write               # refresh the generated counts in README.md, CLAUDE.md, AGENTS.md
 python scripts/bench.py <base> <branch> --tree <copy-of-a-tree>   # speed against a baseline (H12)
@@ -99,7 +99,7 @@ Tests import `smriti` from wherever it is installed. In a second checkout or wor
 
 ## Rules
 
-- Python 3.11+. `ruff` and `mypy --strict` are the standard. Ruff checks `E4`, `E7`, `E9` and `F`, plus `E501` (line length 100), `B` (bugbear) and `BLE` (blind excepts); vendored code is exempt from the last three. `ruff check src tests scripts profiles` passes, and CI enforces `mypy --strict` on the whole package and the reference profile on every OS (vendored code excepted), and checks that smriti's wheel has no reference code.
+- Python 3.11+. `ruff` and `mypy --strict` are the standard. Ruff checks `E1`, `E2`, `E3` and `W` (indentation, whitespace, blank lines; preview rules in the pinned ruff, so preview is on), `E4`, `E7`, `E9` and `F`, plus `E501` (line length 100), `B` (bugbear) and `BLE` (blind excepts); vendored code is exempt from all but `E4`, `E7`, `E9` and `F`. `ruff check src tests scripts profiles` passes, and CI enforces `mypy --strict` on the whole package and the reference profile on every OS (vendored code excepted), and checks that smriti's wheel has no reference code.
 - Narrow an `except Exception` to what can be raised. Keep one only where any failure must be survived (a top-level handler, a hook, a non-critical step), or must be cleaned up after or recorded and then re-raised, with `# noqa: BLE001 — <reason>`; it still logs the failure or records it in a status the caller sees. `tests/test_broad_excepts.py` fails on a broad except (`Exception`, `BaseException`, a bare `except:`) without its reason.
 - No runtime dependencies in the base install (`dependencies = []`). Optional ones go in extras: `read`, `api`, `codex`, `witness`, `dev`.
 - Check `.ai/knowledge/conventions.md` before introducing a new pattern.

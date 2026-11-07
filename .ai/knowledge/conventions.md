@@ -16,9 +16,12 @@
 ## Type Checking & Linting
 
 - **mypy strict** mode. Full PEP 484 type hints on all functions.
-- **ruff**, target Python 3.11: `E4`, `E7`, `E9`, `F`, plus `E501` (line length
-  100), `B` (bugbear) and `BLE` (blind excepts). Vendored code is exempt from
-  the last three.
+- **ruff**, target Python 3.11: `E1`, `E2`, `E3` and `W` (indentation,
+  whitespace, blank lines), `E4`, `E7`, `E9`, `F`, plus `E501` (line length
+  100), `B` (bugbear) and `BLE` (blind excepts). Most of `E1`, all of `E2` and
+  `E3`, and `W391` are preview rules in the pinned ruff, so `preview` is on
+  (which also adds bugbear's preview rules). Vendored code is exempt from all
+  but `E4`, `E7`, `E9` and `F`.
 - **Dataclasses** for structured return values (SearchResult, SearchCaseResult, etc.).
 
 ## Dependencies

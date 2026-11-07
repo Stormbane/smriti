@@ -79,6 +79,7 @@ def __getattr__(name: str) -> Any:
     globals()[name] = value  # found directly from now on
     return value
 
+
 __all__ = [
     "SMRITI_MCP_COMMAND",
     "EQUIVALENT",

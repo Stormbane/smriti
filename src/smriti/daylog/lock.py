@@ -19,6 +19,7 @@ import contextlib
 from collections.abc import Iterator
 from pathlib import Path
 
+
 class LockTimeout(RuntimeError):
     """The writer lock could not be acquired within the deadline."""
 
