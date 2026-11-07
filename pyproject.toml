@@ -70,8 +70,15 @@ packages = ["src/smriti"]
 exclude = ["src/smriti/eval/fixture"]
 
 # Include the fictional eval corpus in wheels, including its nested dated files.
+# And what the installer copies, kept at the top of the checkout: a wheel
+# carries them under smriti/_data/ at the same paths, where
+# smriti.install.templates finds them (tests/test_install_templates.py holds
+# this table to its list).
 [tool.hatch.build.targets.wheel.force-include]
 "src/smriti/eval/fixture" = "smriti/eval/fixture"
+"narada/.smriti" = "smriti/_data/narada/.smriti"
+"memory_template" = "smriti/_data/memory_template"
+"docs/PRIVACY.md" = "smriti/_data/docs/PRIVACY.md"
 
 [tool.pytest.ini_options]
 markers = [

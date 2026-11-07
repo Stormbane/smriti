@@ -4,6 +4,9 @@ These run regardless of which agent harness will eventually drive
 smriti. They set up the memory tree, copy wake templates, link
 project mirrors, and (optionally) start the qmd recall daemon.
 
+The files copied come from :mod:`smriti.install.templates`: the
+package's own copies in a wheel, the checkout's otherwise.
+
 Per-harness install bits (hooks, settings.json, CLAUDE.md, MCP
 registration) live in ``smriti.integrations.<harness>.install``.
 """
@@ -17,10 +20,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Repo-relative locations of the templates we copy.
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-TEMPLATES = _REPO_ROOT / "narada"  # wake.py, backup.py, narada-p.sh
-MEMORY_TEMPLATE = _REPO_ROOT / "memory_template"  # identity tree skeleton
+from smriti.install import templates
+
+# What the installer copies (None when neither the package nor a checkout has it).
+SCRIPTS_DIR = templates.template(templates.SCRIPTS)  # wake.py, backup.py, narada-p.sh
+MEMORY_TEMPLATE = templates.template(templates.MEMORY_TEMPLATE)  # identity tree skeleton
 
 HOME = Path.home()
 DEFAULT_PROJECTS_ROOT = Path("C:/Projects")
@@ -133,21 +137,22 @@ def install_memory_template(memory_root: Path) -> None:
 
     Never overwrites existing files. Skips ``.gitkeep`` placeholders.
     """
-    if not MEMORY_TEMPLATE.exists():
-        print(f"[memory] template not found at {MEMORY_TEMPLATE}")
+    template = MEMORY_TEMPLATE
+    if template is None or not template.exists():
+        print(f"[memory] template not found ({template or templates.MEMORY_TEMPLATE})")
         return
     copied = 0
     skipped = 0
-    for src in MEMORY_TEMPLATE.rglob("*"):
-        if src.is_dir():
+    for src in template.rglob("*"):
+        if src.is_dir() or "__pycache__" in src.parts:
             continue
         if src.name == ".gitkeep":
-            rel = src.relative_to(MEMORY_TEMPLATE)
+            rel = src.relative_to(template)
             (memory_root / rel.parent).mkdir(parents=True, exist_ok=True)
             continue
-        if src.name == "README.md" and src.parent == MEMORY_TEMPLATE:
+        if src.name == "README.md" and src.parent == template:
             continue
-        rel = src.relative_to(MEMORY_TEMPLATE)
+        rel = src.relative_to(template)
         dst = memory_root / rel
         if dst.exists():
             skipped += 1
@@ -176,11 +181,13 @@ def install_wake_files(memory_root: Path) -> None:
     """
     memory_root.mkdir(parents=True, exist_ok=True)
     (memory_root / ".smriti").mkdir(parents=True, exist_ok=True)
-    files = [
-        (TEMPLATES / ".smriti" / "wake.py", memory_root / ".smriti" / "wake.py"),
-        (TEMPLATES / ".smriti" / "backup.py", memory_root / ".smriti" / "backup.py"),
-        (TEMPLATES / ".smriti" / "narada-p.sh", memory_root / ".smriti" / "narada-p.sh"),
-    ]
+    names = ("wake.py", "backup.py", "narada-p.sh")
+    scripts = SCRIPTS_DIR
+    if scripts is None:
+        for name in names:
+            print(f"[wake] template missing: {templates.SCRIPTS}/{name}")
+        return
+    files = [(scripts / name, memory_root / ".smriti" / name) for name in names]
     for src, dst in files:
         if not src.exists():
             print(f"[wake] template missing: {src}")

@@ -27,7 +27,8 @@ class TestInstallWakeFilesUpgradePath:
         wake = memory_root / ".smriti" / "wake.py"
         assert wake.exists()
         # Should match the repo template byte-for-byte.
-        template = core.TEMPLATES / ".smriti" / "wake.py"
+        assert core.SCRIPTS_DIR is not None
+        template = core.SCRIPTS_DIR / "wake.py"
         assert wake.read_bytes() == template.read_bytes()
 
     def test_identical_rerun_is_noop(self, tmp_path, capsys):
@@ -66,7 +67,8 @@ class TestInstallWakeFilesUpgradePath:
         assert self._read(backup) == old
 
         # New file matches template.
-        template = core.TEMPLATES / ".smriti" / "wake.py"
+        assert core.SCRIPTS_DIR is not None
+        template = core.SCRIPTS_DIR / "wake.py"
         assert (smriti_dir / "wake.py").read_bytes() == template.read_bytes()
 
     def test_hand_customized_left_alone(self, tmp_path, capsys):
@@ -105,15 +107,14 @@ class TestInstallWakeFilesUpgradePath:
         """If a template file disappears we should log and continue,
         not crash mid-install."""
         memory_root = tmp_path / "narada"
-        # Point TEMPLATES at a directory missing the wake template.
-        broken_templates = tmp_path / "broken"
-        broken_templates.mkdir()
-        (broken_templates / ".smriti").mkdir()
+        # Point SCRIPTS_DIR at a directory missing the wake template.
+        broken_templates = tmp_path / "broken" / ".smriti"
+        broken_templates.mkdir(parents=True)
         # Only backup.py exists; wake.py + narada-p.sh missing.
-        (broken_templates / ".smriti" / "backup.py").write_text(
+        (broken_templates / "backup.py").write_text(
             "# smriti backup\n", encoding="utf-8"
         )
-        monkeypatch.setattr(core, "TEMPLATES", broken_templates)
+        monkeypatch.setattr(core, "SCRIPTS_DIR", broken_templates)
 
         core.install_wake_files(memory_root)
         out = capsys.readouterr().out

@@ -50,7 +50,6 @@ GIT_CRYPT_URL = "https://github.com/AGWA/git-crypt"
 PRIVACY_DOC_URL = (
     "https://github.com/Stormbane/smriti/blob/master/docs/PRIVACY.md#what-is-pushed-in-the-clear"
 )
-_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 DAYLOG_NAME = "daylog.json"
 RECORD_NAME = "privacy.json"
@@ -710,8 +709,10 @@ def _para(text: str) -> str:
 
 
 def privacy_doc() -> str:
-    local = _REPO_ROOT / "docs" / "PRIVACY.md"
-    if local.is_file():
+    from smriti.install import templates
+
+    local = templates.template(templates.PRIVACY_DOC)
+    if local is not None and local.is_file():
         return f'{local}, "What is pushed in the clear"'
     return PRIVACY_DOC_URL
 
