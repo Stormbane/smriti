@@ -2,49 +2,11 @@
 
 from __future__ import annotations
 
-import os
-import stat
-import sys
 from pathlib import Path
 
 import pytest
 
 from smriti.core.tree import tree_root
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
-def test_the_private_key_is_owner_only(tmp_path: Path) -> None:
-    pytest.importorskip("cryptography")
-    from smriti.private.store import PrivateStore
-
-    PrivateStore(tmp_path).init()
-    mode = stat.S_IMODE(os.stat(tmp_path / "private" / ".key").st_mode)
-    assert mode == 0o600
-
-
-def test_the_private_key_is_written_once(tmp_path: Path) -> None:
-    pytest.importorskip("cryptography")
-    from smriti.private.store import PrivateStore
-
-    PrivateStore(tmp_path).init()
-    key = (tmp_path / "private" / ".key").read_text(encoding="ascii")
-    PrivateStore(tmp_path).init()
-    assert (tmp_path / "private" / ".key").read_text(encoding="ascii") == key
-
-
-def test_no_empty_key_is_left_when_one_cannot_be_made(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Codex review: without cryptography, init left an empty .key behind, and
-    every later init then skipped making one, even after the extra was installed."""
-    from smriti.private.store import PrivateStore
-
-    def no_cryptography() -> str:
-        raise ImportError("No module named 'cryptography'")
-
-    monkeypatch.setattr(PrivateStore, "_generate_key", staticmethod(no_cryptography))
-    with pytest.raises(ImportError):
-        PrivateStore(tmp_path).init()
-    assert not (tmp_path / "private" / ".key").exists()
 
 
 def _todo(lines: str) -> Path:

@@ -42,9 +42,6 @@ api = [
 codex = [
     "tomli-w>=1.0",
 ]
-private = [
-    "cryptography>=42.0",
-]
 witness = [
     "opentimestamps>=0.4",
 ]
@@ -53,7 +50,6 @@ dev = [
     "pytest-cov>=5.0",
     "ruff==0.15.8",  # pinned: lint results must not change with the release pip picks
     "mypy==1.11.2",  # pinned: type-check results must not change with the release pip picks
-    "cryptography>=42.0",
     "sqlite-vec>=0.1.1",
     "onnxruntime>=1.17",
     "tokenizers>=0.15",

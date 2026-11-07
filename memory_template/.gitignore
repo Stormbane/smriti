@@ -28,6 +28,6 @@ log/.state.json
 log/*.lock
 log/.gen/
 
-# The private store's key never leaves this machine; back it up yourself.
-# (private/.gitignore says the same, as a second line of defence.)
+# The key of an encrypted store that earlier versions kept in private/: it
+# never leaves this machine.
 private/.key

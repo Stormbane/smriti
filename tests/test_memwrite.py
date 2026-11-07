@@ -60,9 +60,6 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("smriti/recall/runner.py", "_log"): "the ambient-recall hook's log (legacy)",
     ("smriti/witness.py", "write_manifest"): "the witness manifest: a commit and tree hash",
     ("smriti/witness.py", "_save"): "the OpenTimestamps proof of that manifest's hash",
-    ("smriti/private/store.py", "*"):
-        "the private store: encrypted on purpose, not text for the tree's index or remote",
-    ("smriti/private/audit.py", "*"): "the private store's access log",
     ("smriti/llm/providers/claude_cli.py", "ClaudeCliProvider.call"):
         "the call's system prompt, in the isolated LLM work directory",
     ("smriti/llm/workdir.py", "*"): "the isolated LLM work directory's settings",

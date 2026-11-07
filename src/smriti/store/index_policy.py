@@ -8,8 +8,9 @@ built before it.
 Excluded, and why (from the retrieval eval):
 
 - ``.smriti/``, ``.git/``: system state, not memory.
-- ``private/``: the encrypted private store. Its key is in ``private/.key``,
-  never markdown; an older store's is in its README, which this keeps out.
+- ``private/``: where earlier versions kept an encrypted store, which a tree
+  may still hold. Its key is in ``private/.key``, or, in the oldest, in its
+  README, which this keeps out of the index.
 - ``heartbeat/``: raw output of the retired heartbeat loop and raw channel
   transcripts. It was 34% of chunks and never once a helpful hit; the
   nightly digests carry what mattered.

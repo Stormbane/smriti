@@ -136,7 +136,6 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print("Status:     Not indexed (run 'smriti index')")
         _print_daylog_status()
         _print_backup_status(root)
-        _print_private_warning(root)
         return 0
 
     # Read-only, like smriti read and the MCP server: a status check has no
@@ -174,16 +173,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(f"Embedding:  unavailable ({exc})")
     _print_daylog_status()
     _print_backup_status(root)
-    _print_private_warning(root)
     return 0
-
-
-def _print_private_warning(root: Path) -> None:
-    """The private store's key was once committed: shown until the user rotates it."""
-    from smriti.private.store import LEGACY_KEY_NOTE, LEGACY_KEY_WARNING
-
-    if (root / "private" / LEGACY_KEY_NOTE).exists():
-        print(f"Private:    WARNING: {LEGACY_KEY_WARNING}")
 
 
 def _print_backup_status(root: Path) -> None:
@@ -698,16 +688,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
-    # Eval must enter its sandbox before any default-root access; the
-    # embedding service never touches the private store.
-    if args.command not in ("eval", "embed"):
-        # Wire private layer if vault already exists (idempotent)
-        from smriti.core.tree import tree_root as _tree_root
-        from smriti.private.store import PrivateStore as _PrivateStore
-        _private_root = _tree_root() / "private"
-        if _private_root.exists():
-            _PrivateStore(_tree_root()).init()
-
     handlers = {
         "index": _cmd_index,
         "write": _cmd_write,

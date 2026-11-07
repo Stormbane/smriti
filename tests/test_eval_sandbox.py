@@ -265,13 +265,12 @@ def test_cli_search_flag_runs_the_default_mode(capsys: Any) -> None:
     assert cases(["eval", "--search", "--json"]) == plain
 
 
-def test_cli_does_not_initialize_live_vault(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_eval_resolves_no_live_root_before_its_sandbox(
+        monkeypatch: pytest.MonkeyPatch) -> None:
     from smriti.cli import main
     from smriti.core import tree
-    from smriti.private.store import PrivateStore
 
     live = Path(os.environ["SMRITI_ROOT"])
-    (live / "private").mkdir()
     original_root = tree.tree_root
 
     def guarded_root() -> Path:
@@ -279,9 +278,5 @@ def test_cli_does_not_initialize_live_vault(monkeypatch: pytest.MonkeyPatch) -> 
         assert root != live, "CLI resolved live root before sandbox entry"
         return root
 
-    def forbidden_init(*args: Any, **kwargs: Any) -> None:
-        pytest.fail("eval initialized the live vault")
-
     monkeypatch.setattr(tree, "tree_root", guarded_root)
-    monkeypatch.setattr(PrivateStore, "init", forbidden_init)
     assert main(["eval"]) == 0
