@@ -22,6 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 dependencies = []
 
@@ -49,6 +50,7 @@ witness = [
 ]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=5.0",
     "ruff==0.15.8",  # pinned: lint results must not change with the release pip picks
     "mypy==1.11.2",  # pinned: type-check results must not change with the release pip picks
     "cryptography>=42.0",
@@ -91,6 +93,16 @@ markers = [
     "slow: perf regression guards — run with `pytest -m slow`. Excluded from default runs to keep `pytest` fast.",
 ]
 addopts = "-m 'not slow'"
+
+[tool.coverage.run]
+# `pytest --cov` measures smriti's own code, branches included; the vendored
+# code is third-party, as for ruff and mypy. CI holds a floor (ci.yml).
+branch = true
+source = ["smriti"]
+omit = ["*/smriti/_vendored/*"]
+
+[tool.coverage.report]
+precision = 1
 
 [tool.ruff]
 line-length = 100

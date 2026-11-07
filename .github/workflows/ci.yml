@@ -15,7 +15,16 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
-        python-version: ["3.11", "3.12"]
+        # Every extra has 3.13 wheels on all three (checked 2026-11-07).
+        python-version: ["3.11", "3.12", "3.13"]
+        include:
+          # Branch coverage of src/smriti is reported on every job. Each OS and
+          # Python takes other branches and skips other tests, so the floor holds
+          # on the job it was measured on, a couple of points under it (H12.16:
+          # 81.8% on Windows, 3.12, 2026-11-07, lines and branches together).
+          - os: windows-latest
+            python-version: "3.12"
+            cov_floor: 79
     env:
       PYTHONPATH: src
       SMRITI_EMBED_PROVIDER: stub
@@ -38,7 +47,9 @@ jobs:
       - name: Type check
         run: mypy --strict src/smriti profiles/reference/src
       - name: Test
-        run: pytest -q --ignore=tests/test_perf.py tests profiles/reference/tests
+        run: >-
+          pytest -q --ignore=tests/test_perf.py --cov --cov-report=term
+          --cov-fail-under=${{ matrix.cov_floor || 0 }} tests profiles/reference/tests
       - name: The core wheel carries no reference code
         shell: python
         run: |
