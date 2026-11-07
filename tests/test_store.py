@@ -374,6 +374,86 @@ def test_purge_drops_deleted_and_newly_excluded_sources(mini_tree: Path) -> None
     assert "identity.md" in left
 
 
+def test_a_run_that_fails_leaves_its_purge_undone(
+        mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """index_tree writes in one transaction, and a run that fails leaves the
+    index as it was: the purge too. It was committed before the embedding, so
+    a run that then failed had already dropped the deleted files' chunks. And
+    it takes no write lock before the embedding is done."""
+    import sqlite3
+
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+    (mini_tree / "threads" / "memory-system-design.md").unlink()
+    (mini_tree / "mind.md").write_text("# Mind\n\nAn edit to embed.\n", encoding="utf-8")
+    real = embedding.embedder()
+    locked: list[bool] = []
+
+    class DiesMidEmbed:
+        model_name, dimension = real.model_name, real.dimension
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            other = sqlite3.connect(db_path, timeout=0)
+            try:
+                other.execute("BEGIN IMMEDIATE")  # free: the run holds no write lock
+                other.rollback()
+                locked.append(False)
+            except sqlite3.OperationalError:
+                locked.append(True)
+            finally:
+                other.close()
+            raise RuntimeError("embedder died")
+
+    monkeypatch.setattr(embedding, "embedder", DiesMidEmbed)
+    with pytest.raises(RuntimeError, match="embedder died"):
+        index_tree(root=mini_tree, db=db_path)
+    assert locked == [False]
+    assert "threads/memory-system-design.md" in _sources(db_path)
+
+    monkeypatch.setattr(embedding, "embedder", lambda: real)
+    stats = index_tree(root=mini_tree, db=db_path)
+    assert stats["purged"] == 1 and stats["indexed"] == 1
+    assert "threads/memory-system-design.md" not in _sources(db_path)
+
+
+def test_a_purged_file_another_writer_indexed_meanwhile_stays(
+        mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The purge is decided before the embedding and written after it, under
+    the write lock: a file that came back and was indexed meanwhile (a
+    smriti_write) is not purged."""
+    import threading
+
+    import smriti.store.indexer as indexer_mod
+
+    db_path = mini_tree / ".smriti" / "index.db"
+    index_tree(root=mini_tree, db=db_path)
+    gone = mini_tree / "threads" / "memory-system-design.md"
+    gone.unlink()
+    (mini_tree / "mind.md").write_text("# Mind\n\nAn edit to embed.\n", encoding="utf-8")
+    real = embedding.embedder()
+
+    def another_writer() -> None:
+        gone.write_text("# Thread\n\nWritten again mid-run.\n", encoding="utf-8")
+        indexer_mod.index_file(gone, root=mini_tree, db=db_path)
+
+    class WriterMidEmbed:
+        model_name, dimension = real.model_name, real.dimension
+        fired = False
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            if not WriterMidEmbed.fired:
+                WriterMidEmbed.fired = True
+                writer = threading.Thread(target=another_writer)
+                writer.start()
+                writer.join()
+            return await real.embed(texts)
+
+    monkeypatch.setattr(embedding, "embedder", WriterMidEmbed)
+    stats = index_tree(root=mini_tree, db=db_path)
+    assert stats["purged"] == 0
+    assert "threads/memory-system-design.md" in _sources(db_path)
+
+
 def test_an_edit_older_than_the_last_run_is_still_reindexed(mini_tree: Path) -> None:
     """An edit made while a run was embedding has an mtime before that run's
     timestamp. Comparing mtime with indexed_at skipped it forever."""

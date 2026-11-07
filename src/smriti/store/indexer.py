@@ -219,12 +219,14 @@ class _Staged:
 
 @dataclass
 class _Plan:
-    """What a run reads: the files it indexes, those it adopts unread, and the
-    records it began from (for the reconcile under the write lock)."""
+    """What a run reads: the files it indexes, those it adopts unread, the
+    sources it purges, and the records it began from (for the reconcile under
+    the write lock)."""
 
     to_index: list[tuple[Path, str, os.stat_result]]
     adopted: list[tuple[str, os.stat_result]]
     recorded: dict[str, tuple[int, int]]
+    purge: list[str]
 
 
 def index_tree(
@@ -357,27 +359,29 @@ def _scan(root: Path) -> list[Path]:
     ]
 
 
+def _gone(root: Path, source: str) -> bool:
+    """Whether an indexed source is to be purged: deleted, or now excluded.
+
+    Judged against the disk, not a scan, so a scan that misses a directory
+    once can't wipe its chunks.
+    """
+    return not is_indexable(source) or not (root / source).is_file()
+
+
 def _plan(conn: IndexDB, files: list[Path], root: Path, full: bool,
           stats: dict[str, int]) -> _Plan:
-    """Purge what is gone, then decide which files this run reads."""
+    """Decide what this run purges and which files it reads; only reads the index.
+
+    The purge is written with everything else, in the run's one transaction
+    (:func:`_commit`), so a run that fails leaves it undone. A full run
+    replaces everything anyway.
+    """
     root_resolved = root.resolve()
-    # ── Purge sources that are gone or now excluded ──────────────────
-    # Judged against the disk, not this scan, so a scan that misses a
-    # directory once can't wipe its chunks. A full run replaces
-    # everything anyway.
     indexed = _indexed_files(conn)
     recorded = _recorded_sources(conn)
     stats["purged"] = 0
-    if not full:
-        for source in sorted(set(indexed) | set(recorded)):
-            if not is_indexable(source) or not (root / source).is_file():
-                _delete_source(conn, source)
-                indexed.pop(source, None)
-                recorded.pop(source, None)
-                stats["purged"] += 1
-        if stats["purged"]:
-            conn.commit()
-            log.info("Purged %d sources (deleted or excluded)", stats["purged"])
+    purge = ([] if full else
+             [s for s in sorted(set(indexed) | set(recorded)) if _gone(root, s)])
 
     # ── Determine which files need (re-)indexing ─────────────────────
     # Each file is stat'ed before it is read, and that stat is what
@@ -416,7 +420,7 @@ def _plan(conn: IndexDB, files: list[Path], root: Path, full: bool,
         log.info("Indexing %d files (%d skipped)", len(to_index), stats["skipped"])
     else:
         log.info("Nothing to index (all files up to date)")
-    return _Plan(to_index, adopted, recorded)
+    return _Plan(to_index, adopted, recorded, purge)
 
 
 def _embed_files(provider: embedding.EmbeddingProvider, plan: _Plan, root: Path,
@@ -523,6 +527,13 @@ def _commit(conn: IndexDB, ours: EmbeddingIdentity, dim: int, full: bool, root: 
                     else {src for src, _ in read_sources})
         for src in replaced - keep:
             _delete_source(conn, src)
+        # The purge: what is still gone, unless another writer recorded it since.
+        for src in plan.purge:
+            if src not in keep and _gone(root, src):
+                _delete_source(conn, src)
+                stats["purged"] += 1
+        if stats["purged"]:
+            log.info("Purged %d sources (deleted or excluded)", stats["purged"])
     written = [(src, st) for src, st in plan.adopted + read_sources if src not in keep]
     for src, st in written:
         _record_source(conn, src, st)
