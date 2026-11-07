@@ -26,14 +26,6 @@ SCANNED = [REPO / "src", REPO / "profiles" / "reference" / "src", REPO / "narada
            REPO / "scripts"]
 VENDORED = REPO / "src" / "smriti" / "_vendored"  # third-party code, kept close to upstream
 
-# Being restructured on another branch (hardening/h12s), which annotates their
-# excepts itself; the scan covers them once both branches are merged.
-NOT_YET: tuple[str, ...] = (
-    "src/smriti/store/indexer.py",
-    "src/smriti/store/search.py",
-    "src/smriti/embed/",
-)
-
 BROAD = frozenset({"Exception", "BaseException"})
 # The code, a dash of any kind, then a reason: at least one word.
 REASON = re.compile(r"#\s*noqa:\s*BLE001\s*[—–-]+\s*\w")
@@ -75,8 +67,7 @@ def unexplained(source: str) -> list[int]:
 def _sources() -> Iterator[Path]:
     for top in SCANNED:
         for path in sorted(top.rglob("*.py")):
-            rel = path.relative_to(REPO).as_posix()
-            if path.is_relative_to(VENDORED) or rel.startswith(NOT_YET):
+            if path.is_relative_to(VENDORED):
                 continue
             yield path
 

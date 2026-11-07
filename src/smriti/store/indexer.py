@@ -311,7 +311,7 @@ def index_tree(
         except sqlite3.OperationalError:
             pass
         conn.close()
-    except BaseException:
+    except BaseException:  # noqa: BLE001 — rolled back and closed on any exit; re-raised
         # Never leak an open write transaction from a long-lived
         # process: a mid-index crash with the connection left open
         # wedged every writer fleet-wide (2026-08-28, and again via
@@ -683,7 +683,7 @@ def _commit_file(db: Path, path: Path, root: Path, rel_source: str, st: os.stat_
         conn.commit()
         conn.close()
         return FileIndexed(len(chunks), reason if pending else "", others)
-    except BaseException:
+    except BaseException:  # noqa: BLE001 — rolled back and closed on any exit; re-raised
         try:
             conn.rollback()
         finally:
@@ -802,7 +802,7 @@ def fill_pending_vectors(*, db: Path | None = None,
         if filled:
             log.info("filled the pending vectors of %d sources", filled)
         return filled
-    except BaseException:
+    except BaseException:  # noqa: BLE001 — rolled back on any exit (closed below); re-raised
         conn.rollback()
         raise
     finally:
