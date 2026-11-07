@@ -49,6 +49,17 @@ _REGISTRY: dict[str, Callable[[], LLMProvider]] = {
     "codex": _load_codex_cli,           # alias
 }
 
+def _load_test_stub() -> LLMProvider:
+    from smriti.llm.providers.stub import StubLLMProvider
+    return StubLLMProvider()  # raises LLMError outside a test
+
+
+# Selectable by name only, never auto-detected or listed: canned answers that
+# refuse to run unless SMRITI_ALLOW_TEST_STUB=1 (smriti.llm.providers.stub).
+_TEST_REGISTRY: dict[str, Callable[[], LLMProvider]] = {
+    "test_stub": _load_test_stub,
+}
+
 # Process-wide cache so we don't re-import providers per call.
 _CACHE: dict[str, LLMProvider] = {}
 
@@ -83,14 +94,15 @@ def get_provider(name: str | None = None) -> LLMProvider:
         if not name:
             name = _autodetect()
     name = name.lower()
-    if name not in _REGISTRY:
+    loader = _REGISTRY.get(name) or _TEST_REGISTRY.get(name)
+    if loader is None:
         raise ValueError(
             f"Unknown LLM provider {name!r}. "
             f"Known: {sorted(set(_REGISTRY))}. "
             "Set SMRITI_LLM_PROVIDER to one of these or unset to auto-detect."
         )
     if name not in _CACHE:
-        _CACHE[name] = _REGISTRY[name]()
+        _CACHE[name] = loader()
     return _CACHE[name]
 
 
