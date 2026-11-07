@@ -236,6 +236,22 @@ file can be opened at all, the night runs as before and its status says
    three prompts, the budgets that decide what its calls see, the provider
    chain, and the user's and agent's names. A digest without one, written
    before H12.12, is judged by its input hash alone.
+
+   Every day-file in the tree is a candidate as well (and a dirty day from
+   capture's state), and every candidate's render and digest heads are
+   compared every night. Since H13.8 the scan doesn't read every day-file to
+   hash its turns, which grew with the history: `.smriti/nightly-scan.json`
+   records each day-file's size and mtime (from the directory listing, taken
+   before the read), its turns' input hash and its corrupt-line count. The
+   changed, dirty and window days are read every night; any other day-file
+   only when its size or mtime differs from the marker's. A missing,
+   unreadable or other-version marker means every day-file is read, and so
+   does a marker whose last full scan is 7 days old: the weekly full scan is
+   the safety net for a file changed in a way its size and mtime don't show.
+   The result is the full scan's. The status's render step says what the
+   scan did (`scan`: the day-files, how many were read, whether it was full)
+   and, when there are any, each day's lines that aren't turns
+   (`corrupt_lines`), which the readers skip.
 3. **Render** `DD.md` from the sorted JSONL. A day that is digested tonight is
    rendered from one read of its turns, and the digest gets that rendered
    text, those turns and their hash (H12.11): a turn appended after the read
@@ -258,7 +274,9 @@ file can be opened at all, the night runs as before and its status says
    input hashes (a member rollup's file hash), and is judged by that until it
    is regenerated; new rollups write it too, so an older smriti reads them as
    current.
-6. **Reindex**: `smriti index` incremental + qmd update/embed, best-effort.
+6. **Reindex**: `smriti index` incremental, waiting up to 60 s for another
+   writer's lock (an argument to the indexer, not the process environment).
+   No qmd refresh: its only consumer, the ambient-recall hook, is off.
 7. **Witness**: commit the tree, timestamp its HEAD, push; the step records
    what the push did.
 8. **Backup** (H12.13): the last commit and push from
