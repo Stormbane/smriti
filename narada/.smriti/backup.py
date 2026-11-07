@@ -14,7 +14,8 @@ Called from:
 Sessions don't trigger it any more: a backup at every SessionStart and
 SessionEnd ran ~30 times a day, scaled with how many sessions were open
 rather than with how much changed, and concurrent runs collided. A run
-with nothing new costs one `git status` and makes no network call.
+with nothing new costs one `git status`, logs that it found nothing, and
+makes no network call.
 
 If the repo uses git-crypt (recommended; the installer doesn't set it up),
 content is encrypted but commit messages are NOT. Keep tags generic
@@ -22,8 +23,10 @@ content is encrypted but commit messages are NOT. Keep tags generic
 
 Best-effort: failures exit 0 and the next trigger catches up. Every outcome
 is appended to ``.git/smriti-backup.jsonl`` (inside .git, so the log never
-creates a commit of its own); `smriti status` and the nightly's status
-report the last commit and push from it (``smriti.backup.backup_status``).
+creates a commit of its own), "nothing to commit" and "up to date" included:
+a run that logged neither a success nor a failure is not taken as a success.
+`smriti status` and the nightly's status report the last commit and push
+from it (``smriti.backup.backup_status``).
 A caller that sets SMRITI_BACKUP_RUN gets that id on each line of its run,
 so it can tell what its own run did.
 
@@ -303,21 +306,34 @@ def clear_stale_locks(cwd: Path) -> None:
     log_event(cwd, event="stale_lock_cleared", locks=removed)
 
 
-def has_changes(cwd: Path) -> bool:
+def has_changes(cwd: Path, tag: str = "") -> bool | None:
+    """Whether there is anything to commit; None when `git status` failed, which is logged.
+
+    A failed status is not "nothing to commit": an unreadable index would
+    otherwise stop every backup while each run reported nothing to do.
+    """
     code, out = run_git(["status", "--porcelain"], cwd)
-    return code == 0 and bool(out.strip())
+    if code != 0:
+        log_event(cwd, event="status_failed", tag=tag, code=code, out=out[-500:])
+        return None
+    return bool(out.strip())
 
 
-def do_commit(cwd: Path, tag: str) -> bool:
-    if not has_changes(cwd):
-        return False
+def do_commit(cwd: Path, tag: str) -> str:
+    """Commit what changed: "ok", "nothing to commit" or "failed", each one logged."""
+    changed = has_changes(cwd, tag)
+    if changed is None:
+        return "failed"
+    if not changed:
+        log_event(cwd, event="nothing_to_commit", tag=tag)
+        return "nothing to commit"
     code, out = run_git(["add", "-A"], cwd, timeout=300)
     if code != 0:
         log_event(cwd, event="add_failed", tag=tag, code=code, out=out[-500:])
-        return False
+        return "failed"
     code, out = run_git(["commit", "-q", "-m", f"snapshot: {tag}"], cwd, timeout=300)
     log_event(cwd, event="commit", tag=tag, ok=code == 0, code=code, out=out[-500:])
-    return code == 0
+    return "ok" if code == 0 else "failed"
 
 
 def push_target(cwd: Path) -> tuple[list[str], str] | str:
@@ -432,8 +448,7 @@ def main() -> int:
         clear_stale_locks(cwd)
         committed = do_commit(cwd, args.tag)
         if args.verbose:
-            msg = "created" if committed else "nothing to commit"
-            print(f"[backup] commit: {msg}", file=sys.stderr)
+            print(f"[backup] commit: {committed}", file=sys.stderr)
 
         target = push_target(cwd) if args.push else None
         if isinstance(target, str):
@@ -441,6 +456,7 @@ def main() -> int:
             if args.verbose:
                 print(f"[backup] push: skipped ({target})", file=sys.stderr)
         elif target is not None and not needs_push(cwd, target[1]):
+            log_event(cwd, event="up_to_date", tag=args.tag)
             if args.verbose:
                 print("[backup] push: nothing new", file=sys.stderr)
         elif target is not None:

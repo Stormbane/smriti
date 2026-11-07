@@ -365,6 +365,93 @@ def test_a_script_still_running_at_the_timeout_is_not_a_success(tmp_path: Path) 
     assert run.detail == "still running after 1s; left to finish"
 
 
+# ---------------------------------------------------------------- a failed git status
+
+
+def _corrupt_index(root: Path) -> None:
+    """A tree with one commit whose index git can no longer read."""
+    (root / "note.md").write_text("a note\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "first")
+    (root / ".git" / "index").write_bytes(b"not an index at all")
+
+
+@needs_git
+def test_a_corrupt_index_is_a_failed_backup_not_nothing_to_commit(tmp_path: Path) -> None:
+    """A failed ``git status`` read as "nothing to commit", and the run as a success with
+    nothing logged: an unreadable index stopped every backup silently (Codex review #6)."""
+    root = _tree(tmp_path)
+    _corrupt_index(root)
+    (root / "later.md").write_text("written after the index broke\n", encoding="utf-8")
+
+    run = trigger("hourly", root=root)
+    assert run.ran and not run.ok
+    assert run.commit == "failed" and run.push == "not asked"
+    assert run.detail.startswith("git status failed: ") and "index" in run.detail
+
+    status = backup_status(root)
+    assert not status.ok
+    assert status.commit is not None and status.commit.state == "failed"
+    assert "commit FAILED" in status.describe() and "git status failed" in status.describe()
+    events = [json.loads(line) for line in (root / ".git" / "smriti-backup.jsonl")
+              .read_text(encoding="utf-8").splitlines()]
+    assert [e["event"] for e in events] == ["status_failed"]
+    assert events[0]["code"] != 0
+
+
+@needs_git
+def test_the_script_still_exits_0_when_git_status_fails(tmp_path: Path) -> None:
+    root = _tree(tmp_path)
+    _corrupt_index(root)
+    env = {**os.environ, "SMRITI_ROOT": str(root)}
+    done = subprocess.run([sys.executable, str(root / ".smriti" / "backup.py"), "--tag", "t",
+                           "--foreground"], env=env, timeout=120)
+    assert done.returncode == 0
+
+
+@needs_git
+def test_a_later_run_with_nothing_to_commit_ends_the_status_failure(tmp_path: Path) -> None:
+    root = _tree(tmp_path)
+    _corrupt_index(root)
+    assert trigger("hourly", root=root).commit == "failed"
+    (root / ".git" / "index").unlink()
+    _git(root, "reset", "-q")  # the index rebuilt from HEAD: nothing to commit
+    run = trigger("hourly", root=root)
+    assert run.as_dict() == {"ok": True, "commit": "nothing to commit", "push": "not asked"}
+    status = backup_status(root)
+    assert status.ok and status.commit is None  # no commit made since the log began
+    assert status.describe() == "no backup recorded yet"
+
+
+def test_a_failure_before_nothing_to_commit_is_over_but_not_after(tmp_path: Path) -> None:
+    _log(tmp_path,
+         {"at": "2026-11-06T01:00:00+00:00", "event": "commit", "tag": "hourly", "ok": True},
+         {"at": "2026-11-06T02:00:00+00:00", "event": "status_failed", "tag": "hourly",
+          "code": 128, "out": "fatal: index file corrupt"},
+         {"at": "2026-11-06T03:00:00+00:00", "event": "nothing_to_commit", "tag": "hourly"})
+    status = backup_status(tmp_path)
+    assert status.ok and status.commit == backup.Outcome("ok", "2026-11-06T01:00:00+00:00")
+    _log(tmp_path, {"at": "2026-11-06T04:00:00+00:00", "event": "status_failed",
+                    "tag": "hourly", "code": 128, "out": "fatal: index file corrupt"})
+    status = backup_status(tmp_path)
+    assert not status.ok and status.commit == backup.Outcome(
+        "failed", "2026-11-06T04:00:00+00:00", "git status failed: fatal: index file corrupt")
+
+
+def test_a_finished_run_that_logged_no_outcome_is_not_a_success() -> None:
+    """Before the script logged "nothing to commit" and "up to date", a run with no lines
+    was read as both; now a step needs its line, so an older script's quiet run (or any
+    run whose lines are lost) is unknown, not ok."""
+    run = backup._summarise([], push=True)
+    assert (run.commit, run.push) == ("unknown", "unknown") and not run.ok
+    assert "logged no outcome" in run.detail
+    run = backup._summarise([], push=False)
+    assert (run.commit, run.push) == ("unknown", "not asked") and not run.ok
+    run = backup._summarise([{"event": "nothing_to_commit"}, {"event": "up_to_date"}],
+                            push=True)
+    assert run.as_dict() == {"ok": True, "commit": "nothing to commit", "push": "up to date"}
+
+
 def test_trigger_says_why_it_did_not_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert "no backup script" in trigger("t", root=tmp_path).detail
     (tmp_path / ".smriti").mkdir()

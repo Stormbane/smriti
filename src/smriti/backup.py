@@ -29,6 +29,8 @@ log = logging.getLogger(__name__)
 LOG_NAME = "smriti-backup.jsonl"  # the script's LOG_NAME
 _RUN_ENV = "SMRITI_BACKUP_RUN"  # the script puts it on each line of the run
 _DETAIL_CHARS = 300
+_NO_OUTCOME = ("the run logged no outcome; the deployed backup script may be older "
+               "than smriti (the installer updates it)")
 
 
 @dataclass(frozen=True)
@@ -36,13 +38,15 @@ class BackupRun:
     """What one :func:`trigger` did, from the lines its run logged."""
 
     ran: bool  # the script ran to its end
-    commit: str = ""  # "ok", "failed", "nothing to commit", "skipped"
-    push: str = ""  # "ok", "failed", "up to date", "skipped", "not asked"
+    # "ok", "failed", "nothing to commit", "skipped", "unknown" (the run logged no outcome)
+    commit: str = ""
+    push: str = ""  # "ok", "failed", "up to date", "skipped", "not asked", "unknown"
     detail: str = ""  # why it didn't run, or git's output for a failure
 
     @property
     def ok(self) -> bool:
-        return self.ran and "failed" not in (self.commit, self.push)
+        """It ran, and its lines show each step done: a step it didn't log isn't ok."""
+        return self.ran and not {self.commit, self.push} & {"failed", "unknown"}
 
     def as_dict(self) -> dict[str, object]:
         out: dict[str, object] = {"ok": self.ok, "commit": self.commit, "push": self.push}
@@ -178,11 +182,13 @@ def _events_of_run(log_path: Path | None, run_id: str, start: int, started: str,
 
 def _summarise(events: list[dict[str, object]], *, push: bool,
                finished: bool = True) -> BackupRun:
-    """What a run's lines say it did. A run that didn't *finish* did nothing it didn't log."""
-    if finished:
-        commit, push_state = "nothing to commit", "up to date" if push else "not asked"
-    else:
-        commit, push_state = "", ""
+    """What a run's lines say it did; a step it didn't log is not taken as done.
+
+    "nothing to commit" and "up to date" are lines of their own, so neither a
+    failed ``git status`` nor a script too old to log them reads as a
+    success: a finished run with no line for a step reports it "unknown".
+    """
+    commit, push_state = "", "not asked" if finished and not push else ""
     detail = ""
     for e in events:
         kind = e.get("event")
@@ -191,14 +197,21 @@ def _summarise(events: list[dict[str, object]], *, push: bool,
                              detail=str(e.get("reason", "")))
         if kind == "commit":
             commit = "ok" if e.get("ok") else "failed"
-        elif kind == "add_failed":
+        elif kind in ("add_failed", "status_failed"):
             commit = "failed"
+        elif kind == "nothing_to_commit":
+            commit = "nothing to commit"
         elif kind == "push":
             push_state = "ok" if e.get("ok") else "failed"
+        elif kind == "up_to_date":
+            push_state = "up to date"
         elif kind == "push_skipped":
             push_state, detail = "skipped", str(e.get("reason", ""))
-        if kind in ("commit", "add_failed", "push") and not e.get("ok"):
+        if kind in ("commit", "add_failed", "status_failed", "push") and not e.get("ok"):
             detail = _detail(e)
+    if finished and "" in (commit, push_state):
+        commit, push_state = commit or "unknown", push_state or "unknown"
+        detail = detail or _NO_OUTCOME
     return BackupRun(ran=True, commit=commit, push=push_state, detail=detail)
 
 
@@ -207,6 +220,8 @@ def _detail(event: dict[str, object]) -> str:
     out = " ".join(str(event.get("out") or "").split())
     if not out:
         out = f"git exited {event.get('code', '?')}"
+    if event.get("event") == "status_failed":
+        out = f"git status failed: {out}"
     return out[-_DETAIL_CHARS:]
 
 
@@ -383,6 +398,10 @@ def backup_status(root: Path) -> BackupStatus:
     which isn't a failure of its backups. Git decides whether the remote is
     configured (:func:`_remote_configured`); it is asked only when the last
     push failed. Pushes that were skipped (a detached HEAD) are reported so too.
+
+    A failed ``git status`` is a failed commit. A later run that found
+    nothing to commit ends the failures before it: the commit reported is
+    then the last one made.
     """
     common = git_common_dir(root)
     if common is None:
@@ -391,12 +410,16 @@ def backup_status(root: Path) -> BackupStatus:
     push: Outcome | None = None
     failing_since = ""
     streak_found = False  # the push before the failures, or the log's start
+    commit_cleared = False  # a later run found nothing to commit
     # Newest first, parsing only as far back as the answer needs.
     for e in _records(reversed(_read_lines(common / LOG_NAME))):
         kind, at = e.get("event"), str(e.get("at", ""))
-        if commit is None and kind in ("commit", "add_failed"):
+        if commit is None and kind == "nothing_to_commit":
+            commit_cleared = True
+        elif commit is None and kind in ("commit", "add_failed", "status_failed"):
             ok = kind == "commit" and bool(e.get("ok"))
-            commit = Outcome("ok" if ok else "failed", at, "" if ok else _detail(e))
+            if ok or not commit_cleared:
+                commit = Outcome("ok" if ok else "failed", at, "" if ok else _detail(e))
         elif push is None and kind == "push_skipped":
             push = Outcome("skipped", at, str(e.get("reason", "")))
         elif push is None and kind == "push":
