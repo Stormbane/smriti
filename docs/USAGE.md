@@ -43,7 +43,9 @@ This sets up:
   SessionStart force-injection mechanism).
 
 Re-running the install is idempotent. Existing config keys are
-preserved; a `.toml.bak` is dropped before any write.
+preserved. Before any write the file as it was goes to a new
+`config.toml.smriti-<UTC time>.bak` beside it; the first of these is
+never removed, and five are kept in all.
 
 ### Force-injection guarantee
 

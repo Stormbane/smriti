@@ -7,6 +7,7 @@ from smriti.doctor import claude_code_checks, codex_checks, run_doctor
 from smriti.integrations.claude_code import install as claude_install
 from smriti.integrations.codex import install as codex_install
 from smriti.integrations.common.hook_model import make_wake_hook_command
+from tests._home import use_home
 
 
 def _make_entity_and_project(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -34,11 +35,7 @@ def test_codex_doctor_accepts_a_freshly_installed_bridge(tmp_path, monkeypatch) 
     codex = home / ".codex"
     codex.mkdir()
 
-    monkeypatch.setattr(codex_install, "HOME", home)
-    monkeypatch.setattr(codex_install, "CODEX", codex)
-    monkeypatch.setattr(codex_install, "CONFIG_TOML", codex / "config.toml")
-    monkeypatch.setattr(codex_install, "AGENTS_MD", codex / "AGENTS.md")
-    monkeypatch.setattr(codex_install, "HOOKS_DST", codex / "hooks")
+    use_home(monkeypatch, home)
     assert codex_install.run_codex(memory_root) is True
 
     checks = codex_checks(memory_root=memory_root, project=project, home=home)
@@ -52,11 +49,7 @@ def test_codex_doctor_flags_deployed_hook_drift(tmp_path, monkeypatch) -> None:
     home, memory_root, project = _make_entity_and_project(tmp_path)
     codex = home / ".codex"
     codex.mkdir()
-    monkeypatch.setattr(codex_install, "HOME", home)
-    monkeypatch.setattr(codex_install, "CODEX", codex)
-    monkeypatch.setattr(codex_install, "CONFIG_TOML", codex / "config.toml")
-    monkeypatch.setattr(codex_install, "AGENTS_MD", codex / "AGENTS.md")
-    monkeypatch.setattr(codex_install, "HOOKS_DST", codex / "hooks")
+    use_home(monkeypatch, home)
     codex_install.run_codex(memory_root)
 
     (codex / "hooks" / "recall_hook.py").write_text("# stale\n", encoding="utf-8")
@@ -73,12 +66,7 @@ def test_claude_doctor_accepts_a_freshly_installed_bridge(tmp_path, monkeypatch)
     (claude / "settings.json").write_text("{}", encoding="utf-8")
     (home / ".claude.json").write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(claude_install, "HOME", home)
-    monkeypatch.setattr(claude_install, "CLAUDE", claude)
-    monkeypatch.setattr(claude_install, "SETTINGS", claude / "settings.json")
-    monkeypatch.setattr(claude_install, "CLAUDE_MD", claude / "CLAUDE.md")
-    monkeypatch.setattr(claude_install, "CLAUDE_CONFIG", home / ".claude.json")
-    monkeypatch.setattr(claude_install, "HOOKS_DST", claude / "hooks")
+    use_home(monkeypatch, home)
     assert claude_install.run_claude_code(memory_root) is True
 
     checks = claude_code_checks(memory_root=memory_root, project=project, home=home)
@@ -133,11 +121,7 @@ def test_codex_doctor_tolerates_hooks_state_table(tmp_path, monkeypatch) -> None
     home, memory_root, project = _make_entity_and_project(tmp_path)
     codex = home / ".codex"
     codex.mkdir()
-    monkeypatch.setattr(codex_install, "HOME", home)
-    monkeypatch.setattr(codex_install, "CODEX", codex)
-    monkeypatch.setattr(codex_install, "CONFIG_TOML", codex / "config.toml")
-    monkeypatch.setattr(codex_install, "AGENTS_MD", codex / "AGENTS.md")
-    monkeypatch.setattr(codex_install, "HOOKS_DST", codex / "hooks")
+    use_home(monkeypatch, home)
     codex_install.run_codex(memory_root)
 
     config = codex / "config.toml"

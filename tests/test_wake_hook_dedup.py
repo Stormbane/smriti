@@ -20,20 +20,13 @@ from smriti.integrations.common.hook_model import (
     classify_wake_hook,
     make_wake_hook_command,
 )
+from tests._home import use_home
 
 
 @pytest.fixture
 def fake_home(tmp_path, monkeypatch):
-    home = tmp_path
-    claude = home / ".claude"
-    claude.mkdir()
-    monkeypatch.setattr(cc_install, "HOME", home)
-    monkeypatch.setattr(cc_install, "CLAUDE", claude)
-    monkeypatch.setattr(cc_install, "SETTINGS", claude / "settings.json")
-    monkeypatch.setattr(cc_install, "CLAUDE_MD", claude / "CLAUDE.md")
-    monkeypatch.setattr(cc_install, "CLAUDE_CONFIG", home / ".claude.json")
-    monkeypatch.setattr(cc_install, "HOOKS_DST", claude / "hooks")
-    return home
+    (tmp_path / ".claude").mkdir()
+    return use_home(monkeypatch, tmp_path)
 
 
 def _wake_hooks_in(settings: dict, memory_root, home) -> list[str]:
@@ -122,14 +115,9 @@ class TestClaudeWakeHookDedup:
 
 class TestCodexWakeHookDedup:
     def test_two_equivalent_hooks_keep_only_first(self, tmp_path, monkeypatch):
-        home = tmp_path
+        home = use_home(monkeypatch, tmp_path)
         codex_dir = home / ".codex"
         codex_dir.mkdir()
-        monkeypatch.setattr(codex_install, "HOME", home)
-        monkeypatch.setattr(codex_install, "CODEX", codex_dir)
-        monkeypatch.setattr(codex_install, "CONFIG_TOML", codex_dir / "config.toml")
-        monkeypatch.setattr(codex_install, "AGENTS_MD", codex_dir / "AGENTS.md")
-        monkeypatch.setattr(codex_install, "HOOKS_DST", codex_dir / "hooks")
         memory_root = home / ".narada"
         eq = make_wake_hook_command(memory_root, home=home, framing="codex-json")
         config = codex_dir / "config.toml"

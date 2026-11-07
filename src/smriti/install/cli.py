@@ -52,6 +52,9 @@ from smriti.install.core import (
 
 
 KNOWN_HARNESSES = ("claude_code", "codex", "hermes", "none")
+# A harness step that fails: its preflight refused (nothing changed), or a
+# config file kept changing while it was edited (that file left as it was).
+_HARNESS_FAILED = "see the message above; run the install again once it is resolved."
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -219,8 +222,7 @@ def main(argv: list[str] | None = None) -> int:
             migrate_doc=args.migrate_agent_doc,
         )
         if not ok:
-            print(f"\nFAILED ({harness}): install refused before mutating "
-                  "harness state — see message above.", file=sys.stderr)
+            print(f"\nFAILED ({harness}): {_HARNESS_FAILED}", file=sys.stderr)
             return 1
     elif harness == "codex":
         ok = mod.run_codex(
@@ -229,8 +231,7 @@ def main(argv: list[str] | None = None) -> int:
             migrate_doc=args.migrate_agent_doc,
         )
         if not ok:
-            print(f"\nFAILED ({harness}): install refused before mutating "
-                  "harness state — see message above.", file=sys.stderr)
+            print(f"\nFAILED ({harness}): {_HARNESS_FAILED}", file=sys.stderr)
             return 1
     else:
         # Convention for new harnesses: expose a ``run(memory_root, **opts)``.

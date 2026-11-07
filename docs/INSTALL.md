@@ -218,6 +218,15 @@ python scripts/install.py --harness none  # core memory setup only
 | Patch settings.json | `~/.claude/settings.json` | SessionStart → `wake.py`; UserPromptSubmit → touch `last-activity`; PostToolUse → ambient recall (legacy, being retired) |
 | Write CLAUDE.md | `~/.claude/CLAUDE.md` | Managed block: the memory contract from `src/smriti/templates/AGENT.md` |
 
+Claude Code rewrites `~/.claude.json` and `settings.json` while it runs, so
+the installer edits them carefully: it holds a lock from its read to its
+write, reads the file again just before writing (if Claude Code changed it
+meanwhile, the change is made again on the new text, once; if it changed
+again, the file is left alone and the install exits nonzero, to be run
+again), writes atomically with the file's permissions, and first copies the
+file as it was to `<file>.smriti-<UTC time>.bak`. The first such backup,
+the file before smriti changed it, is never removed; five are kept in all.
+
 The table above describes the default Claude Code bridge. The Codex bridge
 writes `~/.codex/AGENTS.md`, patches `~/.codex/config.toml`, registers the MCP
 server, and installs wake/recall hooks. Verify it without changing state:

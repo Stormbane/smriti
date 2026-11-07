@@ -23,21 +23,15 @@ from smriti.integrations.common.hook_model import (
 from smriti.integrations.common.managed_doc import (
     classify_doc,
 )
+from smriti.integrations.common.config_file import backups
+from tests._home import use_home
 
 
 @pytest.fixture
 def fake_codex_home(tmp_path, monkeypatch):
-    """Redirect every ~/.codex/* path the install module uses."""
-    home = tmp_path
-    codex_dir = home / ".codex"
-    codex_dir.mkdir()
-
-    monkeypatch.setattr(codex_install, "HOME", home)
-    monkeypatch.setattr(codex_install, "CODEX", codex_dir)
-    monkeypatch.setattr(codex_install, "CONFIG_TOML", codex_dir / "config.toml")
-    monkeypatch.setattr(codex_install, "AGENTS_MD", codex_dir / "AGENTS.md")
-    monkeypatch.setattr(codex_install, "HOOKS_DST", codex_dir / "hooks")
-    return home
+    """A temporary home with an empty ~/.codex, where every ~/.codex path now is."""
+    (tmp_path / ".codex").mkdir()
+    return use_home(monkeypatch, tmp_path)
 
 
 def _read_toml(path: Path) -> dict:
@@ -159,21 +153,20 @@ class TestPatchConfigTomlMergeBehavior:
 
         codex_install.patch_config_toml(fake_codex_home / ".narada")
 
-        backup = config.with_suffix(".toml.bak")
-        assert backup.exists()
+        [backup] = backups(config)
         assert "[orig]" in backup.read_text(encoding="utf-8")
 
     def test_does_not_back_up_when_no_change(self, fake_codex_home):
         memory_root = fake_codex_home / ".narada"
+        config = fake_codex_home / ".codex" / "config.toml"
+        config.write_text("[orig]\nval = 1\n", encoding="utf-8")
         codex_install.patch_config_toml(memory_root)
-        # Drop any backup from the first run.
-        backup = (fake_codex_home / ".codex" / "config.toml.bak")
-        if backup.exists():
-            backup.unlink()
+        first = backups(config)
+        assert len(first) == 1
 
         # Re-run is a no-op: should not create another backup.
         codex_install.patch_config_toml(memory_root)
-        assert not backup.exists()
+        assert backups(config) == first
 
 
 # --- write_agents_md ----------------------------------------------------

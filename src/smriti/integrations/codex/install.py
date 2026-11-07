@@ -33,13 +33,15 @@ Codex hook docs reference:
     https://developers.openai.com/codex/config-reference
 
 This module shares MCP spec, AGENT.md composition, managed-doc
-machinery, hook deployment, and the wake-hook model with
-``claude_code/install.py`` via ``smriti.integrations.common``.
+machinery, hook deployment, the wake-hook model and config-file editing
+(:func:`smriti.integrations.common.config_file.edit_config`: locked,
+re-read before writing, backed up, atomic) with ``claude_code/install.py``
+via ``smriti.integrations.common``. Paths are worked out from the home
+directory when a step runs, not when this module is imported.
 """
 
 from __future__ import annotations
 
-import shutil
 import sys
 import tomllib
 from pathlib import Path
@@ -61,19 +63,35 @@ from smriti.integrations.common import (
     migrate_agent_doc,
     write_managed_doc,
 )
+from smriti.integrations.common.config_file import edit_config
 from smriti.integrations.common.managed_doc import DocState
-
-HOME = Path.home()
-CODEX = HOME / ".codex"
-CONFIG_TOML = CODEX / "config.toml"
-AGENTS_MD = CODEX / "AGENTS.md"
-HOOKS_DST = CODEX / "hooks"
 
 WAKE_FRAMING = "codex-json"
 SESSION_START_MATCHER = "startup|resume|clear|compact"
 
 # One shared recall shim, deployed under this harness's local filename.
 HOOK_DEPLOY_MAP = {"recall_shim.py": "recall_hook.py"}
+
+
+def _home(home: Path | None = None) -> Path:
+    """*home* when given, else the user's home as the environment says now."""
+    return home if home is not None else Path.home()
+
+
+def codex_dir(home: Path | None = None) -> Path:
+    return _home(home) / ".codex"
+
+
+def config_toml_path(home: Path | None = None) -> Path:
+    return codex_dir(home) / "config.toml"
+
+
+def agents_md_path(home: Path | None = None) -> Path:
+    return codex_dir(home) / "AGENTS.md"
+
+
+def hooks_dir(home: Path | None = None) -> Path:
+    return codex_dir(home) / "hooks"
 
 
 def _wake_style() -> str:
@@ -139,23 +157,17 @@ def _import_tomli_w() -> ModuleType:
     return tomli_w
 
 
-def _read_toml(path: Path) -> dict[str, Any]:
-    if not path.exists():
+def _parse_toml(path: Path, text: str | None) -> dict[str, Any]:
+    if text is None:
         return {}
     try:
-        return tomllib.loads(path.read_text(encoding="utf-8"))
+        return tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
         print(f"[codex] parse error on {path}: {exc}; aborting")
         sys.exit(1)
 
 
-def _write_toml(path: Path, data: dict[str, Any]) -> None:
-    tomli_w = _import_tomli_w()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(tomli_w.dumps(data), encoding="utf-8")
-
-
-def patch_config_toml(memory_root: Path) -> None:
+def patch_config_toml(memory_root: Path, home: Path | None = None) -> bool:
     """Idempotently set hook + MCP server entries in ``~/.codex/config.toml``.
 
     Steps:
@@ -167,8 +179,38 @@ def patch_config_toml(memory_root: Path) -> None:
            and equivalent hooks under a wrong matcher are migrated to
            the canonical group; UNRELATED hooks survive intact.
         3. ``[mcp_servers.smriti]`` pointing at the MCP entrypoint
+
+    False when the change couldn't be saved (the file kept changing).
     """
-    data = _read_toml(CONFIG_TOML)
+    home = _home(home)
+    config = config_toml_path(home)
+    notes: list[str] = []
+
+    def rewrite(text: str | None) -> str | None:
+        notes.clear()  # a second pass, on the text Codex left, reports afresh
+        data = _parse_toml(config, text)
+        if not _wire_config(data, notes, memory_root, home):
+            return None
+        tomli_w = _import_tomli_w()  # only when there is something to write
+        text_out: str = tomli_w.dumps(data)
+        return text_out
+
+    done = edit_config(config, rewrite)
+    for note in notes:
+        print(f"[codex] {note}")
+    if done.refused:
+        print(f"[codex] NOT SAVED: {done.refused}")
+        return False
+    if done.changed:
+        if done.backup is not None:
+            print(f"[codex] backup: {done.backup}")
+        print(f"[codex] saved {config}")
+    return True
+
+
+def _wire_config(data: dict[str, Any], notes: list[str], memory_root: Path,
+                 home: Path) -> bool:
+    """Wire smriti's hooks and MCP server into config.toml's data; whether anything changed."""
     changed = False
 
     # 1. Enable hooks. ``codex_hooks`` remains a compatibility alias but
@@ -176,13 +218,13 @@ def patch_config_toml(memory_root: Path) -> None:
     features = data.setdefault("features", {})
     if features.get("hooks") is not True:
         features["hooks"] = True
-        print("[codex] [features] hooks = true")
+        notes.append("[features] hooks = true")
         changed = True
 
     # 2. SessionStart hook -> wake.py with codex-json framing.
     wake_cmd = make_wake_hook_command(
         memory_root,
-        home=HOME,
+        home=home,
         framing=WAKE_FRAMING,
         audience="coding",
         style=_wake_style(),
@@ -192,7 +234,7 @@ def patch_config_toml(memory_root: Path) -> None:
 
     def classify(cmd: str) -> str:
         verdict, _ = classify_wake_hook(
-            cmd, memory_root=memory_root, home=HOME, framing=WAKE_FRAMING
+            cmd, memory_root=memory_root, home=home, framing=WAKE_FRAMING
         )
         return verdict
 
@@ -225,7 +267,7 @@ def patch_config_toml(memory_root: Path) -> None:
             retained_groups.append({**group, "hooks": retained_hooks})
 
     if properly_wired and not needs_canonical:
-        print("[codex] SessionStart wake hook already wired (equivalent)")
+        notes.append("SessionStart wake hook already wired (equivalent)")
     else:
         if not properly_wired:
             retained_groups.append({
@@ -238,7 +280,7 @@ def patch_config_toml(memory_root: Path) -> None:
             })
         if session_start != retained_groups:
             hooks["SessionStart"] = retained_groups
-            print("[codex] [[hooks.SessionStart]] -> wake.py (canonical)")
+            notes.append("[[hooks.SessionStart]] -> wake.py (canonical)")
             changed = True
 
     # 3. PostToolUse hook -> recall_hook.py (codex-json framing).
@@ -256,7 +298,7 @@ def patch_config_toml(memory_root: Path) -> None:
         for h in group.get("hooks", [])
     )
     if recall_wired:
-        print("[codex] PostToolUse recall hook already wired")
+        notes.append("PostToolUse recall hook already wired")
     else:
         post_tool.append({
             "matcher": "Edit|Write|apply_patch",
@@ -267,14 +309,14 @@ def patch_config_toml(memory_root: Path) -> None:
                 "timeout": 10,
             }],
         })
-        print("[codex] [[hooks.PostToolUse]] -> recall_hook.py (apply_patch)")
+        notes.append("[[hooks.PostToolUse]] -> recall_hook.py (apply_patch)")
         changed = True
 
     # 4. MCP server registration. Superset match: Codex annotates the
     # entry with tools.* approval-mode subtables; extras are fine.
     mcp = data.setdefault("mcp_servers", {})
     if mcp_registration_matches(mcp.get("smriti")):
-        print("[codex] [mcp_servers.smriti] already registered")
+        notes.append("[mcp_servers.smriti] already registered")
     else:
         existing = mcp.get("smriti")
         desired = {
@@ -287,24 +329,16 @@ def patch_config_toml(memory_root: Path) -> None:
             existing.update(desired)
         else:
             mcp["smriti"] = desired
-        print("[codex] [mcp_servers.smriti] registered")
+        notes.append("[mcp_servers.smriti] registered")
         changed = True
 
-    if not changed:
-        return
-
-    if CONFIG_TOML.exists():
-        backup = CONFIG_TOML.with_suffix(".toml.bak")
-        shutil.copy2(CONFIG_TOML, backup)
-        print(f"[codex] backup: {backup}")
-    _write_toml(CONFIG_TOML, data)
-    print(f"[codex] saved {CONFIG_TOML}")
+    return changed
 
 
-def _agents_md_block(memory_root: Path) -> str:
+def _agents_md_block(memory_root: Path, home: Path | None = None) -> str:
     # The block carries no H1 — the title line belongs to the document
     # (kept on migration, supplied via ``title=`` on creation).
-    memory_rel = f"~/{memory_root.relative_to(HOME).as_posix()}"
+    memory_rel = f"~/{memory_root.relative_to(_home(home)).as_posix()}"
     return compose_agent_doc(
         addendum=CODEX_ADDENDUM,
         memory_rel=memory_rel,
@@ -312,54 +346,56 @@ def _agents_md_block(memory_root: Path) -> str:
     )
 
 
-def agent_doc_state() -> DocState:
+def agent_doc_state(home: Path | None = None) -> DocState:
     """Classify ~/.codex/AGENTS.md without modifying it."""
-    return classify_doc(AGENTS_MD)
+    return classify_doc(agents_md_path(home))
 
 
-def preflight_agent_doc() -> str | None:
+def preflight_agent_doc(home: Path | None = None) -> str | None:
     """Validate ~/.codex/AGENTS.md BEFORE any harness mutation.
 
     Returns None when safe to proceed, or a human-readable refusal.
     """
-    state = agent_doc_state()
+    state = agent_doc_state(home)
     if state.kind in ("missing", "managed"):
         return None
     return state.detail
 
 
-def write_agents_md(memory_root: Path) -> None:
+def write_agents_md(memory_root: Path, home: Path | None = None) -> None:
     """Create or rewrite the managed block in ~/.codex/AGENTS.md."""
-    content = _agents_md_block(memory_root)
+    agents_md = agents_md_path(home)
+    content = _agents_md_block(memory_root, home)
     if len(content) > 32_000:
         print(
             f"[codex] WARNING: AGENTS.md block is {len(content)} bytes; "
             "Codex caps project-doc loading at 32 KiB. Consider trimming."
         )
     if write_managed_doc(
-        AGENTS_MD,
+        agents_md,
         content,
         title="# AGENTS.md (user-global) — smriti memory contract",
     ):
-        print(f"[codex] wrote managed block in {AGENTS_MD}")
+        print(f"[codex] wrote managed block in {agents_md}")
     else:
-        print(f"[codex] {AGENTS_MD} up to date")
+        print(f"[codex] {agents_md} up to date")
 
 
-def migrate_agents_md(memory_root: Path) -> None:
+def migrate_agents_md(memory_root: Path, home: Path | None = None) -> None:
     """One-time legacy conversion. Raises ManagedDocError when unsafe."""
-    backup = migrate_agent_doc(AGENTS_MD, _agents_md_block(memory_root))
+    backup = migrate_agent_doc(agents_md_path(home), _agents_md_block(memory_root, home))
     print(f"[codex] migrated AGENTS.md to managed block (backup: {backup})")
 
 
-def install_hook_scripts() -> None:
+def install_hook_scripts(home: Path | None = None) -> None:
     """Deploy the shared recall shim into ``~/.codex/hooks/``."""
-    deploy_hook_scripts(SHARED_HOOKS_DIR, HOOKS_DST, HOOK_DEPLOY_MAP)
+    deploy_hook_scripts(SHARED_HOOKS_DIR, hooks_dir(home), HOOK_DEPLOY_MAP)
 
 
 def run_codex(
     memory_root: Path,
     *,
+    home: Path | None = None,
     skip_config: bool = False,
     migrate_doc: bool = False,
 ) -> bool:
@@ -367,22 +403,24 @@ def run_codex(
 
     Returns False (after mutating NOTHING) when the agent-doc preflight
     refuses — the dispatcher turns that into a nonzero exit so a
-    partial install can never masquerade as success.
+    partial install can never masquerade as success. Returns False too
+    when config.toml couldn't be saved (it kept changing); it is left as
+    it was, and the install can be run again.
     """
-    if migrate_doc and classify_doc(AGENTS_MD).kind == "migration-required":
+    home = _home(home)
+    if migrate_doc and classify_doc(agents_md_path(home)).kind == "migration-required":
         try:
-            migrate_agents_md(memory_root)
+            migrate_agents_md(memory_root, home)
         except ManagedDocError as exc:
             print(f"[codex] migration failed: {exc}")
             return False
 
-    refusal = preflight_agent_doc()
+    refusal = preflight_agent_doc(home)
     if refusal is not None:
         print(f"[codex] REFUSED before any change: {refusal}")
         return False
 
-    install_hook_scripts()
-    if not skip_config:
-        patch_config_toml(memory_root)
-    write_agents_md(memory_root)
-    return True
+    install_hook_scripts(home)
+    saved = patch_config_toml(memory_root, home) if not skip_config else True
+    write_agents_md(memory_root, home)
+    return saved

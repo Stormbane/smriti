@@ -67,9 +67,9 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("smriti/eval/runner.py", "*"): "a sandbox copy of the evaluation fixture and index",
     ("smriti/install/core.py", "*"): "the installer: smriti's own templates and scripts",
     ("smriti/install/privacy.py", "*"): "the installer's privacy check: its answer and a listing",
-    ("smriti/integrations/claude_code/install.py", "*"):
-        "Claude Code's settings and MCP config, outside the tree",
-    ("smriti/integrations/codex/install.py", "*"): "Codex's config.toml, outside the tree",
+    ("smriti/integrations/common/config_file.py", "*"):
+        "a harness's own config (~/.claude.json, settings.json, config.toml) and its "
+        "backups, outside the tree",
     ("smriti/integrations/hermes/install.py", "*"): "Hermes' config, outside the tree (legacy)",
     ("smriti/integrations/common/hook_scripts.py", "*"): "the deployed hook scripts",
     ("smriti/integrations/common/managed_doc.py", "*"):

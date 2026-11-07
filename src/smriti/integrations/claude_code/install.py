@@ -17,14 +17,20 @@ deployment — come from ``smriti.integrations.common`` so any change to
 those pieces flows to every harness adapter at once. Only the Claude-
 Code-specific config-file format and addendum text live here.
 
+The two JSON files are Claude Code's own, rewritten while it runs; each edit
+goes through :func:`smriti.integrations.common.config_file.edit_config`
+(locked, re-read before writing, backed up, atomic). Paths are worked out
+from the home directory when a step runs, not when this module is imported.
+
 All operations are idempotent.
 """
 
 from __future__ import annotations
 
 import json
-import shutil
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from smriti.integrations.common import (
     DEFICIENT,
@@ -41,14 +47,9 @@ from smriti.integrations.common import (
     migrate_agent_doc,
     write_managed_doc,
 )
+from smriti.integrations.common.config_file import edit_config
 from smriti.integrations.common.managed_doc import DocState
 
-HOME = Path.home()
-CLAUDE = HOME / ".claude"
-SETTINGS = CLAUDE / "settings.json"
-CLAUDE_MD = CLAUDE / "CLAUDE.md"
-CLAUDE_CONFIG = HOME / ".claude.json"  # MCP server registry
-HOOKS_DST = CLAUDE / "hooks"
 HOOKS_SRC = Path(__file__).resolve().parent / "hooks"
 
 # Claude Code runs hook commands under a POSIX shell on every platform
@@ -62,58 +63,123 @@ HOOK_DEPLOY_MAP = {"recall_shim.py": "associative_recall.py"}
 LOCAL_HOOKS = ["precompact_capture.py"]
 
 
-def register_mcp_server() -> None:
-    """Add the smriti MCP server to ``~/.claude.json`` at user scope."""
-    if not CLAUDE_CONFIG.exists():
-        print(f"[mcp] {CLAUDE_CONFIG} not found — skipping (Claude Code not run yet?)")
-        return
-    try:
-        data = json.loads(CLAUDE_CONFIG.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        print(f"[mcp] parse error on {CLAUDE_CONFIG}: {exc}; leaving untouched")
-        return
-
-    servers = data.setdefault("mcpServers", {})
-    if mcp_registration_matches(servers.get("smriti")):
-        print("[mcp] smriti server already registered")
-        return
-    servers["smriti"] = dict(SMRITI_MCP_COMMAND)
-    backup = CLAUDE_CONFIG.with_suffix(".json.bak")
-    shutil.copy2(CLAUDE_CONFIG, backup)
-    CLAUDE_CONFIG.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    print(f"[mcp] registered smriti server (backup: {backup})")
+def _home(home: Path | None = None) -> Path:
+    """*home* when given, else the user's home as the environment says now."""
+    return home if home is not None else Path.home()
 
 
-def _wake_command(memory_root: Path) -> str:
+def claude_dir(home: Path | None = None) -> Path:
+    return _home(home) / ".claude"
+
+
+def settings_path(home: Path | None = None) -> Path:
+    """``~/.claude/settings.json``: the hooks."""
+    return claude_dir(home) / "settings.json"
+
+
+def claude_md_path(home: Path | None = None) -> Path:
+    return claude_dir(home) / "CLAUDE.md"
+
+
+def claude_config_path(home: Path | None = None) -> Path:
+    """``~/.claude.json``: Claude Code's own state, and the user-scope MCP servers."""
+    return _home(home) / ".claude.json"
+
+
+def hooks_dir(home: Path | None = None) -> Path:
+    return claude_dir(home) / "hooks"
+
+
+def _edit_json(path: Path, tag: str,
+               change: Callable[[dict[str, Any], list[str]], bool]) -> bool:
+    """Apply *change* to the JSON object in *path* (:func:`edit_config`); print what it did.
+
+    *change* edits the object and says whether it changed it, noting what it
+    did in the list it is given. False when a change couldn't be saved.
+    """
+    notes: list[str] = []
+
+    def rewrite(text: str | None) -> str | None:
+        notes.clear()  # a second pass, on the text Claude Code left, reports afresh
+        if text is None:
+            notes.append(f"{path} not found — skipping")
+            return None
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            notes.append(f"parse error on {path}: {exc}; leaving untouched")
+            return None
+        if not isinstance(data, dict):
+            notes.append(f"{path} doesn't hold a JSON object; leaving untouched")
+            return None
+        return json.dumps(data, indent=2) if change(data, notes) else None
+
+    done = edit_config(path, rewrite)
+    for note in notes:
+        print(f"[{tag}] {note}")
+    if done.refused:
+        print(f"[{tag}] NOT SAVED: {done.refused}")
+        return False
+    if done.changed:
+        print(f"[{tag}] saved {path}" + (f" (backup: {done.backup})" if done.backup else ""))
+    return True
+
+
+def register_mcp_server(home: Path | None = None) -> bool:
+    """Add the smriti MCP server to ``~/.claude.json`` at user scope.
+
+    False when the change couldn't be saved (Claude Code kept rewriting the file).
+    """
+    config = claude_config_path(home)
+    if not config.exists():
+        print(f"[mcp] {config} not found — skipping (Claude Code not run yet?)")
+        return True
+
+    def register(data: dict[str, Any], notes: list[str]) -> bool:
+        servers = data.setdefault("mcpServers", {})
+        if mcp_registration_matches(servers.get("smriti")):
+            notes.append("smriti server already registered")
+            return False
+        servers["smriti"] = dict(SMRITI_MCP_COMMAND)
+        notes.append("registered smriti server")
+        return True
+
+    return _edit_json(config, "mcp", register)
+
+
+def _wake_command(memory_root: Path, home: Path) -> str:
     return make_wake_hook_command(
         memory_root,
-        home=HOME,
+        home=home,
         framing=WAKE_FRAMING,
         audience="coding",
         style=WAKE_STYLE,
     )
 
 
-def patch_settings_json(memory_root: Path) -> None:
+def patch_settings_json(memory_root: Path, home: Path | None = None) -> bool:
     """Wire SessionStart / UserPromptSubmit / PostToolUse hooks.
 
     SessionStart wiring goes through the canonical hook model:
     an EQUIVALENT wake hook (any command form) is left untouched, a
     DEFICIENT one (right wake.py, wrong semantics) is upgraded in
-    place, UNRELATED hooks are never modified.
+    place, UNRELATED hooks are never modified. False when the change
+    couldn't be saved (Claude Code kept rewriting the file).
     """
-    if not SETTINGS.exists():
-        print(f"[settings] {SETTINGS} not found — skipping")
-        return
-    try:
-        data = json.loads(SETTINGS.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        print(f"[settings] parse error: {exc}; leaving untouched")
-        return
+    home = _home(home)
+    settings = settings_path(home)
+    if not settings.exists():
+        print(f"[settings] {settings} not found — skipping")
+        return True
+    return _edit_json(settings, "settings",
+                      lambda data, notes: _wire_hooks(data, notes, memory_root, home))
 
+
+def _wire_hooks(data: dict[str, Any], notes: list[str], memory_root: Path, home: Path) -> bool:
+    """Wire smriti's hooks into settings.json's object; whether anything changed."""
     hooks = data.setdefault("hooks", {})
-    memory_rel = memory_root.relative_to(HOME).as_posix()
-    wake_cmd = _wake_command(memory_root)
+    memory_rel = memory_root.relative_to(home).as_posix()
+    wake_cmd = _wake_command(memory_root, home)
     activity_cmd = (
         f'touch "$HOME/{memory_rel}/.smriti/last-activity" 2>/dev/null || true'
     )
@@ -123,7 +189,7 @@ def patch_settings_json(memory_root: Path) -> None:
 
     def classify(cmd: str) -> str:
         verdict, _ = classify_wake_hook(
-            cmd, memory_root=memory_root, home=HOME, framing=WAKE_FRAMING
+            cmd, memory_root=memory_root, home=home, framing=WAKE_FRAMING
         )
         return verdict
 
@@ -166,13 +232,13 @@ def patch_settings_json(memory_root: Path) -> None:
         rebuilt_groups.append(
             {"matcher": "", "hooks": [{"type": "command", "command": wake_cmd}]}
         )
-        print("[settings] SessionStart -> wake.py")
+        notes.append("SessionStart -> wake.py")
     elif deficient_upgraded:
-        print("[settings] SessionStart wake hook upgraded to canonical form")
+        notes.append("SessionStart wake hook upgraded to canonical form")
     else:
-        print("[settings] SessionStart wake hook already wired (equivalent)")
+        notes.append("SessionStart wake hook already wired (equivalent)")
     if duplicates_removed:
-        print("[settings] removed redundant smriti wake hook(s)")
+        notes.append("removed redundant smriti wake hook(s)")
     if session_start != rebuilt_groups:
         hooks["SessionStart"] = rebuilt_groups
         changed = True
@@ -184,7 +250,7 @@ def patch_settings_json(memory_root: Path) -> None:
         for group in ups
     )
     if activity_wired:
-        print("[settings] UserPromptSubmit activity hook already wired")
+        notes.append("UserPromptSubmit activity hook already wired")
     else:
         if ups and ups[0].get("matcher", "") == "":
             ups[0].setdefault("hooks", []).append(
@@ -194,7 +260,7 @@ def patch_settings_json(memory_root: Path) -> None:
             ups.append(
                 {"matcher": "", "hooks": [{"type": "command", "command": activity_cmd}]}
             )
-        print("[settings] UserPromptSubmit -> touch last-activity")
+        notes.append("UserPromptSubmit -> touch last-activity")
         changed = True
 
     # PostToolUse: associative recall on Read|Edit|Write
@@ -204,28 +270,22 @@ def patch_settings_json(memory_root: Path) -> None:
         for group in post
     )
     if recall_wired:
-        print("[settings] PostToolUse recall hook already wired")
+        notes.append("PostToolUse recall hook already wired")
     else:
         post.append({
             "matcher": "Read|Edit|Write",
             "hooks": [{"type": "command", "command": recall_cmd}],
         })
-        print("[settings] PostToolUse -> associative_recall.py")
+        notes.append("PostToolUse -> associative_recall.py")
         changed = True
 
-    if not changed:
-        return
-
-    backup = SETTINGS.with_suffix(".json.bak")
-    shutil.copy2(SETTINGS, backup)
-    SETTINGS.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    print(f"[settings] saved (backup: {backup})")
+    return changed
 
 
-def install_hook_scripts() -> None:
+def install_hook_scripts(home: Path | None = None) -> None:
     """Deploy hook shims into ``~/.claude/hooks/``."""
-    deploy_hook_scripts(SHARED_HOOKS_DIR, HOOKS_DST, HOOK_DEPLOY_MAP)
-    deploy_hook_scripts(HOOKS_SRC, HOOKS_DST, LOCAL_HOOKS)
+    deploy_hook_scripts(SHARED_HOOKS_DIR, hooks_dir(home), HOOK_DEPLOY_MAP)
+    deploy_hook_scripts(HOOKS_SRC, hooks_dir(home), LOCAL_HOOKS)
 
 
 # Claude-Code-specific addendum appended after the generic AGENT.md
@@ -251,10 +311,10 @@ Use plain Grep on the memory tree only for literal string match.
 """
 
 
-def _claude_md_block(memory_root: Path) -> str:
+def _claude_md_block(memory_root: Path, home: Path | None = None) -> str:
     # The block carries no H1 — the title line belongs to the user's
     # document (kept on migration, supplied via ``title=`` on creation).
-    memory_rel = f"~/{memory_root.relative_to(HOME).as_posix()}"
+    memory_rel = f"~/{memory_root.relative_to(_home(home)).as_posix()}"
     return compose_agent_doc(
         addendum=CLAUDE_CODE_ADDENDUM,
         memory_rel=memory_rel,
@@ -262,42 +322,44 @@ def _claude_md_block(memory_root: Path) -> str:
     )
 
 
-def agent_doc_state() -> DocState:
+def agent_doc_state(home: Path | None = None) -> DocState:
     """Classify ~/.claude/CLAUDE.md without modifying it."""
-    return classify_doc(CLAUDE_MD)
+    return classify_doc(claude_md_path(home))
 
 
-def preflight_agent_doc() -> str | None:
+def preflight_agent_doc(home: Path | None = None) -> str | None:
     """Validate ~/.claude/CLAUDE.md BEFORE any harness mutation.
 
     Returns None when safe to proceed, or a human-readable refusal.
     """
-    state = agent_doc_state()
+    state = agent_doc_state(home)
     if state.kind in ("missing", "managed"):
         return None
     return state.detail
 
 
-def write_claude_md(memory_root: Path) -> None:
+def write_claude_md(memory_root: Path, home: Path | None = None) -> None:
+    claude_md = claude_md_path(home)
     if write_managed_doc(
-        CLAUDE_MD,
-        _claude_md_block(memory_root),
+        claude_md,
+        _claude_md_block(memory_root, home),
         title="# CLAUDE.md (user-global)",
     ):
-        print(f"[CLAUDE.md] wrote managed block in {CLAUDE_MD}")
+        print(f"[CLAUDE.md] wrote managed block in {claude_md}")
     else:
-        print(f"[CLAUDE.md] {CLAUDE_MD} up to date")
+        print(f"[CLAUDE.md] {claude_md} up to date")
 
 
-def migrate_claude_md(memory_root: Path) -> None:
+def migrate_claude_md(memory_root: Path, home: Path | None = None) -> None:
     """One-time legacy conversion. Raises ManagedDocError when unsafe."""
-    backup = migrate_agent_doc(CLAUDE_MD, _claude_md_block(memory_root))
+    backup = migrate_agent_doc(claude_md_path(home), _claude_md_block(memory_root, home))
     print(f"[CLAUDE.md] migrated to managed block (backup: {backup})")
 
 
 def run_claude_code(
     memory_root: Path,
     *,
+    home: Path | None = None,
     skip_settings: bool = False,
     skip_mcp: bool = False,
     migrate_doc: bool = False,
@@ -306,24 +368,28 @@ def run_claude_code(
 
     Returns False (after mutating NOTHING) when the agent-doc preflight
     refuses — the dispatcher turns that into a nonzero exit so a
-    partial install can never masquerade as success.
+    partial install can never masquerade as success. Returns False too
+    when a config file couldn't be saved (Claude Code kept rewriting
+    it); that file is left as it was, and the install can be run again.
     """
-    if migrate_doc and classify_doc(CLAUDE_MD).kind == "migration-required":
+    home = _home(home)
+    if migrate_doc and classify_doc(claude_md_path(home)).kind == "migration-required":
         try:
-            migrate_claude_md(memory_root)
+            migrate_claude_md(memory_root, home)
         except ManagedDocError as exc:
             print(f"[claude-code] migration failed: {exc}")
             return False
 
-    refusal = preflight_agent_doc()
+    refusal = preflight_agent_doc(home)
     if refusal is not None:
         print(f"[claude-code] REFUSED before any change: {refusal}")
         return False
 
-    install_hook_scripts()
+    install_hook_scripts(home)
+    saved = True
     if not skip_mcp:
-        register_mcp_server()
+        saved = register_mcp_server(home) and saved
     if not skip_settings:
-        patch_settings_json(memory_root)
-    write_claude_md(memory_root)
-    return True
+        saved = patch_settings_json(memory_root, home) and saved
+    write_claude_md(memory_root, home)
+    return saved

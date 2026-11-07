@@ -20,7 +20,8 @@ The adapter pattern is:
        Codex) using the harness's native format.
     3. Mutate the parsed dict, leaning on shared constants for the
        smriti-side values.
-    4. Write back with a backup, idempotently.
+    4. Write back idempotently through ``edit_config`` (``config_file``):
+       locked, re-read before writing, backed up, atomic.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from smriti.integrations.common.agent_md import compose_agent_doc
+    from smriti.integrations.common.config_file import edit_config
     from smriti.integrations.common.hook_model import (
         DEFICIENT,
         EQUIVALENT,
@@ -62,6 +64,7 @@ SHARED_HOOKS_DIR = Path(__file__).resolve().parent / "hooks"
 # needs none of the installers' helpers.
 _LAZY = {
     "compose_agent_doc": "agent_md",
+    "edit_config": "config_file",
     "DEFICIENT": "hook_model", "EQUIVALENT": "hook_model", "UNRELATED": "hook_model",
     "classify_wake_hook": "hook_model", "make_wake_hook_command": "hook_model",
     "parse_wake_command": "hook_model",
@@ -92,6 +95,7 @@ __all__ = [
     "classify_wake_hook",
     "compose_agent_doc",
     "deploy_hook_scripts",
+    "edit_config",
     "make_wake_hook_command",
     "mcp_registration_matches",
     "migrate_agent_doc",

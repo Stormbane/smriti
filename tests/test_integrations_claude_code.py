@@ -4,8 +4,8 @@ Idempotent JSON patching of ~/.claude/settings.json + ~/.claude.json
 is critical — wrong logic here either misses our hooks (functional
 regression) or duplicates entries (bloat that piles up over re-runs).
 
-Tests run against tempdirs via monkeypatch on the module-level path
-constants (HOME, CLAUDE, SETTINGS, etc.).
+Tests run against a temporary home (HOME, and USERPROFILE on Windows): the
+module works its paths out from the home when a step runs.
 """
 
 from __future__ import annotations
@@ -16,27 +16,15 @@ import sys
 import pytest
 
 from smriti.integrations.claude_code import install as cc_install
+from smriti.integrations.common.config_file import backups
+from tests._home import use_home
 
 
 @pytest.fixture
 def fake_home(tmp_path, monkeypatch):
-    """Redirect every ~/.claude/* path the install module uses."""
-    home = tmp_path
-    claude = home / ".claude"
-    claude.mkdir()
-    settings = claude / "settings.json"
-    claude_md = claude / "CLAUDE.md"
-    claude_config = home / ".claude.json"
-    hooks_dst = claude / "hooks"
-
-    monkeypatch.setattr(cc_install, "HOME", home)
-    monkeypatch.setattr(cc_install, "CLAUDE", claude)
-    monkeypatch.setattr(cc_install, "SETTINGS", settings)
-    monkeypatch.setattr(cc_install, "CLAUDE_MD", claude_md)
-    monkeypatch.setattr(cc_install, "CLAUDE_CONFIG", claude_config)
-    monkeypatch.setattr(cc_install, "HOOKS_DST", hooks_dst)
-
-    return home
+    """A temporary home with an empty ~/.claude, where every ~/.claude path now is."""
+    (tmp_path / ".claude").mkdir()
+    return use_home(monkeypatch, tmp_path)
 
 
 # --- MCP server registration --------------------------------------------
@@ -60,8 +48,9 @@ class TestRegisterMCPServer:
             "command": sys.executable,
             "args": ["-m", "smriti.mcp_server"],
         }
-        # Backup created.
-        assert (cfg.with_suffix(".json.bak")).exists()
+        # The file as it was, backed up beside it.
+        [backup] = backups(cfg)
+        assert json.loads(backup.read_text(encoding="utf-8")) == {"some_other_key": "preserved"}
 
     def test_idempotent_when_already_registered(self, fake_home, capsys):
         cfg = fake_home / ".claude.json"
@@ -76,7 +65,7 @@ class TestRegisterMCPServer:
         out = capsys.readouterr().out
         assert "already registered" in out
         # No backup written on no-op.
-        assert not (cfg.with_suffix(".json.bak")).exists()
+        assert backups(cfg) == []
 
     def test_preserves_other_mcp_servers(self, fake_home):
         cfg = fake_home / ".claude.json"

@@ -40,19 +40,24 @@ def edit_lock(path: Path, wait_s: float = 10.0) -> Iterator[None]:
         yield
 
 
-def write_atomic(path: Path, text: str | bytes) -> None:
+def write_atomic(path: Path, text: str | bytes, *, mode: int | None = None) -> None:
     """Replace ``path`` with ``text`` in one step, or raise :class:`FileBusy`.
 
     Text is written in text mode (the platform's line endings), bytes as they are.
     The temp file's name is this process's and thread's, so writers never share one.
+    ``mode``, when given, is the new file's permission bits, set before any of
+    ``text`` is written (a file only its owner may read stays so).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}-{threading.get_ident()}.tmp")
-    if isinstance(text, bytes):
-        tmp.write_bytes(text)
-    else:
-        tmp.write_text(text, encoding="utf-8")
     try:
+        if mode is not None:
+            os.close(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600))
+            os.chmod(tmp, mode)
+        if isinstance(text, bytes):
+            tmp.write_bytes(text)
+        else:
+            tmp.write_text(text, encoding="utf-8")
         for attempt in range(40):
             try:
                 os.replace(tmp, path)
