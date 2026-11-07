@@ -145,7 +145,6 @@ def handle_write_handoff(arguments: Arguments) -> str:
     handoff_dir = root / ".smriti"
     handoff_dir.mkdir(parents=True, exist_ok=True)
     path = handoff_dir / "handoff-pending.md"
-    overwriting = path.exists()
 
     now_local = datetime.now().astimezone()
     fm_lines = [
@@ -160,7 +159,9 @@ def handle_write_handoff(arguments: Arguments) -> str:
 
     body = "# Handoff to next session\n\n" + content.rstrip() + "\n"
     # Under the handoff lock the wake shares, and atomically, so a wake never
-    # archives a letter it didn't show or reads a half-written one.
+    # archives a letter it didn't show or reads a half-written one. Whether a
+    # letter is being replaced is asked under the lock too: a wake that archived
+    # it a moment before leaves nothing to overwrite.
     from smriti.wake.briefing import handoff_lock
 
     from smriti.core.files import FileBusy
@@ -171,6 +172,7 @@ def handle_write_handoff(arguments: Arguments) -> str:
             raise ToolError(
                 "a session is reading the handoff right now; nothing was written. Try again."
             )
+        overwriting = path.exists()
         try:
             write_memory(path, fm + body)  # masked: the letter is memory text like any other
         except FileBusy as exc:

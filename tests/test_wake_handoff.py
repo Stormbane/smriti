@@ -158,3 +158,38 @@ def test_writer_and_wake_never_archive_an_unshown_letter(tmp_path: Path,
     for target in archived:
         assert target.read_text(encoding="utf-8") in shown_texts
     assert not list((root / ".smriti").glob(".handoff-*.tmp"))
+
+
+def test_a_letter_archived_before_the_writer_takes_the_lock_was_not_overwritten(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """H14.5 (Opus, review #7): whether the write replaces a letter was asked before the
+    lock, so a wake that archived the letter in between left "overwrote" in the answer.
+    Here a wake holds the lock first and archives the letter; the writer then finds none."""
+    import importlib
+    from collections.abc import Iterator
+    from contextlib import contextmanager
+
+    from smriti.mcp.tools.memory import handle_write_handoff
+
+    briefing_mod = importlib.import_module("smriti.wake.briefing")  # the module, not the function
+
+    root = _root(tmp_path)
+    monkeypatch.setenv("SMRITI_ROOT", str(root))
+    _write(root)
+    real_lock = briefing_mod.handoff_lock
+
+    @contextmanager
+    def a_wake_got_there_first(memory_root: Path, wait_s: float = 2.0) -> Iterator[bool]:
+        monkeypatch.setattr(briefing_mod, "handoff_lock", real_lock)  # the wake's, and the rest
+        pending = pending_handoff(memory_root)
+        assert pending is not None
+        assert consume_handoff(memory_root, pending[1]) is not None  # the wake's turn
+        with real_lock(memory_root, wait_s) as held:
+            yield held
+
+    monkeypatch.setattr(briefing_mod, "handoff_lock", a_wake_got_there_first)
+    answer = handle_write_handoff({"content": "Sam asked for the tests first."})
+    assert "overwrote" not in answer
+    assert "Sam asked for the tests first." in (
+        root / ".smriti" / "handoff-pending.md").read_text(encoding="utf-8")
+    assert "overwrote previous handoff" in handle_write_handoff({"content": "and then Ari"})
