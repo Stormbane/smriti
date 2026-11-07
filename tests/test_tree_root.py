@@ -120,14 +120,3 @@ def test_the_installer_defaults_to_the_chosen_root(home: Path) -> None:
     assert default_memory_root() == home / ".smriti"
     (home / ".narada").mkdir()
     assert default_memory_root() == home / ".narada"
-
-
-def test_the_recall_hook_follows_the_chosen_root(home: Path) -> None:
-    from smriti.recall.config import load_config
-    from smriti.recall.hook import _build_query
-
-    (home / ".narada").mkdir()
-    assert load_config().log_path == home / ".narada" / ".smriti" / "recall.jsonl"
-    inside = home / ".narada" / "notes" / "lantern.md"
-    assert _build_query(str(inside)) is None  # never recall the tree into itself
-    assert _build_query(str(home / "code" / "lantern.md")) == "lantern"

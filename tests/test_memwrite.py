@@ -57,7 +57,6 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("smriti/daylog/morning.py", "_settle"): "the morning's ledger entry: a JSON state",
     ("smriti/metrics.py", "MetricsLogger.log"):
         "the metrics log: event names, sizes and timings, the write's source masked first",
-    ("smriti/recall/runner.py", "_log"): "the ambient-recall hook's log (legacy)",
     ("smriti/witness.py", "write_manifest"): "the witness manifest: a commit and tree hash",
     ("smriti/witness.py", "_save"): "the OpenTimestamps proof of that manifest's hash",
     ("smriti/llm/providers/claude_cli.py", "ClaudeCliProvider.call"):

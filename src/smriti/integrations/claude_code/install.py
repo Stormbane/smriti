@@ -1,8 +1,8 @@
 """Claude-Code-specific install steps.
 
 Wires smriti into Anthropic's Claude Code CLI:
-    - Patches ``~/.claude/settings.json`` with SessionStart wake,
-      UserPromptSubmit activity touch, and PostToolUse recall hooks.
+    - Patches ``~/.claude/settings.json`` with the SessionStart wake and
+      UserPromptSubmit activity-touch hooks.
     - Registers smriti's MCP server in ``~/.claude.json`` (user scope).
     - Maintains the smriti-managed block in ``~/.claude/CLAUDE.md``
       (composed from ``smriti/templates/AGENT.md`` plus a Claude-Code-
@@ -10,7 +10,8 @@ Wires smriti into Anthropic's Claude Code CLI:
       user's and is never touched; unmarked legacy files are refused
       at preflight — before ANY other mutation — and migrated once via
       ``--migrate-agent-doc``.
-    - Deploys hook shims into ``~/.claude/hooks/``.
+    - Deploys the PreCompact capture hook script into ``~/.claude/hooks/``
+      (it isn't wired into settings.json; docs/INSTALL.md says how).
 
 Shared helpers — MCP spec, managed-doc machinery, hook model, hook
 deployment — come from ``smriti.integrations.common`` so any change to
@@ -35,7 +36,6 @@ from typing import Any
 from smriti.integrations.common import (
     DEFICIENT,
     EQUIVALENT,
-    SHARED_HOOKS_DIR,
     ManagedDocError,
     classify_doc,
     classify_wake_hook,
@@ -57,9 +57,7 @@ HOOKS_SRC = Path(__file__).resolve().parent / "hooks"
 WAKE_STYLE = "sh"
 WAKE_FRAMING = "raw"
 
-# One shared recall shim, deployed under this harness's local filename.
-HOOK_DEPLOY_MAP = {"recall_shim.py": "associative_recall.py"}
-# Claude-Code-only hooks that stay in this package.
+# The hook scripts deployed from this package.
 LOCAL_HOOKS = ["precompact_capture.py"]
 
 
@@ -163,7 +161,7 @@ def _wake_command(memory_root: Path, home: Path) -> str:
 
 
 def patch_settings_json(memory_root: Path, home: Path | None = None) -> bool:
-    """Wire SessionStart / UserPromptSubmit / PostToolUse hooks.
+    """Wire the SessionStart and UserPromptSubmit hooks.
 
     SessionStart wiring goes through the canonical hook model:
     an EQUIVALENT wake hook (any command form) is left untouched, a
@@ -188,7 +186,6 @@ def _wire_hooks(data: dict[str, Any], notes: list[str], memory_root: Path, home:
     activity_cmd = (
         f'touch "$HOME/{memory_rel}/.smriti/last-activity" 2>/dev/null || true'
     )
-    recall_cmd = "python ~/.claude/hooks/associative_recall.py"
 
     changed = False
 
@@ -268,28 +265,11 @@ def _wire_hooks(data: dict[str, Any], notes: list[str], memory_root: Path, home:
         notes.append("UserPromptSubmit -> touch last-activity")
         changed = True
 
-    # PostToolUse: associative recall on Read|Edit|Write
-    post = hooks.setdefault("PostToolUse", [])
-    recall_wired = any(
-        any(h.get("command") == recall_cmd for h in group.get("hooks", []))
-        for group in post
-    )
-    if recall_wired:
-        notes.append("PostToolUse recall hook already wired")
-    else:
-        post.append({
-            "matcher": "Read|Edit|Write",
-            "hooks": [{"type": "command", "command": recall_cmd}],
-        })
-        notes.append("PostToolUse -> associative_recall.py")
-        changed = True
-
     return changed
 
 
 def install_hook_scripts(home: Path | None = None) -> None:
-    """Deploy hook shims into ``~/.claude/hooks/``."""
-    deploy_hook_scripts(SHARED_HOOKS_DIR, hooks_dir(home), HOOK_DEPLOY_MAP)
+    """Deploy the hook scripts into ``~/.claude/hooks/``."""
     deploy_hook_scripts(HOOKS_SRC, hooks_dir(home), LOCAL_HOOKS)
 
 
@@ -304,15 +284,6 @@ configured in `~/.claude/settings.json`. It is silent unless
 this so interactive sessions wake fully, while `claude -p` and other
 headless callers stay clean. The hook output is truncated at 10,000
 characters by Claude Code, so the briefing budget defaults to 9,500.
-
-## Memory search — prefer smriti_read over Grep
-
-Ambient recall is wired on `Read|Edit|Write` via the PostToolUse hook
-in `~/.claude/settings.json` — relevant memory is injected as a
-system-reminder when you touch files. Call `smriti_read` yourself for
-the cases listed above where the hook can't see your intent.
-
-Use plain Grep on the memory tree only for literal string match.
 """
 
 

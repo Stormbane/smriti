@@ -15,9 +15,8 @@ shows up as a number that moved:
   correction should be found, above what it corrects.
 
 Retrieval: hit@k (the share of answerable cases with a relevant note in
-the first k) and MRR over the first :data:`DEPTH`. Abstention, at the
-threshold the recall hook applies to search scores
-(``SMRITI_RECALL_THRESHOLD``'s default): the share of irrelevant queries
+the first k) and MRR over the first :data:`DEPTH`. Abstention, at a fixed
+threshold on search scores (:data:`THRESHOLD`): the share of irrelevant queries
 whose best score is under it, the share of answerable ones wrongly under
 it, and, threshold-free, the AUROC of the best score between the two
 (the chance an answerable query's best result outscores an irrelevant
@@ -43,7 +42,7 @@ from typing import Any
 QUALITY_SET_VERSION = "1"
 DEPTH = 10  # results looked at per query
 KS = (1, 3, 5)
-THRESHOLD = 0.45  # smriti.recall.config's default SMRITI_RECALL_THRESHOLD
+THRESHOLD = 0.45  # a best score under it reads as "nothing relevant"
 KINDS = ("direct", "paraphrase", "irrelevant", "contradiction", "correction")
 
 

@@ -12,7 +12,6 @@ Wires smriti into OpenAI's Codex CLI:
       (Codex auto-loads this on every run; 32 KiB cap, root-first
       concatenation across project chain). Unmarked legacy files are
       refused at preflight and migrated once via ``--migrate-agent-doc``.
-    - Deploys the shared recall shim into ``~/.codex/hooks/``.
 
 Platform note: Codex runs hook commands under PowerShell on Windows —
 NOT bash — so the wake command is emitted as a PowerShell
@@ -33,7 +32,7 @@ Codex hook docs reference:
     https://developers.openai.com/codex/config-reference
 
 This module shares MCP spec, AGENT.md composition, managed-doc
-machinery, hook deployment, the wake-hook model and config-file editing
+machinery, the wake-hook model and config-file editing
 (:func:`smriti.integrations.common.config_file.edit_config`: locked,
 re-read before writing, backed up, atomic) with ``claude_code/install.py``
 via ``smriti.integrations.common``. Paths are worked out from the home
@@ -51,12 +50,10 @@ from typing import Any
 from smriti.integrations.common import (
     DEFICIENT,
     EQUIVALENT,
-    SHARED_HOOKS_DIR,
     ManagedDocError,
     classify_doc,
     classify_wake_hook,
     compose_agent_doc,
-    deploy_hook_scripts,
     make_wake_hook_command,
     mcp_registration_matches,
     migrate_agent_doc,
@@ -68,9 +65,6 @@ from smriti.integrations.common.mcp_spec import registered
 
 WAKE_FRAMING = "codex-json"
 SESSION_START_MATCHER = "startup|resume|clear|compact"
-
-# One shared recall shim, deployed under this harness's local filename.
-HOOK_DEPLOY_MAP = {"recall_shim.py": "recall_hook.py"}
 
 
 def _home(home: Path | None = None) -> Path:
@@ -88,10 +82,6 @@ def config_toml_path(home: Path | None = None) -> Path:
 
 def agents_md_path(home: Path | None = None) -> Path:
     return codex_dir(home) / "AGENTS.md"
-
-
-def hooks_dir(home: Path | None = None) -> Path:
-    return codex_dir(home) / "hooks"
 
 
 def _wake_style() -> str:
@@ -126,21 +116,6 @@ Codex auto-loads AGENTS.md from a precedence chain on every run:
 Files concatenate root-first; total cap is 32 KiB
 (`project_doc_max_bytes`). This file (`~/.codex/AGENTS.md`) holds the
 user-global memory contract; project-level AGENTS.md files override.
-
-## Memory search — ambient recall is wired
-
-PostToolUse recall is wired on `Edit|Write|apply_patch` via
-`~/.codex/config.toml`. After every patch, smriti runs recall against
-the touched files and injects relevant memory as
-`hookSpecificOutput.additionalContext`. Bash and MCP tools are
-intentionally skipped (Bash is too noisy; MCP would recurse on
-`smriti_read`).
-
-For pure-text turns where no patch fires (planning, discussion), the
-"When to call `smriti_read`" guidance above is load-bearing — call it
-explicitly when topics open, when you encounter unfamiliar
-references, and when starting substantive turns without recent file
-context.
 """
 
 
@@ -283,36 +258,7 @@ def _wire_config(data: dict[str, Any], notes: list[str], memory_root: Path,
             notes.append("[[hooks.SessionStart]] -> wake.py (canonical)")
             changed = True
 
-    # 3. PostToolUse hook -> recall_hook.py (codex-json framing).
-    # Codex's matcher accepts apply_patch's aliases (Edit, Write) so a
-    # Claude-Code-style matcher works even though Codex's actual edit
-    # tool is apply_patch. The recall hook handles all three names.
-    recall_cmd = (
-        'SMRITI_RECALL_FRAMING="codex-json" '
-        'python "$HOME/.codex/hooks/recall_hook.py"'
-    )
-    post_tool = hooks.setdefault("PostToolUse", [])
-    recall_wired = any(
-        h.get("command") == recall_cmd
-        for group in post_tool
-        for h in group.get("hooks", [])
-    )
-    if recall_wired:
-        notes.append("PostToolUse recall hook already wired")
-    else:
-        post_tool.append({
-            "matcher": "Edit|Write|apply_patch",
-            "hooks": [{
-                "type": "command",
-                "command": recall_cmd,
-                "statusMessage": "Smriti recall",
-                "timeout": 10,
-            }],
-        })
-        notes.append("[[hooks.PostToolUse]] -> recall_hook.py (apply_patch)")
-        changed = True
-
-    # 4. MCP server registration, with the memory root in its env. Superset
+    # 3. MCP server registration, with the memory root in its env. Superset
     # match: Codex annotates the entry with tools.* approval-mode subtables;
     # extras are fine.
     mcp = data.setdefault("mcp_servers", {})
@@ -380,11 +326,6 @@ def migrate_agents_md(memory_root: Path, home: Path | None = None) -> None:
     print(f"[codex] migrated AGENTS.md to managed block (backup: {backup})")
 
 
-def install_hook_scripts(home: Path | None = None) -> None:
-    """Deploy the shared recall shim into ``~/.codex/hooks/``."""
-    deploy_hook_scripts(SHARED_HOOKS_DIR, hooks_dir(home), HOOK_DEPLOY_MAP)
-
-
 def run_codex(
     memory_root: Path,
     *,
@@ -413,7 +354,6 @@ def run_codex(
         print(f"[codex] REFUSED before any change: {refusal}")
         return False
 
-    install_hook_scripts(home)
     saved = patch_config_toml(memory_root, home) if not skip_config else True
     write_agents_md(memory_root, home)
     return saved

@@ -45,11 +45,10 @@ noticing what matters while it is happening.
 
 ## Memory search — when to call `smriti_read`
 
-Ambient recall fires automatically on file-touching tools (Read / Edit /
-Write) — relevant memory is injected as a system-reminder so you see it
-without asking. But the hook can't see *thinking*. There are moments only
-you can recognize where calling recall yourself moves the conversation
-forward. Call `smriti_read(query="...")` when:
+After the wake briefing, nothing brings memory into the conversation by
+itself: what else you know from memory, you search for. There are moments
+only you can recognize where a search moves the conversation forward.
+Call `smriti_read(query="...")` when:
 
 - **The user opens a topic you don't have current context on.** Names,
   projects, decisions you can't immediately place. Recall before
@@ -60,9 +59,8 @@ forward. Call `smriti_read(query="...")` when:
   they're answers.
 - **You encounter an unfamiliar reference.** A name, a file, a concept
   the user mentions as if it's known. Recall it before asking.
-- **You're starting a substantive turn and the file-touch hook hasn't
-  fired in this turn.** Pure-text turns produce no automatic recall;
-  if context would help, ask for it.
+- **You're starting a substantive turn.** Touching a file brings no
+  memory with it; if context would help, ask for it.
 - **You notice a pattern that might be familiar.** "This feels like
   something we've worked through before" is a recall signal.
 
@@ -96,6 +94,5 @@ project's context.
 - `smriti_status()` — index health, queue depth, recent activity.
 
 Other tools your harness exposes (read/write files, run shell, etc.) are
-orthogonal to the memory layer. The two play together: file-touch tools
-fire ambient recall automatically; conversational tools you reach for
-yourself.
+orthogonal to the memory layer: the memory tools are the ones you reach
+for yourself.

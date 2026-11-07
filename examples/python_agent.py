@@ -5,18 +5,15 @@ Demonstrates smriti as a library, not as a Claude Code harness:
     - LLM calls go through ``smriti.llm.call_llm``, so the same script
       runs against Anthropic, OpenAI, claude -p, or local Ollama by
       flipping ``SMRITI_LLM_PROVIDER``.
-    - Ambient recall on every user prompt via ``smriti.recall.run_recall``
-      — same engine the Claude Code hook uses, just call-driven instead
-      of event-driven.
+    - Memory search on every user prompt via
+      ``smriti.store.search.search_with_status``, the hybrid search the MCP
+      server's ``smriti_read`` runs; the best matches join the system prompt.
     - Writes go through ``smriti.store.writer.write_entry`` so anything
       the agent journals is immediately searchable on the next turn.
     - System prompt is composed from the harness-neutral AGENT.md
       contract (in the package) plus the live wake briefing assembled
       by ``smriti.wake.briefing`` — the same identity + threads +
       project context that Claude Code's SessionStart hook injects.
-    - Tool wrapping via ``smriti.recall.wrap_tool``: ``/tool read <path>``
-      and ``/tool ls <path>`` show how recall fires after a tool call
-      (the same pattern Claude Code's PostToolUse hook implements).
 
 Run::
 
@@ -33,10 +30,8 @@ Run::
         python examples/python_agent.py
 
 REPL:
-    you> <text>           normal turn (recall + LLM, history threaded)
+    you> <text>           normal turn (memory search + LLM, history threaded)
     /write <branch> <text> persist a note (e.g. /write journal Today I ...)
-    /tool read <path>     run read_file with recall annotation
-    /tool ls <path>       run list_dir with recall annotation
     /provider             show which provider/model is active
     /provider list        list all known providers + availability
     /reset                clear conversation history
@@ -50,8 +45,10 @@ import sys
 import time
 from pathlib import Path
 
+from smriti.core.tree import smriti_db_path
 from smriti.llm import Message, call_llm, get_provider, list_providers
-from smriti.recall import run_recall, wrap_tool
+from smriti.store.schema import open_readonly
+from smriti.store.search import SearchResult, search_with_status
 from smriti.store.writer import write_entry
 from smriti.wake import briefing
 
@@ -79,12 +76,27 @@ def _build_system_prompt(memory_root: Path) -> str:
     return f"{contract}\n\n---\n\n{wake}"
 
 
-def _format_recall(matches) -> str:
+def _search(query: str, top_k: int = 3) -> list[SearchResult]:
+    """The best matches for *query* in the memory tree's index (none without one)."""
+    db_path = smriti_db_path()
+    if not db_path.exists():
+        return []
+    conn = open_readonly(db_path)  # a reader never holds up a writer
+    try:
+        outcome = search_with_status(conn, query, top_k=top_k, use_reranker=False)
+    finally:
+        conn.close()
+    for note in outcome.notes():  # keyword-only, or nothing close to the query
+        print(f"  [{note}]")
+    return outcome.results
+
+
+def _format_matches(matches: list[SearchResult]) -> str:
     if not matches:
         return ""
-    lines = ["Ambient memory (top matches from recall):"]
+    lines = ["Memory (top matches from smriti's search):"]
     for m in matches:
-        snippet = m.snippet.replace("\n", " ").strip()[:280]
+        snippet = m.content.replace("\n", " ").strip()[:280]
         lines.append(f"- {m.source} (score {m.score:.2f}): {snippet}")
     return "\n".join(lines)
 
@@ -97,60 +109,6 @@ def _handle_write(rest: str) -> None:
     branch, content = parts
     path = write_entry(content, branch=branch, source_hint="python_agent")
     print(f"  wrote {path}")
-
-
-# --- Tool definitions wrapped with smriti.recall.wrap_tool. --------------
-# Each underlying tool returns a string; the wrapper bundles the output
-# with a recall annotation derived from the path argument.
-
-def _read_file(path: str) -> str:
-    """Read a UTF-8 text file and return its contents (truncated to 2KB)."""
-    return Path(path).read_text(encoding="utf-8", errors="replace")[:2048]
-
-
-def _list_dir(path: str) -> str:
-    """List directory entries one per line."""
-    return "\n".join(sorted(p.name for p in Path(path).iterdir()))
-
-
-# query_from receives (args, kwargs, output) — we use the path arg.
-read_tool = wrap_tool(
-    _read_file,
-    query_from=lambda a, kw, out: a[0] if a else kw.get("path"),
-    name="read_file",
-)
-ls_tool = wrap_tool(
-    _list_dir,
-    query_from=lambda a, kw, out: a[0] if a else kw.get("path"),
-    name="list_dir",
-)
-
-
-def _handle_tool(rest: str) -> str:
-    """Dispatch /tool <name> <arg> and return any recall block to thread."""
-    parts = rest.split(maxsplit=1)
-    if len(parts) < 2:
-        print("usage: /tool {read|ls} <path>")
-        return ""
-    cmd, arg = parts
-    try:
-        if cmd == "read":
-            result = read_tool(arg)
-        elif cmd == "ls":
-            result = ls_tool(arg)
-        else:
-            print(f"unknown tool {cmd!r}; try 'read' or 'ls'")
-            return ""
-    except Exception as exc:
-        print(f"  tool error: {exc}")
-        return ""
-
-    print(f"--- {cmd} {arg} ---")
-    print(result.output)
-    if result.recall_block:
-        print()
-        print(result.recall_block)
-    return result.recall_block
 
 
 def _auto_journal(history: list[Message], provider_name: str) -> None:
@@ -229,21 +187,13 @@ def main() -> int:
         if user.startswith("/write "):
             _handle_write(user[len("/write "):])
             continue
-        if user.startswith("/tool "):
-            block = _handle_tool(user[len("/tool "):])
-            # Thread the tool result + recall annotation into history so
-            # the next agent turn sees the output the way Claude Code's
-            # PostToolUse hook injects ambient memory.
-            if block:
-                history.append(Message(role="user", content=block))
-            continue
 
         t0 = time.monotonic()
-        recall = run_recall(user)
-        recall_ms = int((time.monotonic() - t0) * 1000)
+        matches = _search(user)
+        search_ms = int((time.monotonic() - t0) * 1000)
 
         system = system_prompt
-        block = _format_recall(recall.matches)
+        block = _format_matches(matches)
         if block:
             system = f"{system}\n\n{block}"
 
@@ -263,8 +213,7 @@ def main() -> int:
 
         print(f"\nagent> {response.text}\n")
         print(
-            f"  [recall {recall_ms}ms · {len(recall.matches)} matches · "
-            f"backend {recall.backend}]"
+            f"  [search {search_ms}ms · {len(matches)} matches]"
             f"  [LLM {llm_ms}ms · {response.tokens_in}+{response.tokens_out}t"
             + (f" · ${response.cost_usd:.4f}" if response.cost_usd else "")
             + f" · {len(history)//2} turns]\n"

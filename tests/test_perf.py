@@ -16,8 +16,6 @@ explicitly:
 Median timings on a 2026-era Windows dev box (Python 3.12, NVMe):
     briefing()                    ~30 ms
     compose_agent_doc()           ~3 ms
-    _extract_paths (1000 lines)   ~1 ms
-    wrap_tool overhead            ~0.5 ms
     deploy_hook_scripts (100)     ~50 ms
 
 Bounds chosen at ~10x median to leave headroom for slow boxes while
@@ -115,77 +113,6 @@ class TestComposeAgentDocPerf:
 
         print(f"\n  compose_agent_doc(): {t.ms:.1f}ms ({len(out)} chars)")
         assert t.ms < 50, f"compose_agent_doc took {t.ms:.1f}ms; bound is 50ms"
-
-
-# --- _extract_paths large patch -----------------------------------------
-
-class TestExtractPathsPerf:
-    def test_extract_1000_line_patch_under_50ms(self):
-        from smriti.recall.hook import _extract_paths
-
-        # Synthetic 1000-line patch with 50 file directives mixed in.
-        lines = ["*** Begin Patch"]
-        for i in range(50):
-            lines.append(f"*** Update File: src/path/to/module_{i:04d}.py")
-            for j in range(18):  # filler diff lines per file
-                lines.append(f"  context line {j}")
-            lines.append(f"-old line {i}")
-            lines.append(f"+new line {i}")
-        lines.append("*** End Patch")
-        body = "\n".join(lines)
-
-        # Warm.
-        _extract_paths("apply_patch", {"command": body})
-
-        with _Timer() as t:
-            paths = _extract_paths("apply_patch", {"command": body})
-
-        print(f"\n  _extract_paths (1000-line, 50 files): {t.ms:.1f}ms "
-              f"({len(paths)} paths)")
-        assert t.ms < 50, f"_extract_paths took {t.ms:.1f}ms; bound is 50ms"
-        assert len(paths) == 50
-
-
-# --- wrap_tool overhead --------------------------------------------------
-
-class TestWrapToolOverheadPerf:
-    def test_wrap_overhead_under_50ms(self, monkeypatch):
-        """Overhead of the wrap_tool machinery itself, with run_recall
-        stubbed to a no-op so we measure wrapping, not recall."""
-        from smriti.recall import wrap_tool
-        from smriti.recall import wrap as wrap_module
-        from smriti.recall.types import RecallResponse
-
-        def fake_recall(query, *args, **kwargs):
-            return RecallResponse(matches=[], elapsed_ms=0, backend="stub")
-
-        monkeypatch.setattr(wrap_module, "run_recall", fake_recall)
-
-        def underlying(x: str) -> str:
-            return x.upper()
-
-        wrapped = wrap_tool(underlying)
-
-        # Warm both paths.
-        underlying("seed")
-        wrapped("seed")
-
-        # Run a small batch and average — single-call timings are noisy
-        # at the sub-millisecond level.
-        N = 100
-        with _Timer() as t_raw:
-            for _ in range(N):
-                underlying("foo")
-        with _Timer() as t_wrapped:
-            for _ in range(N):
-                wrapped("foo")
-
-        overhead_ms = (t_wrapped.ms - t_raw.ms) / N
-        print(f"\n  wrap_tool overhead: {overhead_ms:.3f}ms/call "
-              f"(raw {t_raw.ms / N:.3f}, wrapped {t_wrapped.ms / N:.3f})")
-        assert overhead_ms < 50, (
-            f"wrap_tool added {overhead_ms:.3f}ms/call; bound is 50ms"
-        )
 
 
 # --- deploy_hook_scripts at scale ---------------------------------------

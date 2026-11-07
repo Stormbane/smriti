@@ -158,7 +158,7 @@ class TestPatchSettingsJSON:
         out = capsys.readouterr().out
         assert "not found" in out
 
-    def test_adds_all_three_hooks_to_empty_settings(self, fake_home):
+    def test_adds_both_hooks_to_empty_settings(self, fake_home):
         memory_root = fake_home / ".narada"
         settings = fake_home / ".claude" / "settings.json"
         settings.write_text(json.dumps({}), encoding="utf-8")
@@ -166,19 +166,15 @@ class TestPatchSettingsJSON:
         cc_install.patch_settings_json(memory_root)
         data = json.loads(settings.read_text(encoding="utf-8"))
 
-        # All three Claude Code hooks wired.
+        # Both Claude Code hooks wired, and no ambient-recall hook.
         assert "SessionStart" in data["hooks"]
         assert "UserPromptSubmit" in data["hooks"]
-        assert "PostToolUse" in data["hooks"]
+        assert "PostToolUse" not in data["hooks"]
 
         # SessionStart -> wake.py command shape.
         ss_cmd = data["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         assert "SMRITI_WAKE=1" in ss_cmd
         assert "wake.py" in ss_cmd
-
-        # PostToolUse matcher -> Read|Edit|Write.
-        post = data["hooks"]["PostToolUse"]
-        assert any(group["matcher"] == "Read|Edit|Write" for group in post)
 
     def test_idempotent_when_all_hooks_already_wired(self, fake_home, capsys):
         memory_root = fake_home / ".narada"
@@ -344,14 +340,17 @@ class TestAgentDocPreflight:
         assert cc_install.run_claude_code(fake_home / ".narada") is True
         assert "Ask inline. Personal, hands off." in claude_md.read_text(encoding="utf-8")
 
-    def test_shared_recall_shim_deploys_under_local_name(self, fake_home):
+    def test_the_precompact_hook_is_deployed_and_nothing_else(self, fake_home):
         (fake_home / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
         (fake_home / ".claude.json").write_text("{}", encoding="utf-8")
         assert cc_install.run_claude_code(fake_home / ".narada") is True
 
-        deployed = fake_home / ".claude" / "hooks" / "associative_recall.py"
-        assert deployed.exists()
-        from smriti.integrations.common import SHARED_HOOKS_DIR
-        assert deployed.read_bytes() == (SHARED_HOOKS_DIR / "recall_shim.py").read_bytes()
-        # Claude-only hook still ships too.
-        assert (fake_home / ".claude" / "hooks" / "precompact_capture.py").exists()
+        hooks = fake_home / ".claude" / "hooks"
+        assert sorted(p.name for p in hooks.iterdir()) == ["precompact_capture.py"]
+        assert (hooks / "precompact_capture.py").read_bytes() == (
+            cc_install.HOOKS_SRC / "precompact_capture.py").read_bytes()
+
+    def test_the_agent_doc_promises_no_ambient_recall(self, fake_home):
+        cc_install.write_claude_md(fake_home / ".narada")
+        text = (fake_home / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
+        assert "PostToolUse" not in text and "ambient recall" not in text.lower()

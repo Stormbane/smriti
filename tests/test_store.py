@@ -851,18 +851,3 @@ def test_index_file_follows_the_same_policy(mini_tree: Path) -> None:
     assert "log/2026/11/03.md" not in _sources(db_path)
 
 
-def test_keyword_only_recall_can_clear_the_injection_threshold(
-        mini_tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Hooks search keyword-only; a nested exact match must still reach 0.45."""
-    from smriti.recall.backends import smriti_be
-    from smriti.recall.config import load_config
-
-    index_tree(root=mini_tree, db=mini_tree / ".smriti" / "index.db")
-    monkeypatch.setenv("SMRITI_ROOT", str(mini_tree))
-    monkeypatch.delenv("SMRITI_RECALL_VECTORS", raising=False)
-    resp = smriti_be.query("viveka khyati discrimination faculty", top_k=4,
-                           timeout_s=10, rerank=False)
-    assert resp.error is None, resp.error
-    top = resp.matches[0]
-    assert top.source.replace("\\", "/").endswith("semantic/concepts/viveka.md")
-    assert top.score >= load_config().threshold

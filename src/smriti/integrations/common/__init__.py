@@ -27,7 +27,6 @@ The adapter pattern is:
 from __future__ import annotations
 
 import importlib
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -56,9 +55,6 @@ if TYPE_CHECKING:
         mcp_registration_matches,
     )
 
-# Shared deployable hook shims (one source, harness-local filenames).
-SHARED_HOOKS_DIR = Path(__file__).resolve().parent / "hooks"
-
 # Each helper's module, imported when the helper is first asked for: the
 # wake hook runs ``wake_runner``, inside this package, in every session, and
 # needs none of the installers' helpers.
@@ -85,7 +81,6 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "SMRITI_MCP_COMMAND",
-    "SHARED_HOOKS_DIR",
     "EQUIVALENT",
     "DEFICIENT",
     "UNRELATED",

@@ -32,17 +32,16 @@ Required pieces:
 
 2. ``hooks/`` (only if the harness has events beyond SessionStart) —
    thin Python shims that delegate to a harness-neutral entry point
-   under ``smriti.recall``, ``smriti.store``, etc. Use
+   under ``smriti.store``, ``smriti.wake``, etc. Use
    ``smriti.integrations.common.deploy_hook_scripts`` to drop them in
-   place. See
-   ``smriti.integrations.claude_code.hooks.associative_recall`` for
-   the deployable-shim pattern.
+   place, and ``check_deployed_hooks`` in ``smriti doctor`` to catch
+   drift. See ``smriti.integrations.claude_code.hooks`` for a deployed
+   script.
 
 3. ``payload.py`` (optional) — if the harness's hook stdin shape
-   diverges meaningfully from the ``{"tool_name": ..., "tool_input":
-   ...}`` shape that ``smriti.recall.hook`` already accepts, put a
-   parser here. Most modern harnesses (Claude Code, Codex) align on
-   that shape, so this is rarely needed.
+   diverges meaningfully from Claude Code's and Codex's (``{"session_id":
+   ..., "cwd": ..., "tool_name": ..., "tool_input": ...}``), put a parser
+   here, so the hook's logic stays harness-neutral.
 
 4. Tests under ``tests/integrations/<your_harness>/`` — at minimum a
    smoke test that the install function is idempotent against a
@@ -51,12 +50,12 @@ Required pieces:
 Worked examples in this repo:
     - ``smriti.integrations.claude_code`` — JSON config
       (``~/.claude/settings.json``, ``~/.claude.json`` for MCP),
-      multiple hook events (SessionStart, UserPromptSubmit,
-      PostToolUse). Uses raw-stdout wake framing.
+      two hook events (SessionStart, UserPromptSubmit). Uses
+      raw-stdout wake framing.
     - ``smriti.integrations.codex`` — TOML config
       (``~/.codex/config.toml``), SessionStart hook with
       ``hookSpecificOutput.additionalContext`` JSON framing,
-      AGENTS.md drop-in. No PostToolUse parity yet (open).
+      AGENTS.md drop-in.
 
 Register the new harness in ``scripts/install.py`` as a ``--harness``
 flag value once the install function is in place.

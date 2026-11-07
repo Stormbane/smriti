@@ -565,7 +565,7 @@ def main(argv: list[str] | None = None) -> int:
     p_nightly.add_argument("--digest-cap", type=int, default=10,
                            help="Max day digests per night, newest first (default 10)")
     p_nightly.add_argument("--no-reindex", action="store_true",
-                           help="Skip the index + recall refresh step")
+                           help="Skip the index refresh step")
     p_nightly.add_argument("--no-witness", action="store_true",
                            help="Skip the commit + timestamp step")
     p_witness = sub.add_parser(
@@ -640,20 +640,6 @@ def main(argv: list[str] | None = None) -> int:
     p_metrics.add_argument("--since", type=str, default=None, help="ISO timestamp filter")
     p_metrics.add_argument("--json", action="store_true", help="JSON output")
 
-    # ── recall ────────────────────────────────────────────────────────
-    p_recall = sub.add_parser(
-        "recall",
-        help="Associative recall: ad-hoc query, status, stats",
-    )
-    p_recall_sub = p_recall.add_subparsers(dest="recall_cmd")
-    p_recall_query = p_recall_sub.add_parser("query", help="Run a recall query")
-    p_recall_query.add_argument("text", help="Query text")
-    p_recall_query.add_argument("-n", "--top-k", type=int, default=4)
-    p_recall_sub.add_parser("status", help="Show recall config + backend availability")
-    p_recall_stats = p_recall_sub.add_parser("stats", help="Aggregate stats over recall.jsonl")
-    p_recall_stats.add_argument("--hours", type=float, default=None)
-    p_recall_stats.add_argument("--top", type=int, default=10)
-
     args = parser.parse_args(argv)
 
     if args.verbose:
@@ -688,7 +674,6 @@ def _run(args: argparse.Namespace) -> int:
         "doctor": _cmd_doctor,
         "eval": _cmd_eval,
         "metrics": _cmd_metrics,
-        "recall": _cmd_recall,
         "nightly": _cmd_nightly,
         "witness": _cmd_witness,
         "morning": _cmd_morning,
@@ -698,45 +683,6 @@ def _run(args: argparse.Namespace) -> int:
         "tasks": _cmd_tasks,
     }
     return handlers[args.command](args)
-
-
-def _cmd_recall(args: argparse.Namespace) -> int:
-    """Recall subcommands: query, status, stats."""
-    sub = getattr(args, "recall_cmd", None)
-    if sub == "query":
-        from smriti.recall import load_config, run_recall
-        cfg = load_config()
-        cfg = type(cfg)(**{**cfg.__dict__, "top_k": args.top_k, "max_inject": args.top_k})
-        response = run_recall(args.text, cfg=cfg)
-        print(f"backend={response.backend}  elapsed={response.elapsed_ms}ms  "
-              f"matches={len(response.matches)}  error={response.error or '-'}")
-        for m in response.matches:
-            snippet = m.snippet[:160].replace("\n", " ").strip()
-            print(f"  {m.score:.2f}  {m.source}\n      {snippet}")
-        return 0
-    if sub == "status":
-        from smriti.recall import load_config
-        from smriti.recall.backends import smriti_be as smriti_be
-        cfg = load_config()
-        print(f"smriti available: {smriti_be.is_available()}")
-        print(f"threshold:    {cfg.threshold}")
-        print(f"top_k:        {cfg.top_k}")
-        print(f"max_inject:   {cfg.max_inject}")
-        print(f"timeout_s:    {cfg.timeout_s}")
-        print(f"rerank:       {cfg.rerank}  (with SMRITI_RECALL_VECTORS=1)")
-        print(f"trunk_alpha:  {cfg.trunk_alpha}  (0 disables trunk-distance rerank)")
-        print(f"log_path:     {cfg.log_path}  (exists: {cfg.log_path.exists()})")
-        return 0
-    if sub == "stats":
-        from smriti.recall.stats import main as stats_main
-        argv = []
-        if args.hours is not None:
-            argv += ["--hours", str(args.hours)]
-        if args.top:
-            argv += ["--top", str(args.top)]
-        return stats_main(argv)
-    print("usage: smriti recall {query|status|stats}", file=sys.stderr)
-    return 2
 
 
 if __name__ == "__main__":

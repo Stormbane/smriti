@@ -1,16 +1,13 @@
 """Idempotent hook script deployment + drift detection.
 
-Both Claude Code (``~/.claude/hooks/``) and Codex (``~/.codex/hooks/``
-or ``<repo>/.codex/hooks/``) run hooks as subprocesses pointed at
-scripts on disk. The scripts are tiny shims that delegate to the
-relevant ``smriti.<area>.hook`` entry point — same pattern, same
-deployment ergonomics.
+Harnesses run hooks as subprocesses pointed at scripts on disk; smriti
+deploys its own into the harness's hook directory (Claude Code's
+PreCompact capture script into ``~/.claude/hooks/``).
 
 Deployment is deliberately copy-based, not symlink-based: true file
 symlinks on Windows require Developer Mode / elevation (WinError 1314
 otherwise), git-bash ``ln -s`` silently degrades to a copy, and the
-editable pip install already single-sources all real logic — the shims
-are stable entry points whose text rarely changes. Byte-compare on
+scripts are stable entry points whose text rarely changes. Byte-compare on
 deploy plus :func:`check_deployed_hooks` in doctor covers the drift
 that copies can accumulate.
 """

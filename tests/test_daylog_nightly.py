@@ -684,32 +684,6 @@ def test_morning_requires_notify_cmd(tmp_path: Path, fake_llm: FakeProvider) -> 
     assert result["sent"] is False and "notify_cmd" in str(result["reason"])
 
 
-# --------------------------------------------------------------- presence
-
-
-def test_presence_line_reports_other_channels_only(tmp_path: Path) -> None:
-    from smriti.daylog.presence import presence_line
-
-    cfg = _cfg(tmp_path)
-    now = parse_ts("2026-09-04T11:20:00Z")
-    assert now is not None
-    append_turns(cfg, [
-        _turn("2026-09-04T11:17:00Z", "Is the voice still working?", channel="telegram"),
-        _turn("2026-09-04T09:00:00Z", "old turn", channel="voice"),  # outside window
-        _turn("2026-09-04T11:18:00Z", "own channel", channel="claude:smriti"),
-    ])
-    line = presence_line(exclude_channel="claude:smriti", now=now, cfg=cfg)
-    assert "telegram" in line and "3 min ago" in line
-    assert '(Sam: "Is the voice still working?")' in line
-    assert "old turn" not in line and "own channel" not in line
-
-
-def test_presence_line_empty_on_missing_log(tmp_path: Path) -> None:
-    from smriti.daylog.presence import presence_line
-
-    assert presence_line(cfg=_cfg(tmp_path)) == ""
-
-
 # ---------------------------------------------------------------- briefing
 
 

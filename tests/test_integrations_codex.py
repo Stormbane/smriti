@@ -49,7 +49,7 @@ class TestPatchConfigTomlFromScratch:
         data = _read_toml(fake_codex_home / ".codex" / "config.toml")
         assert data["features"]["hooks"] is True
         assert "SessionStart" in data["hooks"]
-        assert "PostToolUse" in data["hooks"]
+        assert "PostToolUse" not in data["hooks"]  # no ambient-recall hook
         # The memory root rides in the registration, so the server uses it
         # whatever environment Codex starts it in.
         assert data["mcp_servers"]["smriti"] == {
@@ -69,16 +69,6 @@ class TestPatchConfigTomlFromScratch:
         assert spec.env["SMRITI_WAKE_FRAMING"] == "codex-json"
         assert spec.env["SMRITI_WAKE_AUDIENCE"] == "coding"
         assert spec.wake_path.endswith(".smriti/wake.py")
-
-    def test_post_tool_use_matcher_includes_apply_patch(self, fake_codex_home):
-        codex_install.patch_config_toml(fake_codex_home / ".narada")
-        data = _read_toml(fake_codex_home / ".codex" / "config.toml")
-        post = data["hooks"]["PostToolUse"][0]
-        # Codex's matcher accepts apply_patch's aliases (Edit, Write).
-        assert "apply_patch" in post["matcher"]
-        cmd = post["hooks"][0]["command"]
-        assert 'SMRITI_RECALL_FRAMING="codex-json"' in cmd
-        assert "recall_hook.py" in cmd
 
     def test_session_start_matcher_covers_context_resets(self, fake_codex_home):
         codex_install.patch_config_toml(fake_codex_home / ".narada")
@@ -116,7 +106,6 @@ class TestPatchConfigTomlMergeBehavior:
         # And no duplicates in the array.
         data = _read_toml(fake_codex_home / ".codex" / "config.toml")
         assert len(data["hooks"]["SessionStart"]) == 1
-        assert len(data["hooks"]["PostToolUse"]) == 1
 
     def test_replaces_legacy_smriti_wake_hook(self, fake_codex_home):
         config = fake_codex_home / ".codex" / "config.toml"
@@ -219,8 +208,8 @@ class TestWriteAgentsMd:
         assert "## Memory system" in out
         # Codex-specific addendum present.
         assert "Session wake (Codex CLI)" in out
-        # PostToolUse parity language present (added in Phase 8b).
-        assert "ambient recall is wired" in out
+        # No ambient-recall hook is promised.
+        assert "PostToolUse" not in out and "ambient recall" not in out.lower()
 
     def test_size_under_codex_cap(self, fake_codex_home):
         """Codex truncates project-doc loading at 32 KiB."""
@@ -244,15 +233,13 @@ class TestRunCodex:
         codex = fake_codex_home / ".codex"
         assert (codex / "config.toml").exists()
         assert (codex / "AGENTS.md").exists()
-        assert (codex / "hooks" / "recall_hook.py").exists()
+        assert not (codex / "hooks").exists()  # Codex gets no hook scripts
 
-    def test_skip_config_only_writes_agents_md_and_hooks(self, fake_codex_home):
+    def test_skip_config_only_writes_agents_md(self, fake_codex_home):
         codex_install.run_codex(fake_codex_home / ".narada", skip_config=True)
         codex = fake_codex_home / ".codex"
         assert not (codex / "config.toml").exists()
         assert (codex / "AGENTS.md").exists()
-        # Hooks still deployed.
-        assert (codex / "hooks" / "recall_hook.py").exists()
 
     def test_idempotent_full_run(self, fake_codex_home):
         codex_install.run_codex(fake_codex_home / ".narada")

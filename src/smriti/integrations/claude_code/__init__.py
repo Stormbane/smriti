@@ -2,8 +2,6 @@
 
 Wires smriti's core into Anthropic's Claude Code CLI:
 
-    hooks/associative_recall.py   PostToolUse(Read|Edit|Write) shim
-                                  → calls smriti.recall.hook.main
     hooks/precompact_capture.py   PreCompact event capture; writes
                                   conversation turns to a staging tree
                                   before context is compacted away.

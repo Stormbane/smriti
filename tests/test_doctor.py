@@ -43,20 +43,23 @@ def test_codex_doctor_accepts_a_freshly_installed_bridge(tmp_path, monkeypatch) 
     assert all(check.passed for check in checks), [c for c in checks if not c.passed]
 
 
-def test_codex_doctor_flags_deployed_hook_drift(tmp_path, monkeypatch) -> None:
-    """Adversarial review finding 4: a stale deployed shim must FAIL,
+def test_claude_doctor_flags_deployed_hook_drift(tmp_path, monkeypatch) -> None:
+    """Adversarial review finding 4: a stale deployed hook script must FAIL,
     not hide behind passing config checks."""
     home, memory_root, project = _make_entity_and_project(tmp_path)
-    codex = home / ".codex"
-    codex.mkdir()
+    claude = home / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text("{}", encoding="utf-8")
+    (home / ".claude.json").write_text("{}", encoding="utf-8")
     use_home(monkeypatch, home)
-    codex_install.run_codex(memory_root)
+    assert claude_install.run_claude_code(memory_root) is True
 
-    (codex / "hooks" / "recall_hook.py").write_text("# stale\n", encoding="utf-8")
+    (claude / "hooks" / "precompact_capture.py").write_text("# stale\n", encoding="utf-8")
 
-    checks = {c.name: c for c in codex_checks(memory_root=memory_root, project=project, home=home)}
-    assert checks["Codex deployed hooks"].passed is False
-    assert "drifted" in checks["Codex deployed hooks"].detail
+    checks = {c.name: c
+              for c in claude_code_checks(memory_root=memory_root, project=project, home=home)}
+    assert checks["Claude deployed hooks"].passed is False
+    assert "drifted" in checks["Claude deployed hooks"].detail
 
 
 def test_claude_doctor_accepts_a_freshly_installed_bridge(tmp_path, monkeypatch) -> None:

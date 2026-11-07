@@ -5,10 +5,10 @@ same canonical classifier the installers use (so a PowerShell
 ``-EncodedCommand`` wake hook on Windows passes exactly when it would
 wake correctly), and the MCP check is a superset match (harness
 annotations like Codex's ``tools.*`` approval subtables don't read as
-"not registered"). Deployed-hook integrity and hook-target existence
-run for BOTH harnesses — the shims swallow their own failures by
-design, so drift is invisible at runtime and doctor is where it must
-surface.
+"not registered"). Hook-target existence runs for both harnesses, and
+the integrity of the hook scripts smriti deploys (Claude Code's) is
+checked too: hooks swallow their own failures by design, so drift is
+invisible at runtime and doctor is where it must surface.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from typing import Any
 
 from smriti.integrations.common import (
     EQUIVALENT,
-    SHARED_HOOKS_DIR,
     check_deployed_hooks,
     classify_doc,
     classify_wake_hook,
@@ -212,18 +211,6 @@ def codex_checks(
         checks.append(_hook_targets_check("Codex hook targets exist", all_cmds, home))
 
     checks.append(_managed_doc_check("Global AGENTS.md", codex / "AGENTS.md"))
-
-    problems = check_deployed_hooks(
-        SHARED_HOOKS_DIR, codex / "hooks", {"recall_shim.py": "recall_hook.py"}
-    )
-    checks.append(
-        Check(
-            "Codex deployed hooks",
-            not problems,
-            "; ".join(problems) or "byte-match with source",
-        )
-    )
-
     checks.append(_mcp_module_check())
     checks.extend(_briefing_checks(memory_root, project))
     return checks
@@ -285,9 +272,6 @@ def claude_code_checks(
     from smriti.integrations.claude_code import install as claude_install
 
     problems = check_deployed_hooks(
-        SHARED_HOOKS_DIR, claude / "hooks", claude_install.HOOK_DEPLOY_MAP
-    )
-    problems += check_deployed_hooks(
         claude_install.HOOKS_SRC, claude / "hooks", claude_install.LOCAL_HOOKS
     )
     checks.append(
