@@ -36,6 +36,7 @@ import importlib
 import sys
 from pathlib import Path
 
+from smriti import __version__
 from smriti.install import privacy
 from smriti.install.core import (
     DEFAULT_PROJECTS_ROOT,
@@ -49,6 +50,7 @@ KNOWN_HARNESSES = ("claude_code", "codex", "hermes", "none")
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m smriti.install")
+    parser.add_argument("--version", action="version", version=f"smriti {__version__}")
     parser.add_argument(
         "--memory-root",
         default=None,
@@ -134,6 +136,7 @@ def main(argv: list[str] | None = None) -> int:
                    else default_memory_root())
     projects_root = Path(args.projects_root).expanduser()
     harness = args.harness.strip().lower()
+    print(f"smriti {__version__}: installing into {memory_root}")
 
     # Agent-doc preflight runs BEFORE the core install: a refused
     # install must change nothing at all, and run_core mutates the

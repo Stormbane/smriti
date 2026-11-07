@@ -4,7 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "smriti"
-version = "0.2.0"
+# The version is smriti.__version__, read at build time ([tool.hatch.version]).
+dynamic = ["version"]
 description = "A memory system for AI entities, grounded in the antahkarana model of mind."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -62,6 +63,9 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/Stormbane/smriti"
+
+[tool.hatch.version]
+path = "src/smriti/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/smriti"]

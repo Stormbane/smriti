@@ -505,6 +505,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose logging"
     )
+    from smriti import __version__
+    parser.add_argument("--version", action="version", version=f"smriti {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     # ── index ────────────────────────────────────────────────────────
