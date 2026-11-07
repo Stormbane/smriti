@@ -40,7 +40,7 @@ from smriti.daylog.config import DaylogConfig, load_config
 from smriti.daylog.digest import _NO_TOOLS_ARGS, compose, nightly_fallback
 from smriti.daylog.model import day_key, day_tz
 from smriti.daylog.notify import notify_user
-from smriti.core.scrub import scrub
+from smriti.core.scrub import scrub_json
 from smriti.llm import LLMError
 
 log = logging.getLogger(__name__)
@@ -142,28 +142,14 @@ def compose_message(cfg: DaylogConfig, user: str, attempts: list[dict[str, str]]
         return compose(digest_only, user, attempts, providers=[fallback])
 
 
-def _scrubbed(value: object) -> object:
-    """Secret-scrub every string in a JSON-shaped value, BEFORE
-    serialization: JSON escaping would hide a quoted credential from
-    the patterns, and a match at a string's end would eat the closing
-    quote."""
-    if isinstance(value, str):
-        return scrub(value)
-    if isinstance(value, dict):
-        return {str(k): _scrubbed(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_scrubbed(v) for v in value]
-    return value
-
-
 def _write_status(cfg: DaylogConfig, result: dict[str, object]) -> None:
     """Diagnostics for the scheduled run. Provider attempt strings can
-    quote stderr, so every string is secret-scrubbed before it touches
-    the (backed-up) log tree."""
+    quote stderr, so every string is secret-scrubbed (:func:`scrub_json`)
+    before it touches the (backed-up) log tree."""
     try:
         path = cfg.log_dir / ".morning-status.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(_scrubbed(result), indent=1, default=str), encoding="utf-8")
+        path.write_text(json.dumps(scrub_json(result), indent=1, default=str), encoding="utf-8")
     except OSError as exc:  # status is a courtesy, never a failure
         log.warning("morning status not written: %s", exc)
 

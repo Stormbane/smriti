@@ -280,3 +280,24 @@ def scrub(text: str) -> str:
         out, count = pattern.subn(replacement, out)
         fresh = fresh and not count
     return out
+
+
+def scrub_json(value: object) -> object:
+    """*value*, a JSON-shaped document, with every string in it scrubbed, keys too.
+
+    For diagnostics written into the tree (the nightly's and the morning's
+    status files): a provider's error text can quote a credential. Scrub
+    BEFORE serialising: JSON escaping would hide a quoted credential from the
+    patterns, and a match at a string's end would eat its closing quote. A
+    value JSON has no type for is scrubbed as its ``str``, which is what
+    ``json.dumps(default=str)`` would have written.
+    """
+    if isinstance(value, str):
+        return scrub(value)
+    if isinstance(value, dict):
+        return {scrub(str(k)): scrub_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [scrub_json(v) for v in value]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return scrub(str(value))

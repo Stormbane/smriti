@@ -289,7 +289,9 @@ file can be opened at all, the night runs as before and its status says
    `origin`, or a detached HEAD) is skipped, not failed. `smriti status` shows
    the same line.
 9. Write `log/.nightly-status.json` (per-step outcomes; consumed by wake
-   briefing: "while you slept" + failure surfacing).
+   briefing: "while you slept" + failure surfacing). Every string in it is
+   scrubbed first, as the morning's status is (H14.1): a provider's error text
+   in `llm_attempts` can quote a credential, and `log/` is pushed.
 
 Idempotent by construction: every step is derive-from-inputs with an input
 hash; re-running a night that already completed is a no-op.

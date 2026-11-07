@@ -46,7 +46,8 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("smriti/daylog/logd.py", "ensure_running"): "logd's own log (log/.logd.log)",
     ("smriti/daylog/logd.py", "run_logd"): "logd's pid file",
     ("smriti/daylog/nightly.py", "_write_status"):
-        "the nightly's status document (log/.nightly-status.json)",
+        "the nightly's status document, every string in it masked first "
+        "(log/.nightly-status.json)",
     ("smriti/daylog/nightly.py", "_save_marker"):
         "the stale-day scan's marker: each day-file's size, mtime, turns' hash and corrupt-line "
         "count (.smriti/nightly-scan.json)",

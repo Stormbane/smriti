@@ -221,6 +221,58 @@ def test_a_rollup_is_masked_when_the_model_copies_a_credential(leaky: _Leaky) ->
     assert len(leaky.requests) == 1 and _masked(out.read_text(encoding="utf-8"))
 
 
+class _Refusing:
+    """An LLM seat whose error quotes a credential, as a CLI's stderr can."""
+
+    def is_available(self) -> bool:
+        return True
+
+    def call(self, request: LLMRequest) -> LLMResponse:
+        raise RuntimeError(f"401 from the API: Authorization: Bearer {KEY} was refused; "
+                           f"retry with {TOKEN}")
+
+
+def test_the_nightly_status_is_masked_when_a_provider_error_quotes_a_credential(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """H14.1 (Codex, review #7): ``llm_attempts`` carried the provider's raw error text
+    into ``log/.nightly-status.json``, which backups push."""
+    from datetime import datetime, timezone
+
+    from smriti.daylog import digest
+    from smriti.daylog.nightly import run_nightly
+
+    monkeypatch.setattr(digest, "get_provider", lambda name=None: _Refusing())
+    cfg = _day("2026-09-04", "an ordinary morning")
+    status = run_nightly(cfg, now=datetime(2026, 9, 5, 3, 5, tzinfo=timezone.utc),
+                         reindex=False, witness=False)
+    # The run saw the error as it was; the file holds it masked.
+    attempts = status["llm_attempts"]
+    assert isinstance(attempts, list) and KEY in attempts[0]["outcome"]
+    text = cfg.nightly_status_path.read_text(encoding="utf-8")
+    assert _masked(text)
+    saved = json.loads(text)
+    assert saved["llm_attempts"][0]["provider"] == "claude_cli"
+    assert "[redacted]" in saved["llm_attempts"][0]["outcome"]
+    assert "[redacted]" in saved["steps"]["digest"]["errors"]["2026-09-04"]
+    assert saved["ok"] is False
+
+
+def test_scrub_json_masks_every_string_at_any_depth() -> None:
+    from smriti.core.scrub import scrub_json
+
+    class Odd:
+        def __str__(self) -> str:
+            return f"odd {AWS}"
+
+    doc = {"a": [KEY, {"b": (TOKEN, 3, 1.5, None, True)}], KEY: "a key named by a key",
+           "odd": Odd()}
+    out = scrub_json(doc)
+    text = json.dumps(out)
+    assert _masked(text)
+    assert out == {"a": ["[redacted]", {"b": ["[redacted]", 3, 1.5, None, True]}],
+                   "[redacted]": "a key named by a key", "odd": "odd [redacted]"}
+
+
 # ------------------------------------------------------- the append itself
 
 

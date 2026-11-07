@@ -25,6 +25,7 @@ from pathlib import Path
 
 from smriti.core.files import write_atomic
 from smriti.core.oslock import BUSY, UNAVAILABLE, LockKey, lock_path, try_lock
+from smriti.core.scrub import scrub_json
 from smriti.daylog.config import DaylogConfig, load_config
 from smriti.daylog.digest import digest_day, digest_fingerprint
 from smriti.daylog.model import day_key, day_tz
@@ -487,6 +488,11 @@ def _clear_dirty(cfg: DaylogConfig, dirty: set[str], digest_errors: dict[str, st
 
 
 def _write_status(path: Path, status: dict[str, object]) -> None:
-    # write_atomic's temp name is the process's and thread's, so two writers
-    # never share one.
-    write_atomic(path, json.dumps(status, indent=1, default=str))
+    """Write the status document, every string in it scrubbed first.
+
+    It is under ``log/``, which backups commit and push, and a provider's
+    error text (``llm_attempts``, a step's ``error``) can quote a credential.
+    write_atomic's temp name is the process's and thread's, so two writers
+    never share one.
+    """
+    write_atomic(path, json.dumps(scrub_json(status), indent=1, default=str))
