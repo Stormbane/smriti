@@ -70,8 +70,10 @@ def _subdirs(path: Path | str, name: re.Pattern[str]) -> list[os.DirEntry[str]]:
 def _log_day_files(cfg: DaylogConfig) -> dict[str, tuple[int, int]]:
     """Every day-file in the tree (``log/YYYY/MM/DD.jsonl``) by day: its size and mtime (ns).
 
-    From the directory listing, which is as current as a stat (a file's entry
-    is updated as it is written) and costs no open per file.
+    From the directory listing, which costs no open per file (on Windows) and
+    is taken before any file is read: a listing that lags a write in progress
+    records an older stat with the newer content, which only makes the next
+    night read that file again.
     """
     files: dict[str, tuple[int, int]] = {}
     for year in _subdirs(cfg.log_dir, _YEAR_RE):
