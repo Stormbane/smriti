@@ -589,6 +589,30 @@ Not doing: the codex fallback stays opt-in; privacy by design (capture and a
 pushed tree) is the product, documented; the cost of one maintainer isn't a
 code change.
 
+## H15. From outside review #8 (at `aa163e6`): a backlog
+
+Five runs at high effort on a tree with no history: Opus twice (B, B+),
+Codex on gpt-6-astra twice (B, B) and Sonnet (B+). Suti called the
+hardening done at this grade; these are recorded, not approved. Each claim
+was checked against the code.
+
+| # | Change | Acceptance |
+|---|---|---|
+| H15.1 | The wake hook runs the interpreter that installed it (`sys.executable`, as the MCP registration does), and an import failure says so on stderr instead of exiting 0 in silence. (Opus 1 and 2) | The hook command names the installing interpreter; a wake.py that can't import smriti prints why. |
+| H15.2 | `smriti_update_feature_status` puts the notes in with a function, not a replacement template: notes holding `C:\Users` raise `re.error` today, and `\g<0>` is rewritten. (Opus 1) | Notes with backslashes are written as given. |
+| H15.3 | Turning capture off means off: `set_capture(False)` writes `"capture": false`, which `_sources` already honours over `extra_sources`. (Codex 1) | After an opt-out, no source is active, extra ones included. |
+| H15.4 | An LLM result is checked before it is published: an empty or whitespace digest is an error (the next provider is tried), and `claude -p`'s `is_error: true` is a failure. (Codex 1 and 2) | A blank reply and an `is_error` envelope each fail the digest. |
+| H15.5 | The writer checks the final path, not only the branch: a junction at a generated `<branch>/<year>` (or a linked day-file) that leads outside the tree is refused. (Codex 1 and 2) | A test with such a junction fails today and passes. |
+| H15.6 | The deployed backup's run lock is an OS lock (as the package's are), not a check-then-unlink file, and never taken from a live owner. (Codex 2) | The two-contender interleaving can't delete the other's lock. |
+| H15.7 | Small items: a day whose turns are all gone loses its render and digest, and a turn edited in place changes the input hash (Codex 2); findings and decisions are dated in the day zone (Opus 1); `edit_lock` says "unavailable", not "busy, try again", when no lock can be opened (Opus 2); the chunk upsert deletes the old row first, so the keyword index keeps no orphans (2 of 19,677 rows in the reference index) (Opus 2); the vestigial judge/executor roles in `llm` go (Sonnet). | A test each where behaviour changes. |
+| H15.8 | *(decision)* Executable code out of the memory tree: wake and backup run from the installed package, with `<root>/.smriti/*.py` thin shims or gone, so a restore or a write to the tree can't change what runs. (Opus 1 and 2) | The tree holds no code that runs on a schedule. |
+| H15.9 | *(decision)* Model downloads pinned to a revision, and `trust_remote_code` off for the default model. (Opus 2) | The default model loads at a pinned revision. |
+
+Not doing: the reviewers' grade-setting themes are the size of the code for
+one maintainer, churn, the regex scrubber and the opt-in codex fallback; none
+is a code change that moves the grade, and three reviews in a row have
+landed at B/B+.
+
 ## Status
 
 Updated as phases land. Each phase had a Codex diff review, fixes for every
@@ -649,7 +673,7 @@ a recheck.
   findings are H12.
 - **H12**: done (merged by 5323e58; H12.8 dropped). H12.10: outside review #6 at `5323e58`; its findings are H13.
 - **H13**: done (merged by 32ebc04; all CI green). H13.7 (fsync) measured and not kept: it slowed writes beyond noise. H13.13: outside review #7 at `9247509`; its findings are H14.
-- **H14**: done (H14.7 and H14.8 merged by `46e4b11`, H14.1-H14.6 by `4504f98`; Codex's diff reviews found nothing to fix; all CI green). H14.9: outside review #8 at the commit that records this.
+- **H14**: done (H14.7 and H14.8 merged by `46e4b11`, H14.1-H14.6 by `4504f98`; Codex's diff reviews found nothing to fix; all CI green). H14.9: outside review #8 at `aa163e6`: Opus B and B+, Codex B and B, Sonnet B+; its verified findings are the H15 backlog.
 - **H14.7 done** (2026-11-08, `hardening/h14b`; not yet reviewed or merged). Three
   removals, each its own commit with its tests; the code is in the git history.
   - The private store: `smriti.private`, the CLI's init on every command,
