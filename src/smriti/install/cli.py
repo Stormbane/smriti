@@ -20,13 +20,16 @@ install -e .`` in a checkout)::
     python -m smriti.install --harness none
     python -m smriti.install --harness claude_code --skip-settings
     python -m smriti.install --no-capture --remote-is-private
+    python -m smriti.install --projects-root ~/code
 
 Before changing anything it asks two privacy questions (capture
 conversations into the day-log? is the backup remote private?), or takes
 the answers from flags; see ``smriti/install/privacy.py``. Its last
 lines say what is captured, what is committed and where it is pushed.
 
-Re-runnable: idempotent, never deletes existing user files.
+Re-runnable: idempotent, never deletes existing user files. The projects
+root is recorded in ``<root>/.smriti/install.json``, so a rerun without
+``--projects-root`` links the same projects.
 """
 
 from __future__ import annotations
@@ -39,8 +42,9 @@ from pathlib import Path
 from smriti import __version__
 from smriti.install import privacy
 from smriti.install.core import (
-    DEFAULT_PROJECTS_ROOT,
     default_memory_root,
+    record_projects_root,
+    resolve_projects_root,
     run_core,
 )
 
@@ -59,8 +63,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--projects-root",
-        default=str(DEFAULT_PROJECTS_ROOT),
-        help="Directory containing per-project source checkouts",
+        default=None,
+        help="Directory containing per-project source checkouts, linked into <root>/mirrors "
+             "(default: the one recorded by the last install; none on a new install)",
     )
     parser.add_argument(
         "--harness",
@@ -134,7 +139,6 @@ def main(argv: list[str] | None = None) -> int:
 
     memory_root = (Path(args.memory_root).expanduser() if args.memory_root
                    else default_memory_root())
-    projects_root = Path(args.projects_root).expanduser()
     harness = args.harness.strip().lower()
     print(f"smriti {__version__}: installing into {memory_root}")
 
@@ -175,11 +179,20 @@ def main(argv: list[str] | None = None) -> int:
         print("\ninterrupted before any change.", file=sys.stderr)
         return 130
 
+    projects = resolve_projects_root(memory_root, args.projects_root)
     try:
-        run_core(memory_root, projects_root, skip_recall_daemon=args.skip_recall_daemon)
+        run_core(memory_root, projects.path, skip_recall_daemon=args.skip_recall_daemon)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    if projects.note:
+        print(f"[mirrors] {projects.note}")
+    if projects.to_record and projects.path is not None:
+        try:
+            record_projects_root(memory_root, projects.path)
+        except OSError as exc:
+            print(f"error: couldn't record the projects root: {exc}", file=sys.stderr)
+            return 1
 
     try:
         for change in privacy.apply(memory_root, plan):
