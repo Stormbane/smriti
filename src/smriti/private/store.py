@@ -49,6 +49,20 @@ LEGACY_KEY_WARNING = (
 )
 
 
+def _key_line(lines: list[str]) -> tuple[int, str] | None:
+    """The first ``key:`` line inside a fenced code block: (its index, the key)."""
+    in_fence = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence and stripped.startswith("key:"):
+            key = stripped.split(":", 1)[1].strip()
+            return (i, key) if key and not key.startswith("{{") else None
+    return None
+
+
 @dataclass
 class ConsentToken:
     """Runtime assertion that the identity core is requesting access to
@@ -117,11 +131,7 @@ class PrivateStore:
           root `.gitignore`.
         """
         self.private_root.mkdir(parents=True, exist_ok=True)
-        ignore = self.private_root / ".gitignore"
-        existing = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
-        if _KEY_FILE not in existing.split():
-            sep = "" if not existing or existing.endswith("\n") else "\n"
-            ignore.write_text(existing + sep + _GITIGNORE, encoding="utf-8")
+        self._ignore_key()
         readme = self.private_root / "README.md"
         if not readme.exists():
             readme.write_text(_TEMPLATE_PATH.read_text(encoding="utf-8"), encoding="utf-8")
@@ -141,6 +151,18 @@ class PrivateStore:
             except BaseException:  # noqa: BLE001 — no half-written key survives; re-raised
                 key_path.unlink(missing_ok=True)
                 raise
+
+    def _ignore_key(self) -> None:
+        """Put `.key` in `private/.gitignore`, keeping the rules already there.
+
+        Called before anything writes `.key`: a key written first would be
+        committed by a backup that ran in between.
+        """
+        ignore = self.private_root / ".gitignore"
+        existing = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
+        if _KEY_FILE not in existing.split():
+            sep = "" if not existing or existing.endswith("\n") else "\n"
+            ignore.write_text(existing + sep + _GITIGNORE, encoding="utf-8")
 
     @staticmethod
     def _generate_key() -> str:
@@ -175,62 +197,72 @@ class PrivateStore:
         readme = self.private_root / "README.md"
         if not readme.exists():
             return None
-        in_fence = False
-        for i, line in enumerate(readme.read_bytes().decode("utf-8").splitlines()):
-            stripped = line.strip()
-            if stripped.startswith("```"):
-                in_fence = not in_fence
-                continue
-            if in_fence and stripped.startswith("key:"):
-                key = stripped.split(":", 1)[1].strip()
-                return (i, key) if key and not key.startswith("{{") else None
-        return None
+        return _key_line(readme.read_bytes().decode("utf-8").splitlines())
 
     def _migrate_legacy_key(self) -> None:
         """Move an older install's key from the committed README to `.key`, and say so.
 
-        The key is written to `.key` as :meth:`init` writes a new one
-        (exclusive create, owner-only on POSIX), then its line is taken out
-        of the README. The README was committed, so the key is still in git
+        Under the README's edit lock, from finding the key to the README's
+        rewrite, and found again once the lock is held: two commands that
+        start together migrate once, and the second finds the key gone. The
+        key is written to `.key` as :meth:`init` writes a new one (exclusive
+        create, owner-only on POSIX), and its line is taken out of the
+        README. The README was committed, so the key is still in git
         history: :data:`LEGACY_KEY_WARNING` is logged, and
         :data:`LEGACY_KEY_NOTE` left in `private/` (``smriti status`` shows
-        it) until the user has rotated the key and deletes it. A `.key`
-        that holds another key wins, as before; the README is then left as
-        it is, and that is logged too.
+        it) until the user has rotated the key and deletes it.
+
+        A `.key` already there wins: if it holds another key, the README is
+        left as it is (and that is logged); if it holds this one (a
+        migration cut short), the README is cleaned now.
         """
-        found = self._legacy_key_line()
-        if found is None:
+        if self._legacy_key_line() is None:  # the usual case, without a lock
             return
-        line_no, key = found
-        key_path = self.private_root / _KEY_FILE
-        try:
-            fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            pass  # there already (another process, mid-migration, or an older .key)
-        else:
+        from smriti.core.files import edit_lock  # only here: a migration is rare
+
+        with edit_lock(self.private_root / "README.md"):
+            found = self._legacy_key_line()
+            if found is None:
+                return  # another command moved it while this one waited
+            _line, key = found
+            key_path = self.private_root / _KEY_FILE
             try:
-                with os.fdopen(fd, "w", encoding="ascii") as f:
-                    f.write(key + "\n")
-            except BaseException:  # noqa: BLE001 — no half-written key survives; re-raised
-                key_path.unlink(missing_ok=True)
-                raise
-        if key_path.read_text(encoding="ascii").strip() != key:
-            log.warning("private/README.md holds a key that isn't the one in private/.key; "
-                        "the store uses .key's, and the README is left as it is")
-            return
-        self._remove_readme_line(line_no)
-        note = self.private_root / LEGACY_KEY_NOTE
-        if not note.exists():
-            note.write_text(LEGACY_KEY_WARNING + "\n", encoding="utf-8")
+                fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                pass  # an older .key, or one a migration cut short wrote
+            else:
+                try:
+                    with os.fdopen(fd, "w", encoding="ascii") as f:
+                        f.write(key + "\n")
+                except BaseException:  # noqa: BLE001 — no half-written key survives; re-raised
+                    key_path.unlink(missing_ok=True)
+                    raise
+            if key_path.read_text(encoding="ascii").strip() != key:
+                log.warning("private/README.md holds a key that isn't the one in "
+                            "private/.key; the store uses .key's, and the README is left "
+                            "as it is")
+                return
+            self._remove_readme_line(key)
+            note = self.private_root / LEGACY_KEY_NOTE
+            if not note.exists():
+                note.write_text(LEGACY_KEY_WARNING + "\n", encoding="utf-8")
         log.warning(LEGACY_KEY_WARNING)
 
-    def _remove_readme_line(self, line_no: int) -> None:
-        """Take line *line_no* out of the README, and its code block if nothing else is in it."""
+    def _remove_readme_line(self, key: str) -> None:
+        """Take *key*'s line out of the README, and its code block if nothing else is in it.
+
+        The line is found in the text this rewrites, never by an index from an
+        earlier read. Callers hold the README's edit lock.
+        """
         from smriti.core.files import write_atomic  # only here: a migration is rare
 
         readme = self.private_root / "README.md"
         # Its own line endings kept: bytes in, bytes out.
         lines = readme.read_bytes().decode("utf-8").splitlines(keepends=True)
+        found = _key_line([line.rstrip("\r\n") for line in lines])
+        if found is None or found[1] != key:
+            return  # not there any more
+        line_no = found[0]
         del lines[line_no]
         start = line_no - 1
         while start >= 0 and not lines[start].strip().startswith("```"):

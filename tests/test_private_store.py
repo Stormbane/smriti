@@ -155,6 +155,69 @@ def test_a_dot_key_with_another_key_wins_and_the_readme_is_left(
     assert Fernet(other.encode("ascii")).decrypt(path.read_bytes()) == b"x"
 
 
+_MIGRATED = "\n".join(["# Contract", "", "Sam's commitment to Ari.", "", "## The key", "", "",
+                       "## Forward path", "", "Phase 2.", ""])
+
+
+def test_two_migrations_at_once_take_out_the_key_and_nothing_else(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex review of H13.9: a second command that found the key's line before the first
+    moved it deleted whatever line had taken that place in the shorter README."""
+    private, key = _legacy(tmp_path)
+    first, second = PrivateStore(tmp_path), PrivateStore(tmp_path)
+    real = PrivateStore._legacy_key_line
+    interleaved: list[bool] = []
+
+    def found_then_overtaken(self: PrivateStore) -> tuple[int, str] | None:
+        found = real(self)
+        if self is second and not interleaved:
+            interleaved.append(True)
+            first._migrate_legacy_key()  # the other command finishes in between
+        return found
+
+    monkeypatch.setattr(PrivateStore, "_legacy_key_line", found_then_overtaken)
+    second._migrate_legacy_key()
+    assert interleaved
+    assert (private / "README.md").read_text(encoding="utf-8") == _MIGRATED
+    assert (private / ".key").read_text(encoding="ascii").strip() == key
+
+
+def test_the_migration_holds_the_readmes_lock(tmp_path: Path,
+                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    from smriti.core.files import FileBusy, edit_lock
+
+    private, _key = _legacy(tmp_path)
+    store = PrivateStore(tmp_path)
+    real = store._remove_readme_line
+    held: list[bool] = []
+
+    def removing(*args: object) -> None:
+        try:
+            with edit_lock(private / "README.md", wait_s=0.05):
+                held.append(False)
+        except FileBusy:
+            held.append(True)  # another command waits here, then finds the key gone
+        real(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(store, "_remove_readme_line", removing)
+    store.init()
+    assert held == [True]
+
+
+def test_a_migration_cut_short_after_the_key_is_finished_by_the_next(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """`.key` written, the README not yet cleaned: the same key in both. The next run
+    takes it out of the README (leaving it would keep the key in every commit)."""
+    from smriti.private.store import LEGACY_KEY_NOTE
+
+    private, key = _legacy(tmp_path)
+    (private / ".gitignore").write_text(".key\n", encoding="utf-8")
+    (private / ".key").write_text(key + "\n", encoding="ascii")
+    PrivateStore(tmp_path).init()
+    assert (private / "README.md").read_text(encoding="utf-8") == _MIGRATED
+    assert (private / LEGACY_KEY_NOTE).exists() and "git history" in caplog.text
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes; Windows relies on ACLs")
 def test_the_moved_key_is_the_owners_alone(tmp_path: Path) -> None:
     private, _key = _legacy(tmp_path)
