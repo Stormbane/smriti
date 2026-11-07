@@ -68,8 +68,30 @@ All notable changes to this project are documented here, following
   no project mirrors until given `--projects-root`; an install made before the
   record keeps the directory its mirrors point into (or `C:/Projects`, the old
   default, when it has no mirrors and that directory exists), and records it.
+- `smriti.core` imports nothing from the packages above it: the credential scrub
+  is `smriti.core.scrub` and the day zone `smriti.core.dayzone`.
+  `smriti.daylog.scrub` and `smriti.daylog.model` re-export them, so existing
+  imports keep working. A test fails on an import against that direction.
 
 ### Fixed
+
+- A failed `git status` (an unreadable index, say) read as "nothing to commit":
+  backups stopped while each run, `smriti status` and the nightly said all was
+  well. The backup script logs it as a failed commit (still exiting 0), and logs
+  "nothing to commit" and "up to date" as well; a run is reported a success only
+  from the lines that show it, so a run that logged no outcome is "unknown", not
+  ok. Reinstall to get the new script; until then an older one's quiet runs read
+  as "unknown".
+- The installer rewrote `~/.claude.json` and `~/.claude/settings.json` (and
+  Codex's `config.toml`) with a plain write, under no lock, and kept one `.bak`
+  that every run overwrote, losing the backup of the original. Each edit now holds
+  a lock from its read to its write and reads the file again just before writing:
+  a change Claude Code made meanwhile is kept (the edit is redone on it once, or
+  refused, and the install exits nonzero). It writes atomically, with the file's
+  permissions and through a symbolic link, after copying the file as it was to a
+  new `<file>.smriti-<UTC time>.bak`; the first of these is never removed, and
+  five are kept. The home is read when a step runs, not when the module is
+  imported.
 
 - The installer looked for a project's Claude Code memory as `C--Projects-<name>`;
   it now names the directory as Claude Code does, from the project's whole path
@@ -115,6 +137,16 @@ All notable changes to this project are documented here, following
   outside the chokepoint and an allowlist of runtime and index state.
 - The codex fallback is off by default (above): its read-only sandbox stops writes
   and the network but not reads, while it reads untrusted transcripts.
+- The credential scrub masks quoted keys, as JSON, YAML, TOML and Python write
+  them: `{"password": "..."}`, `'token':'...'`, escaped JSON (`\"secret\":
+  \"...\"`), and keys that end in a secret's name (`access_token`,
+  `client-secret`, `db.password`, `accessToken`). A quoted value is masked whole,
+  up to its closing quote. Ordinary text costs what it did.
+- An older private store kept its key in `private/README.md`, which is committed.
+  smriti now moves such a key to `private/.key` (the same key), takes it out of
+  the README, and warns that it is still in git history and should be rotated;
+  `smriti status` repeats it until `private/KEY-WAS-COMMITTED.txt` is deleted.
+  `docs/PRIVACY.md` has the steps.
 
 ## [0.2.0] - 2026-11-06
 

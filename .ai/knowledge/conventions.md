@@ -75,6 +75,15 @@
 - **No private names across packages**: a name used outside its top-level package
   (`smriti.store`, `smriti.embed`, `smriti.cli`...) is public there; embedding goes
   through `smriti.embed.provider`. `tests/test_module_boundaries.py` enforces it.
+- **`smriti.core` imports nothing above it**: no `store`, `daylog`, `embed`,
+  `mcp`, `wake`, `install`, `integrations` or any other smriti package. What
+  core needs lives in core (the scrub, the day zone), re-exported where it was.
+  `tests/test_core_layer.py` enforces it.
+- **A harness's own config** (`~/.claude.json`, `settings.json`, Codex's
+  `config.toml`) is changed only through
+  `smriti.integrations.common.config_file.edit_config`: locked, re-read before
+  writing, backed up (the first backup kept), atomic. Its paths come from the
+  home when a step runs, never from a module constant.
 
 ## CLI
 

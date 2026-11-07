@@ -264,7 +264,8 @@ file can be opened at all, the night runs as before and its status says
 8. **Backup** (H12.13): the last commit and push from
    `.git/smriti-backup.jsonl`, whoever made them (the witness, the hourly
    task), and since when pushes fail. A failed last commit or push fails the
-   night, so the wake names it; a push with nowhere to go (no upstream and no
+   night, so the wake names it (a failed `git status` is a failed commit, until
+   a later run finds nothing to commit); a push with nowhere to go (no upstream and no
    `origin`, or a detached HEAD) is skipped, not failed. `smriti status` shows
    the same line.
 9. Write `log/.nightly-status.json` (per-step outcomes; consumed by wake

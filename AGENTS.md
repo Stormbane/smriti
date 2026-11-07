@@ -48,7 +48,7 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 - **CLI:** 15 `smriti` subcommands: `backup`, `doctor`, `embed`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `recall`, `status`, `tasks`, `witness`, `write`. Nested: `embed` has `serve`, `status`, `stop`; `recall` has `query`, `status`, `stats`, `index`, `daemon`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 968 test functions in 85 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 999 test functions in 87 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 Regenerate with `python scripts/doc_facts.py --write`; `tests/test_doc_facts.py` fails when this block drifts from the code.
@@ -58,6 +58,7 @@ Regenerate with `python scripts/doc_facts.py --write`; `tests/test_doc_facts.py`
 ```
 src/smriti/
   cli.py                 the `smriti` command
+  core/                  bottom layer, imports nothing above it: files, locks, tree root, runtime dir, memwrite, scrub, day zone
   mcp/                   MCP server over stdio, no dependencies: protocol, tool table, tools by group
   store/                 writer, index pages (index.md upkeep), indexer, index policy, schema, search
   embed/                 embedding identity; the provider rule and embedding API; the service, its client, protocol, runtime dir

@@ -628,6 +628,105 @@ a recheck.
   findings are H12.
 - **H12**: done (merged by 5323e58; H12.8 dropped). H12.10: outside review #6 at `5323e58`; its findings are H13.
 - **H13**: planned, awaiting approval.
+- **H13.3 implemented** (2026-11-07, `hardening/h13b`; not yet reviewed or
+  merged). The backup script logs a failed `git status` (`status_failed`, with
+  git's code and the tail of its output) and still exits 0; it also logs
+  `nothing_to_commit` and `up_to_date`, so the wrapper's summary claims a step
+  only from the line that shows it: a finished run with no line for a step
+  reports it `unknown`, not ok (a script deployed before this one, until the
+  installer updates it). `backup_status` counts a failed status as a failed
+  commit, and a later `nothing_to_commit` ends it. A corrupt `.git/index`: the
+  run says `commit failed: git status failed: ...`, `smriti status` says
+  `commit FAILED`, and the night fails. `privacy.backup_remote` copies only the
+  push target's rule, and its git failures already raise into
+  `GitState.error`: unchanged. A quiet hourly run now logs two lines (about
+  200 bytes), within the log's cap. The reference install's deployed script
+  needs the installer run (or a copy) to get this.
+- **H13.4 implemented** (same branch). A rule for quoted keys runs before the
+  bare names' rule: a key in either quote, escaped too (JSON inside a JSON
+  string, as `curl -d` writes it), that is a secret's name or ends in one after
+  `_`, `-`, `.` or a camel-case hump (`access_token`, `client-secret`,
+  `db.password`, `accessToken`), then `=` or `:`, then the value, masked whole
+  to its closing quote (escapes and spaces included), or, unquoted or
+  unterminated, as far as the bare form's characters go. Decided: a key that
+  only begins with a name (`password_hint`, `token_type`) isn't one; a value
+  under 8 characters is kept, as for a bare name; names match ASCII case only
+  (the odd Unicode folds, `ſecret`, don't make a key name); a secret under a
+  non-secret key (`{"password": {"value": ...}}`) and a bare name's quoted
+  value with other characters (`password = "p@ss word"`) are still not
+  masked. The fuzz now holds the scrub to its patterns as first written, the
+  new rule included, and the old patterns alone wherever the new rule finds
+  nothing (of the 4,100 texts, 2,349 are masked and 969 differ from the old
+  patterns, each where a quoted key is). Speed, master/branch, medians of three alternating runs (each
+  a median of 15): two 50 kB days 0.919/0.924 and 0.886/0.882 ms, a 2 kB note
+  38.7/38.1 us, a 1.6 kB note 32.8/33.1 us, 1.5 kB of JSON with no secret key
+  17.0/16.8 us: the same. How:
+  the two assignment rules share one scan for their hints; it looks for `key`
+  and back for `api`, not for `api` (42 against 16 us per 50 kB: the engine
+  scans for a literal's first letter, and an `a` is everywhere); the new
+  pattern starts with a bare quote, which the engine skips to (in a group or
+  after an optional backslash it was tried at every position, 1.1 ms per 50
+  kB), takes the key without backtracking and looks back at its end. Text that
+  does hold a quoted secret pays for masking it: 50 kB of a day plus one JSON
+  secret 2.20 ms against 1.38, 1.5 kB of JSON with secrets 116 against 33 us.
+- **H13.5 implemented** (same branch). `integrations.common.config_file.edit_config`
+  makes every edit of `~/.claude.json`, `~/.claude/settings.json` and Codex's
+  `config.toml`: under the file's edit lock from the read to the write;
+  re-reading it just before writing, and if the harness changed it, redoing
+  the change on its text once, else refusing (the step prints `NOT SAVED`,
+  `run_claude_code`/`run_codex` return False and the install exits nonzero);
+  backing the file up first, as read, to a new `<file>.smriti-<UTC time>.bak`
+  (exclusive create; one cut short is removed, or it would pass for the
+  first), the oldest never removed and five kept in all; writing
+  through `write_atomic` with the file's permissions (its new `mode`, set on
+  the temp file before any content) and through a symbolic link to its
+  target. Both installers work their paths out from the home when a step runs
+  and take a `home`. Beyond the brief: the permissions and the link (an atomic
+  replace would otherwise have made a 0600 `~/.claude.json` world-readable and
+  replaced a dotfiles link with a file).
+- **H13.7 measured, not committed** (2026-11-07): the fsync costs more than
+  noise. The candidate fsynced the temp file before `os.replace` (and the
+  directory after it, on POSIX). `write_atomic` itself, 400 alternating calls
+  per size on this machine, without/with: 1 kB 1.01/1.79 ms median (p99
+  1.4/50 ms), 10 kB 1.02/1.71 (p99 1.4/4.2), 50 kB 1.10/1.85 (p99 1.5/5.2):
+  about 0.75 ms more a call, 1.75 times, with stalls. `scripts/bench.py` (A
+  the branch without it, B with it; the reference tree's copy, 13 queries,
+  two alternating rounds): `smriti_write` p50 46 against 61 ms (rounds 42.9
+  and 49.4 against 44.2 and 77.5) and max 73 against 138 ms, B's second round
+  holding two writes of 190 and 201 ms; nothing else beyond noise. A
+  `smriti_write` makes one or two `write_atomic` calls (its `index.md`
+  upkeep). The patch is kept out of the tree. Alternatives, for Suti: (a)
+  fsync only where a lost file can't be regenerated, behind a
+  `write_atomic(..., durable=True)`: the project tools' todos, feature specs,
+  decisions and status notes, the handoff, the morning's ledger, the
+  nightly's status, a harness's config; not `index.md` listings, renders,
+  digests and rollups (rebuilt from their inputs by the next run), nor the
+  runtime caches; (b) an environment flag (`SMRITI_FSYNC=1`) for installs
+  that want durability over speed; (c) the nightly fsyncs what it wrote once,
+  at its end, before the witness commit (the commit is the durable copy).
+- **H13.6 implemented** (same branch). The scrub is `smriti.core.scrub` (moved,
+  history kept) and the day zone `smriti.core.dayzone`; `smriti.daylog.scrub`
+  and `smriti.daylog.model` re-export them. `oslock` takes the runtime
+  directory from `core.rundir`, the store's writer the day zone from core.
+  `tests/test_core_layer.py` scans `core` (AST: module level and functions,
+  relative imports, `from smriti import x`, `import_module` with a literal) and
+  fails on any smriti package but core; on master it names the two imports.
+  Startup: the wake, `smriti status` and tools/list import what they did plus
+  `core.dayzone`, the code that left `daylog.model` (importing `daylog.model`
+  159.2 against 159.2 ms, the briefing 165.5 against 169.1 ms, medians of 30
+  alternating processes).
+- **H13.9 implemented** (same branch). Found in the README's code block with no
+  `.key`, the key is written to `.key` as `init` writes one (exclusive,
+  0o600), the same key so nothing becomes unreadable; its line, and its block
+  if it held nothing else, leave the README (its line endings kept). A `.key`
+  with another key still wins and the README is left, with a warning. The
+  user is told that the key is in git history and to rotate it: a log warning,
+  and, since the first command after an upgrade is likely the hidden hourly
+  backup, `private/KEY-WAS-COMMITTED.txt`, which `smriti status` shows until it
+  is deleted. The store can't rotate, so PRIVACY.md has the manual steps (a
+  re-runnable `MultiFernet` script that keeps the new key outside the tree
+  until it is done) and what rotation can't undo, the old ciphertext in the
+  history. The README template no longer says the key is in it.
 - **H12.0 implemented** (2026-11-06, `hardening/h12a`; not yet reviewed or
   merged): keep-alive, the profile cache, `scripts/bench.py`, and the
   fixes the benchmark found. The three slower measures are back at the
