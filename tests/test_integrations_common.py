@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -44,6 +45,42 @@ class TestMCPSpec:
             {"command": "python", "args": ["-m", "smriti.mcp_server"]}
         )
         assert mcp_registration_matches(dict(SMRITI_MCP_COMMAND))
+
+    def test_the_registration_carries_the_memory_root(self, tmp_path):
+        """A harness starts the server in its own environment: without the
+        root in the registration, the server serves SMRITI_ROOT's or the
+        default root, not the one installed."""
+        from smriti.integrations.common.mcp_spec import mcp_registration, mcp_registration_matches
+
+        root = tmp_path / "memory"
+        entry = mcp_registration(root)
+        assert entry == {**SMRITI_MCP_COMMAND,
+                         "env": {"SMRITI_ROOT": os.path.abspath(root)}}
+        assert mcp_registration() == dict(SMRITI_MCP_COMMAND)  # no root known: as before
+        # With a root, an entry must name it: one without (from before) or
+        # naming another root reads as unregistered, so the installer fixes it.
+        assert mcp_registration_matches(entry, root)
+        assert mcp_registration_matches({**entry, "env": {"SMRITI_ROOT": str(root / ".")}}, root)
+        assert not mcp_registration_matches(dict(SMRITI_MCP_COMMAND), root)
+        assert not mcp_registration_matches(mcp_registration(tmp_path / "other"), root)
+        assert mcp_registration_matches(dict(SMRITI_MCP_COMMAND))  # rootless check: as before
+
+    def test_the_reference_root_registers_as_the_root_it_resolves_to(self, monkeypatch, tmp_path):
+        """With no SMRITI_ROOT, an install into an existing ~/.narada registers
+        that root, and a server started with the registration uses it."""
+        from smriti.core.tree import tree_root
+        from smriti.integrations.common.mcp_spec import mcp_registration
+
+        home = tmp_path / "home"
+        (home / ".narada").mkdir(parents=True)
+        monkeypatch.delenv("SMRITI_ROOT")
+        monkeypatch.delenv("NARADA_ROOT")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        before = tree_root()
+        assert before == home / ".narada"
+        env = mcp_registration(before)["env"]
+        monkeypatch.setenv("SMRITI_ROOT", env["SMRITI_ROOT"])
+        assert tree_root() == before.resolve()
 
     def test_make_wake_hook_command_raw(self):
         cmd = make_wake_hook_command(

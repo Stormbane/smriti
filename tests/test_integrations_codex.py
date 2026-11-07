@@ -7,6 +7,7 @@ duplicates piling up on re-run, user keys clobbered.
 
 from __future__ import annotations
 
+import os
 import sys
 import tomllib
 from pathlib import Path
@@ -49,9 +50,12 @@ class TestPatchConfigTomlFromScratch:
         assert data["features"]["hooks"] is True
         assert "SessionStart" in data["hooks"]
         assert "PostToolUse" in data["hooks"]
+        # The memory root rides in the registration, so the server uses it
+        # whatever environment Codex starts it in.
         assert data["mcp_servers"]["smriti"] == {
             "command": sys.executable,
             "args": ["-m", "smriti.mcp_server"],
+            "env": {"SMRITI_ROOT": os.path.abspath(memory_root)},
         }
 
     def test_session_start_uses_codex_json_framing(self, fake_codex_home):
@@ -146,6 +150,40 @@ class TestPatchConfigTomlMergeBehavior:
         codex_install.patch_config_toml(fake_codex_home / ".narada")
         out = capsys.readouterr().out
         assert "already registered" in out
+
+    def test_an_entry_without_the_root_gets_it_and_keeps_the_rest(self, fake_codex_home):
+        """A registration from before the root was registered is brought up to
+        date: the root is added, the user's variables and annotations stay."""
+        config = fake_codex_home / ".codex" / "config.toml"
+        config.write_text(
+            "[mcp_servers.smriti]\n"
+            f"command = '{sys.executable}'\n"
+            "args = ['-m', 'smriti.mcp_server']\n"
+            "[mcp_servers.smriti.env]\n"
+            "SMRITI_LOG_QUERIES = '1'\n"
+            "[mcp_servers.smriti.tools.smriti_read]\n"
+            "approval_mode = 'approve'\n",
+            encoding="utf-8",
+        )
+        memory_root = fake_codex_home / ".narada"
+
+        codex_install.patch_config_toml(memory_root)
+
+        entry = _read_toml(config)["mcp_servers"]["smriti"]
+        assert entry["env"] == {"SMRITI_LOG_QUERIES": "1",
+                                "SMRITI_ROOT": os.path.abspath(memory_root)}
+        assert entry["tools"]["smriti_read"]["approval_mode"] == "approve"
+
+    def test_an_entry_for_another_root_is_moved_to_this_one(self, fake_codex_home, capsys):
+        codex_install.patch_config_toml(fake_codex_home / "elsewhere")
+        capsys.readouterr()
+        memory_root = fake_codex_home / ".narada"
+
+        codex_install.patch_config_toml(memory_root)
+
+        assert "[mcp_servers.smriti] registered" in capsys.readouterr().out
+        entry = _read_toml(fake_codex_home / ".codex" / "config.toml")["mcp_servers"]["smriti"]
+        assert entry["env"]["SMRITI_ROOT"] == os.path.abspath(memory_root)
 
     def test_creates_backup_before_overwriting(self, fake_codex_home):
         config = fake_codex_home / ".codex" / "config.toml"

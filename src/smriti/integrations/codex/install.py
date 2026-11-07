@@ -52,7 +52,6 @@ from smriti.integrations.common import (
     DEFICIENT,
     EQUIVALENT,
     SHARED_HOOKS_DIR,
-    SMRITI_MCP_COMMAND,
     ManagedDocError,
     classify_doc,
     classify_wake_hook,
@@ -65,6 +64,7 @@ from smriti.integrations.common import (
 )
 from smriti.integrations.common.config_file import edit_config
 from smriti.integrations.common.managed_doc import DocState
+from smriti.integrations.common.mcp_spec import mcp_registration
 
 WAKE_FRAMING = "codex-json"
 SESSION_START_MATCHER = "startup|resume|clear|compact"
@@ -312,21 +312,23 @@ def _wire_config(data: dict[str, Any], notes: list[str], memory_root: Path,
         notes.append("[[hooks.PostToolUse]] -> recall_hook.py (apply_patch)")
         changed = True
 
-    # 4. MCP server registration. Superset match: Codex annotates the
-    # entry with tools.* approval-mode subtables; extras are fine.
+    # 4. MCP server registration, with the memory root in its env. Superset
+    # match: Codex annotates the entry with tools.* approval-mode subtables;
+    # extras are fine.
     mcp = data.setdefault("mcp_servers", {})
-    if mcp_registration_matches(mcp.get("smriti")):
+    if mcp_registration_matches(mcp.get("smriti"), memory_root):
         notes.append("[mcp_servers.smriti] already registered")
     else:
         existing = mcp.get("smriti")
-        desired = {
-            "command": SMRITI_MCP_COMMAND["command"],
-            "args": list(SMRITI_MCP_COMMAND["args"]),
-        }
+        desired = mcp_registration(memory_root)
         if isinstance(existing, dict):
-            # Preserve user annotations (approval modes etc.), fix the
-            # command surface.
+            # Preserve user annotations (approval modes etc.) and the
+            # user's other variables; fix the command surface and the root.
+            env = existing.get("env")
+            merged_env = dict(env) if isinstance(env, dict) else {}
+            merged_env.update(desired.get("env", {}))
             existing.update(desired)
+            existing["env"] = merged_env
         else:
             mcp["smriti"] = desired
         notes.append("[mcp_servers.smriti] registered")
