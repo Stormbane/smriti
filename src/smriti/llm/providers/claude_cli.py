@@ -33,6 +33,21 @@ _RATE_MARKERS = (
     "quota", "limit reached", "limit reset",
 )
 
+# A call's timeout in seconds when the request names none. The variable, else
+# its older name, which installs from before the rename may still set.
+TIMEOUT_ENV = "SMRITI_CLAUDE_TIMEOUT"
+_TIMEOUT_ENV_OLD = "NARADA_CLAUDE_TIMEOUT"
+DEFAULT_TIMEOUT_S = 300
+
+
+def _env_timeout() -> int:
+    """The timeout the environment sets: :data:`TIMEOUT_ENV`, else its old name, else 300 s."""
+    for name in (TIMEOUT_ENV, _TIMEOUT_ENV_OLD):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return int(value)
+    return DEFAULT_TIMEOUT_S
+
 
 class ClaudeCliProvider:
     name = "claude_cli"
@@ -72,9 +87,7 @@ class ClaudeCliProvider:
             lines.append("Assistant:")
             user_block = "\n\n".join(lines)
         prompt = user_block
-        timeout = request.timeout_s or int(
-            os.environ.get("NARADA_CLAUDE_TIMEOUT", "300")
-        )
+        timeout = request.timeout_s or _env_timeout()
         t0 = time.monotonic()
         cli = self._path()
 

@@ -304,6 +304,45 @@ def test_claude_cli_isolates_internal_calls(monkeypatch, tmp_path):
     assert not os.path.exists(seen["path"]), "system prompt file left behind"
 
 
+
+@pytest.mark.parametrize(("env", "expected"), [
+    ({}, 300),
+    ({"SMRITI_CLAUDE_TIMEOUT": "45"}, 45),
+    ({"NARADA_CLAUDE_TIMEOUT": "60"}, 60),  # the old name, still read
+    ({"SMRITI_CLAUDE_TIMEOUT": "45", "NARADA_CLAUDE_TIMEOUT": "60"}, 45),
+    ({"SMRITI_CLAUDE_TIMEOUT": " ", "NARADA_CLAUDE_TIMEOUT": "60"}, 60),
+])
+def test_claude_cli_takes_its_timeout_from_the_environment(
+        monkeypatch, tmp_path, env, expected):
+    """H14.5 (Opus, review #7): the timeout was read from NARADA_CLAUDE_TIMEOUT only,
+    a maintainer-specific name; SMRITI_CLAUDE_TIMEOUT comes first now."""
+    import json as _json
+    import subprocess
+
+    from smriti.llm.providers import claude_cli as mod
+    from smriti.llm.types import LLMRequest
+
+    seen: dict = {}
+
+    def fake_run(cmd, **kw):
+        seen["timeout"] = kw.get("timeout")
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=_json.dumps({"result": "ok"}), stderr="")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "claude.cmd")
+    monkeypatch.setattr("smriti.llm.workdir.llm_workdir", lambda: tmp_path)
+    monkeypatch.delenv("SMRITI_CLAUDE_TIMEOUT", raising=False)
+    monkeypatch.delenv("NARADA_CLAUDE_TIMEOUT", raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    mod.ClaudeCliProvider().call(LLMRequest(system="S", user="hi"))
+    assert seen["timeout"] == expected
+    mod.ClaudeCliProvider().call(LLMRequest(system="S", user="hi", timeout_s=7))
+    assert seen["timeout"] == 7  # a request's own timeout wins
+
+
 def test_llm_workdir_carries_the_isolation_settings(tmp_path, monkeypatch):
     import json as _json
 

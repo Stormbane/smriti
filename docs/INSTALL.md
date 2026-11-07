@@ -285,6 +285,11 @@ Source globs live in the same config file; new transcript directories are
 a config edit, never a code change. See
 `.ai/features/nightly-cycle.md` for the full contract.
 
+Each `claude -p` call (a digest, a rollup, the morning message) is given 300
+seconds; `SMRITI_CLAUDE_TIMEOUT` sets another limit, in seconds.
+`NARADA_CLAUDE_TIMEOUT`, its older name, is still read when the new one isn't
+set.
+
 The witness step needs the `witness` extra and a memory root that is a git
 repository. The README's [What runs today](../README.md#what-runs-today)
 lists every nightly step with what it writes.
