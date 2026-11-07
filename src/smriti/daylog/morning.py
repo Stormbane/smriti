@@ -35,7 +35,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from smriti.core.files import edit_lock, write_atomic
+from smriti.core.files import edit_lock, sync_dir, sync_file, write_atomic
 from smriti.daylog.config import DaylogConfig, load_config
 from smriti.daylog.digest import _NO_TOOLS_ARGS, compose, nightly_fallback
 from smriti.daylog.model import day_key, day_tz
@@ -156,7 +156,9 @@ def _write_status(cfg: DaylogConfig, result: dict[str, object]) -> None:
 
 # The day's ledger entry, log/.morning-sent/<day>, is JSON with a "state":
 # "claimed" while a run composes, then "sending" (written before the send),
-# then "sent" or "undelivered". Only "claimed" is ever released or taken
+# then "sent" or "undelivered". Every write of it reaches the disk before the
+# run goes on (durable), so a power cut after the send can't bring back a
+# "claimed" that lets a later run send again. Only "claimed" is ever released or taken
 # over; any other state, and an entry from before claims (no state), means
 # the day is done. A claim older than this is a crashed run's: a compose
 # takes minutes (claude -p times out at 300 s by default). A live run that
@@ -213,6 +215,8 @@ def _claim_day(ledger: Path) -> _Claim | str:
         try:
             with ledger.open("x", encoding="utf-8") as f:
                 f.write(record)
+                sync_file(f)
+            sync_dir(ledger.parent)
             return _Claim(ledger, token)
         except FileExistsError:
             pass
@@ -229,7 +233,7 @@ def _claim_day(ledger: Path) -> _Claim | str:
             return f"ledger entry claimed by another run {max(age, 0):.0f} s ago"
         log.warning("taking over a stale morning claim (pid %s, %.0f s old)",
                     entry.get("pid", "?"), age)
-        write_atomic(ledger, record)
+        write_atomic(ledger, record, durable=True)
         return _Claim(ledger, token)
 
 
@@ -238,7 +242,8 @@ def _commit(claim: _Claim, fields: dict[str, object]) -> bool:
     with edit_lock(claim.path):
         if not _is_ours(_read_entry(claim.path), claim):
             return False
-        write_atomic(claim.path, json.dumps({"state": "sending", "token": claim.token, **fields}))
+        write_atomic(claim.path, json.dumps({"state": "sending", "token": claim.token, **fields}),
+                     durable=True)
         return True
 
 
@@ -259,7 +264,7 @@ def _settle(claim: _Claim, state: str) -> None:
         with edit_lock(claim.path):
             entry = _read_entry(claim.path)
             if entry is not None and entry.get("token") == claim.token:
-                write_atomic(claim.path, json.dumps({**entry, "state": state}))
+                write_atomic(claim.path, json.dumps({**entry, "state": state}), durable=True)
     except OSError as exc:
         log.warning("morning ledger not updated to %r: %s", state, exc)
 

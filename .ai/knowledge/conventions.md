@@ -84,6 +84,12 @@
   `smriti.integrations.common.config_file.edit_config`: locked, re-read before
   writing, backed up (the first backup kept), atomic. Its paths come from the
   home when a step runs, never from a module constant.
+- **Memory text goes through `smriti.core.memwrite`**: masked, atomic, and
+  durable by default (fsynced before the call returns; on POSIX its directory
+  too). A file a later run rebuilds (an `index.md` listing) passes
+  `durable=False`; state, caches and the index use `smriti.core.files`'
+  `write_atomic` without it. The morning's ledger is durable. The scan in
+  `tests/test_memwrite.py` fails on a write of tree text anywhere else.
 
 ## CLI
 

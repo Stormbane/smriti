@@ -81,7 +81,9 @@ def update_index_pages(path: Path, root: Path | None = None) -> list[Path]:
                     new_content = mask(new_content)
                     changed = new_content.strip() != old_content.strip()
                 if changed:
-                    write_memory(index_file, new_content)
+                    # Not fsynced: the listing is rebuilt from the directory by
+                    # the next write in it, and every write pays for this one.
+                    write_memory(index_file, new_content, durable=False)
             if changed:
                 updated.append(index_file)
                 log.info("Updated index page %s", index_file.relative_to(root))
