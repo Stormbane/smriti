@@ -725,8 +725,11 @@ def search_with_status(
         top_similarity=None if hits.best is None else round(hits.best, 4),
         unrelated=unrelated_below is not None,
     )
+    # Counted among the results returned: the note says how many of them kept their
+    # scores, not how many candidates did before the cut.
+    returned = {rowid for rowid, _, _ in ranked}
     return SearchOutcome(results, keyword_only, pending, hits.best, unrelated_below,
-                         len(unmeasured))
+                         len(unmeasured & returned))
 
 
 def _result(cand: _Candidate, score: float) -> SearchResult:

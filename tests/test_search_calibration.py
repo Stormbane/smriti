@@ -362,3 +362,38 @@ def test_with_the_reranker_a_pending_match_is_kept_too(
     assert len(found) == 5 and found[0] == ("notes/quince.md", 0.5)
     narrow = _ranks(db, candidate_k=3, top_k=3)  # three vector hits, then the match
     assert narrow[0] == ("notes/quince.md", 0.5)
+
+
+@needs_vec
+def test_the_note_counts_only_the_pending_matches_it_returns(
+        pending_behind_unrelated: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex recheck of 34ab84d (P2): the count of results that kept their scores
+    took in pending candidates the cut then dropped: one result, "6 results"."""
+    from smriti.store.indexer import index_file_result
+
+    db = pending_behind_unrelated
+    root = db.parent.parent
+
+    class Down:
+        model_name, dimension = "stub", 384
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("the embedding service is starting")
+
+    for name in ("quince-2", "quince-3"):
+        written = root / "notes" / f"{name}.md"
+        written.write_text(f"# {name}\n\nSam's quince marmalade, again.\n", encoding="utf-8")
+        monkeypatch.setattr(embedding, "embedder", lambda: Down())
+        assert index_file_result(written, root=root, db=db).vectors_pending
+    stub = StubEmbedding()
+    monkeypatch.setattr(embedding, "embedder", lambda: stub)  # the query is embedded
+    _calibrate(monkeypatch, unrelated_below=0.99, same_note=1.0)
+    conn = open_readonly(db)
+    try:
+        one = search_with_status(conn, "quince marmalade", use_reranker=False, top_k=1)
+        all_three = search_with_status(conn, "quince marmalade", use_reranker=False, top_k=10)
+    finally:
+        conn.close()
+    assert len(one.results) == 1 and one.unmeasured == 1
+    assert "1 result" in one.notes()[0]
+    assert all_three.unmeasured == 3
