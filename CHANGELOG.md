@@ -139,14 +139,16 @@ All notable changes to this project are documented here, following
   and the network but not reads, while it reads untrusted transcripts.
 - The credential scrub masks quoted keys, as JSON, YAML, TOML and Python write
   them: `{"password": "..."}`, `'token':'...'`, escaped JSON (`\"secret\":
-  \"...\"`), and keys that end in a secret's name (`access_token`,
-  `client-secret`, `db.password`, `accessToken`). A quoted value is masked whole,
-  up to its closing quote. Ordinary text costs what it did.
+  \"...\"`) and JSON escaped more deeply, and keys that end in a secret's name
+  (`access_token`, `client-secret`, `db.password`, `accessToken`). A quoted value
+  is masked whole, up to the quote that closes it at its own level of escaping, so
+  an escaped quote inside it doesn't end it. Ordinary text costs what it did.
 - An older private store kept its key in `private/README.md`, which is committed.
   smriti now moves such a key to `private/.key` (the same key), takes it out of
   the README, and warns that it is still in git history and should be rotated;
   `smriti status` repeats it until `private/KEY-WAS-COMMITTED.txt` is deleted.
-  `docs/PRIVACY.md` has the steps.
+  `docs/PRIVACY.md` has the steps. The move happens once, under a lock, with
+  `.key` in `private/.gitignore` before the key is written.
 
 ## [0.2.0] - 2026-11-06
 

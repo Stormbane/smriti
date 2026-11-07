@@ -657,10 +657,10 @@ a recheck.
   masked. The fuzz now holds the scrub to its patterns as first written, the
   new rule included, and the old patterns alone wherever the new rule finds
   nothing (of the 4,100 texts, 2,349 are masked and 969 differ from the old
-  patterns, each where a quoted key is). Speed, master/branch, medians of three alternating runs (each
-  a median of 15): two 50 kB days 0.919/0.924 and 0.886/0.882 ms, a 2 kB note
-  38.7/38.1 us, a 1.6 kB note 32.8/33.1 us, 1.5 kB of JSON with no secret key
-  17.0/16.8 us: the same. How:
+  patterns, each where a quoted key is). Speed, master/branch, medians of
+  three alternating runs (each a median of 15): two 50 kB days 0.919/0.924
+  and 0.886/0.882 ms, a 2 kB note 38.7/38.1 us, a 1.6 kB note 32.8/33.1 us,
+  1.5 kB of JSON with no secret key 17.0/16.8 us: the same. How:
   the two assignment rules share one scan for their hints; it looks for `key`
   and back for `api`, not for `api` (42 against 16 us per 50 kB: the engine
   scans for a literal's first letter, and an `a` is everywhere); the new
@@ -669,6 +669,18 @@ a recheck.
   kB), takes the key without backtracking and looks back at its end. Text that
   does hold a quoted secret pays for masking it: 50 kB of a day plus one JSON
   secret 2.20 ms against 1.38, 1.5 kB of JSON with secrets 116 against 33 us.
+  Codex review (P2, fixed in `84ac740`): in JSON inside a JSON string, the
+  value's first `\"` was taken for its end, so a password holding a quote
+  kept its tail, and a key escaped twice wasn't recognised. A value's
+  escaping now has a level (its run of backslashes before the quote) and it
+  ends only at that run and the quote; inside it, runs are read as escaped
+  backslashes, then an escaped quote, or, before another character, as the
+  value's (an outer level's `é` too), possessively, the pairs first (a
+  long run was otherwise rescanned at each pair: 200,000 backslashes took
+  seconds). Tests: seven values at four levels of escaping, each decoding
+  back to the same object with only the secret replaced. Ordinary text the
+  same (0.959/0.964 and 0.919/0.894 ms for the 50 kB days, 40.4/39.0 us for
+  the 2 kB note); the fuzz now has 946 texts differing from the old patterns.
 - **H13.5 implemented** (same branch). `integrations.common.config_file.edit_config`
   makes every edit of `~/.claude.json`, `~/.claude/settings.json` and Codex's
   `config.toml`: under the file's edit lock from the read to the write;
@@ -726,7 +738,18 @@ a recheck.
   is deleted. The store can't rotate, so PRIVACY.md has the manual steps (a
   re-runnable `MultiFernet` script that keeps the new key outside the tree
   until it is done) and what rotation can't undo, the old ciphertext in the
-  history. The README template no longer says the key is in it.
+  history. The README template no longer says the key is in it. Codex review
+  (two P2s, fixed in `971fb08` and `1a4f625`): two commands starting together
+  could both find the key's line, and the second then deleted whatever line
+  had taken its index in the shorter README (or raised IndexError); the
+  migration now holds the README's edit lock from finding the key to the
+  rewrite, finds it again under the lock, and removes the line it finds in
+  the text it rewrites. A write or read without `init` moved the key with no
+  `private/.gitignore`; the ignore rule now goes in before any `.key` is
+  written. Deviation: "if `.key` exists by then, leave the README alone"
+  holds for a `.key` with another key; one with the same key is a migration
+  cut short, and the README is cleaned, or the key would stay in every
+  later commit.
 - **H12.0 implemented** (2026-11-06, `hardening/h12a`; not yet reviewed or
   merged): keep-alive, the profile cache, `scripts/bench.py`, and the
   fixes the benchmark found. The three slower measures are back at the
