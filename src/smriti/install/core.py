@@ -205,7 +205,7 @@ def resolve_projects_root(memory_root: Path, given: str | None) -> ProjectsRoot:
     projects, or none, until a flag says otherwise.
     """
     if given:
-        return ProjectsRoot(Path(given).expanduser().absolute(), "flag")
+        return ProjectsRoot(_normalised(Path(given).expanduser().absolute()), "flag")
     record = read_install_record(memory_root)
     unset = ("no projects root, so no project mirrors are linked (recorded for the next "
              "run): pass --projects-root DIR to link them")
@@ -231,6 +231,17 @@ def resolve_projects_root(memory_root: Path, given: str | None) -> ProjectsRoot:
     return ProjectsRoot(None, "none", unset)
 
 
+def _normalised(path: Path) -> Path:
+    """*path* with ``.`` and ``..`` taken out, and otherwise as written.
+
+    Not ``resolve()``: that follows junctions and symlinks, and gives the
+    case on disk where the person wrote another (``C:/Projects`` for
+    ``C:/projects``), which would rename Claude Code's directories and the
+    mirrors' targets.
+    """
+    return Path(os.path.normpath(path))
+
+
 # ── Steps ────────────────────────────────────────────────────────────
 
 
@@ -240,8 +251,9 @@ def claude_project_dir(claude_dir: Path, project: Path) -> Path:
     Claude Code names it after the project's path with every character
     outside ``[A-Za-z0-9]`` made ``-``: ``C:\\Projects\\my-app`` is
     ``C--Projects-my-app``, ``/home/sam/my.app`` is ``-home-sam-my-app``.
+    The path is normalised first: a ``..`` in it would be spelled into the name.
     """
-    return claude_dir / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(project))
+    return claude_dir / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(_normalised(project)))
 
 
 def discover_projects(projects_root: Path, claude_dir: Path | None = None) -> list[str]:

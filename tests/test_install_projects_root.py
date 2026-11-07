@@ -265,3 +265,29 @@ def test_only_a_record_without_the_key_predates_it(
     assert install(root, monkeypatch) == 0
     assert core.read_install_record(root)["note"] == "kept"
     assert recorded(root) == str(old_default)
+
+
+def test_a_relative_root_with_dot_dot_is_normalised(
+        root: Path, home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex review of H12.4 (P2): from C:\Projects\smriti, --projects-root ..
+    stayed C:\Projects\smriti\.. once made absolute, so Claude Code's directory
+    for kite was looked up as C--Projects-smriti----kite: a project with only
+    Claude memory was missed, and others lost their auto-memory link."""
+    projects = tmp_path / "code"
+    (projects / "smriti").mkdir(parents=True)
+    (projects / "kite").mkdir()  # no .ai: found only through its Claude memory
+    claude_memory = core.claude_project_dir(home / ".claude", projects / "kite") / "memory"
+    claude_memory.mkdir(parents=True)
+    monkeypatch.chdir(projects / "smriti")
+
+    assert core.resolve_projects_root(root, "..").path == projects
+    assert install(root, monkeypatch, "--projects-root", "..") == 0
+
+    assert recorded(root) == str(projects)
+    assert mirrors(root) == ["kite"]
+    assert core.is_junction(root / "mirrors" / "kite" / "auto-memory")
+
+
+def test_claude_codes_directory_is_named_after_the_normalised_path(tmp_path: Path) -> None:
+    assert (core.claude_project_dir(tmp_path, Path("/home/sam/code/smriti/../kite"))
+            == core.claude_project_dir(tmp_path, Path("/home/sam/code/kite")))
