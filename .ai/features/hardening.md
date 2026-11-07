@@ -868,6 +868,15 @@ a recheck.
   `sources` query, only then and only with pending sources) keeps its score
   and may rank first; the rest is scaled as before, and the note says so
   (`SearchOutcome.unmeasured`). The quality set's numbers are unchanged.
+  Codex's recheck of that fix (P2): the results had been cut to `top_k`
+  before the scaling, which now reorders them, so a pending match behind five
+  unrelated hits was dropped at the default five (and came first at six), on
+  the reranker path too, whose own cut came first and whose input (the first
+  `candidate_k`) could leave the match out. The scaling is decided on every
+  candidate, before the reranker's input is chosen; the reranker returns all
+  it scored, scaled the same way; the cut to `top_k` comes last, then the
+  later-version step. Tests for both paths and the reranker's window fail
+  at `dcbb344`; the quality set and the bench queries' top 5 are unchanged.
 - **Benchmark** (h13a; `scripts/bench.py`, 2026-11-07, the reference tree's
   copy, 10 queries, two alternating rounds; A master `af9321e`, B `8586aef`):
 
