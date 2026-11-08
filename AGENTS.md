@@ -48,7 +48,7 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 - **CLI:** 14 `smriti` subcommands: `backup`, `doctor`, `embed`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `status`, `tasks`, `witness`, `write`. Nested: `embed` has `serve`, `status`, `stop`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 1018 test functions in 92 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 1038 test functions in 93 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 Regenerate with `python scripts/doc_facts.py --write`; `tests/test_doc_facts.py` fails when this block drifts from the code.
@@ -71,7 +71,7 @@ src/smriti/
   llm/                   providers: claude_cli, codex_cli, anthropic_api, openai_api, ollama; test_stub (tests only)
   eval/                  evaluation: search cases, the quality set, digest measures, synthetic fixture
   _vendored/memsearch/   vendored MIT code (see NOTICE.md)
-scripts/                 install.py, setup_project.py, doc_facts.py, bench.py, wheel_smoke.py
+scripts/                 install.py, setup_project.py, doc_facts.py, bench.py, wheel_smoke.py, longmemeval.py
 memory_template/         skeleton for a new memory root (a wheel carries it, under smriti/_data/)
 narada/                  wake.py, backup.py, narada-p.sh, copied into <root>/.smriti/ by the installer (and the wheel)
 project_template/        skeleton for a project that uses smriti
@@ -92,6 +92,7 @@ ruff check <files>                                # whitespace and style, line l
 mypy <files>                                      # strict
 python scripts/doc_facts.py --write               # refresh the generated counts in README.md, CLAUDE.md, AGENTS.md
 python scripts/bench.py <base> <branch> --tree <copy-of-a-tree>   # speed against a baseline (H12)
+python scripts/longmemeval.py run <checkout> --data <longmemeval_s_cleaned.json>  # search accuracy on LongMemEval
 smriti status                                     # index and day-log health for $SMRITI_ROOT
 ```
 
