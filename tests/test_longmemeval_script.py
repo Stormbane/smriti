@@ -167,6 +167,19 @@ def test_an_evidence_line_cut_by_the_preview_counts_when_enough_shows(lme: Modul
     assert not lme.shows_evidence(too_little, (line,))
 
 
+def test_a_chunk_that_continues_a_long_evidence_line_shows_it(lme: ModuleType) -> None:
+    # One long line: the chunker can split it, so a later chunk holds only its middle or end.
+    line = lme.collapse("Some background on my week, which was busy with work and errands "
+                        "and a few long calls with my family about the summer, and then "
+                        "finally the news: I moved to Lisbon last spring and love the trams.")
+    middle = "  calls with my family about the summer, and then finally the news: I moved to"
+    end = "  finally the news: I moved to Lisbon last spring and love the trams.\n- `18:06` ..."
+    assert lme.shows_evidence(middle, (line,))
+    assert lme.shows_evidence(end, (line,))
+    assert not lme.shows_evidence("the news: I moved to Porto in the winter, not Lisbon.",
+                                  (line,))
+
+
 def test_hybrid_needs_a_vector_for_every_chunk_and_no_fallback(lme: ModuleType) -> None:
     assert lme.hybrid_ok(10, 10, "")
     assert not lme.hybrid_ok(10, 0, "")  # vectors never stored (no sqlite-vec)

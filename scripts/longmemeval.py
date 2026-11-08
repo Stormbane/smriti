@@ -25,7 +25,7 @@ with vectors and keyword-only:
 - the agent's view: the chunks ``smriti_read`` returns by default
   (:data:`AGENT_TOP_K`, search's default candidates, no reranker), each with
   its session and whether what ``smriti_read`` shows of it (the first
-  :data:`MCP_PREVIEW_CHARS` characters) holds an evidence turn;
+  :data:`MCP_PREVIEW_CHARS` characters) shows part of an evidence turn;
 - a deeper ranking (:data:`DEEP_TOP_K` chunks), reduced to sessions in the
   order they first appear.
 
@@ -33,8 +33,9 @@ with vectors and keyword-only:
 answerable questions (an abstention question names no evidence): session
 recall_any@k and recall_all@k, NDCG@10 and MRR on the deeper ranking; and
 for the agent's view, whether a chunk comes from an evidence session and
-whether one shows an evidence turn (holds a line of one, by text). Given
-runs over the same questions, it also says how often their rankings agree.
+whether one shows part of an evidence turn (by text: see
+:func:`shows_evidence`). Given runs over the same questions, it also says
+how often their rankings agree.
 
 What this measures is search over raw conversations. A smriti install
 doesn't index its raw day-log renders (``store.index_policy``): it searches
@@ -103,6 +104,8 @@ NDCG_K = 10
 # A line of an evidence turn shorter than this is too common ("Thanks!") to
 # say which turn a chunk holds.
 EVIDENCE_LINE_MIN = 20
+# Of a longer line, this many characters (from a word's start) are enough.
+EVIDENCE_WINDOW = 50
 DEFAULT_DIMENSION = 1024  # bge-m3's, for a cache that has no vectors yet
 MODES = (("hybrid", True), ("keyword", False))
 MEASURES = ("recall_any@5", "recall_all@5", "recall_any@10", "recall_all@10",
@@ -194,15 +197,29 @@ def visible(content: str) -> str:
     return content.strip()[:MCP_PREVIEW_CHARS]
 
 
+def evidence_windows(line: str) -> list[str]:
+    """Stretches of *line* that say which turn a chunk holds: the line when it
+    is short, else every :data:`EVIDENCE_WINDOW`-character window starting at a word."""
+    if len(line) <= EVIDENCE_WINDOW:
+        return [line]
+    starts = [0] + [i + 1 for i, c in enumerate(line) if c == " "]
+    return [line[s:s + EVIDENCE_WINDOW] for s in starts if s + EVIDENCE_WINDOW <= len(line)]
+
+
 def shows_evidence(content: str, evidence_lines: Sequence[str]) -> bool:
-    """Whether *content* holds a line of an evidence turn (a line cut short counts
-    when what is shown of it is at least :data:`EVIDENCE_LINE_MIN` long)."""
+    """Whether *content* shows part of an evidence turn.
+
+    It does when it holds a short evidence line whole, or any
+    :data:`EVIDENCE_WINDOW` characters of a long one: a chunk can begin or end
+    inside a long line, where the chunker split it or the preview cut it. A
+    line the content ends inside counts too when at least
+    :data:`EVIDENCE_LINE_MIN` characters of it show.
+    """
     text = collapse(content)
-    if any(line in text for line in evidence_lines):
+    if any(w in text for line in evidence_lines for w in evidence_windows(line)):
         return True
-    # The preview can end inside an evidence line: what it shows of it counts.
     return any(text.endswith(line[:n]) for line in evidence_lines
-               for n in range(len(line) - 1, EVIDENCE_LINE_MIN - 1, -1))
+               for n in range(min(len(line), EVIDENCE_WINDOW) - 1, EVIDENCE_LINE_MIN - 1, -1))
 
 
 def score(record: dict[str, Any], mode: str) -> dict[str, float | None]:
