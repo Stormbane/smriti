@@ -248,8 +248,13 @@ def text_key(text: str) -> str:
 
 def open_cache(path: Path, dimension: int | None = None, model: str | None = None,
                ) -> sqlite3.Connection:
-    """The cache, created if needed: ``meta`` (dimension, model) and ``vectors``."""
-    db = sqlite3.connect(str(path), check_same_thread=False)
+    """The cache, created if needed: ``meta`` (dimension, model) and ``vectors``.
+
+    In WAL mode, with a long busy wait: workers read it while ``embed``
+    writes, and a reader that gave up would end its run.
+    """
+    db = sqlite3.connect(str(path), check_same_thread=False, timeout=600.0)
+    db.execute("PRAGMA journal_mode=WAL")
     db.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)")
     db.execute("CREATE TABLE IF NOT EXISTS vectors (k TEXT PRIMARY KEY, v BLOB NOT NULL)")
     meta = dict(db.execute("SELECT k, v FROM meta").fetchall())
@@ -437,7 +442,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     run.mkdir(parents=True)
     (run / "runtime").mkdir()
     vectors = str(Path(args.vectors).resolve()) if args.vectors else None
-    procs = []
+    procs: list[subprocess.Popen[bytes]] = []
+    logs: list[Any] = []
     for j in range(args.jobs):
         part = chosen[j::args.jobs]
         if not part:
@@ -449,10 +455,18 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "misses": str(run / f"misses-{j}.jsonl"), "keep": args.keep}
         spec_path = run / f"spec-{j}.json"
         spec_path.write_text(json.dumps(spec), encoding="utf-8")
+        log = (run / f"worker-{j}.log").open("w", encoding="utf-8")  # its errors stay here
+        logs.append(log)
         procs.append(subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
                                        "_worker", str(spec_path)],
-                                      env=worker_env(checkout, run)))
+                                      env=worker_env(checkout, run), stderr=log))
     codes = [p.wait() for p in procs]
+    for log in logs:
+        log.close()
+    for j, code in enumerate(codes):
+        if code:
+            tail = (run / f"worker-{j}.log").read_text(encoding="utf-8").strip()[-1500:]
+            print(f"worker {j} exited {code}:\n{tail}", file=sys.stderr)
     records = load_records(run)
     misses = sum(r["misses"] for r in records)
     meta = {"label": label, "checkout": str(checkout), "commit": _commit(checkout),
