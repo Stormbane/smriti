@@ -150,6 +150,41 @@ def test_a_chunk_shows_evidence_by_its_text_whatever_its_wrapping(lme: ModuleTyp
     assert not lme.shows_evidence("- `18:05` **User:** I moved to Porto.", lines)
 
 
+def test_evidence_past_what_smriti_read_shows_is_not_seen(lme: ModuleType) -> None:
+    line = "I moved to Lisbon last spring and love the trams."
+    filler = "- `18:05` **Assistant:** " + "x" * (lme.MCP_PREVIEW_CHARS + 50) + "\n"
+    late = filler + f"- `18:05` **User:** {line}"
+    assert lme.shows_evidence(late, (line,))  # the whole chunk holds it
+    assert not lme.shows_evidence(lme.visible(late), (line,))  # the agent never sees it
+
+
+def test_an_evidence_line_cut_by_the_preview_counts_when_enough_shows(lme: ModuleType) -> None:
+    line = "I moved to Lisbon last spring and love the trams."
+    pad = "y" * (lme.MCP_PREVIEW_CHARS - 60)  # leaves 39 characters of the line shown
+    cut = lme.visible(f"{pad}\n- `18:05` **User:** {line}")
+    assert line not in cut and lme.shows_evidence(cut, (line,))
+    too_little = lme.visible("z" * (lme.MCP_PREVIEW_CHARS - 5) + " I moved to Lisbon")
+    assert not lme.shows_evidence(too_little, (line,))
+
+
+def test_hybrid_needs_a_vector_for_every_chunk_and_no_fallback(lme: ModuleType) -> None:
+    assert lme.hybrid_ok(10, 10, "")
+    assert not lme.hybrid_ok(10, 0, "")  # vectors never stored (no sqlite-vec)
+    assert not lme.hybrid_ok(10, 7, "")  # some pending
+    assert not lme.hybrid_ok(10, 10, "sqlite-vec is not available")
+    assert not lme.hybrid_ok(0, 0, "")  # nothing indexed at all
+
+
+def test_a_run_with_a_degraded_search_is_incomplete(lme: ModuleType) -> None:
+    ok = {"misses": 0, "hybrid_ok": True}
+    assert lme.run_complete([0], [ok, ok], 2) == (True, "")
+    done, why = lme.run_complete([0], [ok, {"misses": 0, "hybrid_ok": False}], 2)
+    assert not done and "without vectors" in why
+    assert not lme.run_complete([0], [ok, {"misses": 3, "hybrid_ok": True}], 2)[0]
+    assert not lme.run_complete([1], [ok, ok], 2)[0]
+    assert not lme.run_complete([0], [ok], 2)[0]
+
+
 def _record(deep: list[str], agent: list[dict[str, Any]], evidence: list[str],
             *, abstention: bool = False, evidence_lines: bool = True,
             qtype: str = "multi-session", qid: str = "q") -> dict[str, Any]:
@@ -264,6 +299,29 @@ def test_report_refuses_an_incomplete_run(lme: ModuleType, tmp_path: Path) -> No
         {"label": "x", "complete": False, "misses": 3, "recorded": 1, "questions": 2}))
     with pytest.raises(SystemExit, match="incomplete"):
         lme.main(["report", str(run)])
+
+
+def _complete_run(path: Path, label: str, records: list[dict[str, Any]]) -> Path:
+    path.mkdir(parents=True)
+    (path / "meta.json").write_text(json.dumps(
+        {"label": label, "complete": True, "commit": "c0ffee", "vectors": None}))
+    (path / "results-0.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+    return path
+
+
+def test_report_keeps_runs_apart_when_their_labels_match(
+        lme: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    hit = [{"session": "e1", "evidence_turn": True}]
+    a = _complete_run(tmp_path / "x-1", "x", [_record(["e1"], hit, ["e1"], qid="q")])
+    b = _complete_run(tmp_path / "x-2", "x", [_record(["z9"], [], ["e1"], qid="q")])
+    out = tmp_path / "report.json"
+    assert lme.main(["report", str(a), str(b), "--json", str(out)]) == 0
+    text = capsys.readouterr().out
+    assert "| x (x-1) | hybrid | 1 | 1.000" in text
+    assert "| x (x-2) | hybrid | 1 | 0.000" in text
+    data = json.loads(out.read_text())
+    assert data["x-1"]["hybrid"]["all"]["mrr"] == 1.0
+    assert data["x-2"]["hybrid"]["all"]["mrr"] == 0.0
 
 
 @pytest.mark.needs_model

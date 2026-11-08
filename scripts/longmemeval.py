@@ -24,7 +24,8 @@ with vectors and keyword-only:
 
 - the agent's view: the chunks ``smriti_read`` returns by default
   (:data:`AGENT_TOP_K`, search's default candidates, no reranker), each with
-  its session and whether it shows an evidence turn;
+  its session and whether what ``smriti_read`` shows of it (the first
+  :data:`MCP_PREVIEW_CHARS` characters) holds an evidence turn;
 - a deeper ranking (:data:`DEEP_TOP_K` chunks), reduced to sessions in the
   order they first appear.
 
@@ -57,6 +58,12 @@ model's calibration applies to them; run some questions without
 two agree. Without ``--vectors`` the checkout's own provider computes every
 vector.
 
+A run is complete, and ``report`` takes it, only when every question was
+recorded, no text was missing from the cache, and every question's search
+had vectors: each chunk indexed with one, and, where the checkout says so
+(``search_with_status``), the hybrid search not fallen back to keywords. A
+worker's log, ``worker-N.log`` in the run, has its warnings and any failure.
+
 Each run goes to a new directory under ``--work``. Its roots are deleted as
 each question is scored unless ``--keep``; nothing else is deleted.
 """
@@ -86,6 +93,9 @@ from typing import Any
 
 AGENT_TOP_K = 5  # smriti_read's default top_k
 AGENT_CANDIDATE_K = 20  # search's default candidate_k
+# smriti_read shows each result's content stripped and cut at this many
+# characters (the same in the checkouts measured), so the agent sees no more.
+MCP_PREVIEW_CHARS = 1000
 DEEP_TOP_K = 50
 DEEP_CANDIDATE_K = 50
 KS = (5, 10)
@@ -179,9 +189,20 @@ def sessions_in_order(sources: Iterable[str], by_source: dict[str, str]) -> list
     return seen
 
 
+def visible(content: str) -> str:
+    """What ``smriti_read`` shows of a result's content."""
+    return content.strip()[:MCP_PREVIEW_CHARS]
+
+
 def shows_evidence(content: str, evidence_lines: Sequence[str]) -> bool:
+    """Whether *content* holds a line of an evidence turn (a line cut short counts
+    when what is shown of it is at least :data:`EVIDENCE_LINE_MIN` long)."""
     text = collapse(content)
-    return any(line in text for line in evidence_lines)
+    if any(line in text for line in evidence_lines):
+        return True
+    # The preview can end inside an evidence line: what it shows of it counts.
+    return any(text.endswith(line[:n]) for line in evidence_lines
+               for n in range(len(line) - 1, EVIDENCE_LINE_MIN - 1, -1))
 
 
 def score(record: dict[str, Any], mode: str) -> dict[str, float | None]:
@@ -221,6 +242,20 @@ def summarise(records: Sequence[dict[str, Any]], mode: str) -> dict[str, dict[st
             vals = [v for s in scores if (v := s[m]) is not None]
             row[m] = sum(vals) / len(vals) if vals else None
         out[group] = row
+    return out
+
+
+def nothing_close(records: Sequence[dict[str, Any]]) -> dict[str, str] | None:
+    """How often a hybrid search said nothing is close, for abstention questions
+    (where it should) and answerable ones; None for a checkout that doesn't say."""
+    said = [r for r in records if "nothing_close" in r["modes"]["hybrid"]]
+    if not said:
+        return None
+    out = {}
+    for name, group in (("abstention", [r for r in said if r["abstention"]]),
+                        ("answerable", [r for r in said if not r["abstention"]])):
+        hits = sum(bool(r["modes"]["hybrid"]["nothing_close"]) for r in group)
+        out[name] = f"{hits}/{len(group)}"
     return out
 
 
@@ -329,6 +364,27 @@ def _vector_dimension(db: Path) -> int:
     return int(found.group(1)) if found else DEFAULT_DIMENSION
 
 
+def hybrid_ok(chunks: int, vector_rows: int, keyword_only: str) -> bool:
+    """Whether a question's "hybrid" search really had vectors: every chunk
+    indexed with one, and the search not fallen back to keywords (as far as
+    the checkout says; an older one doesn't)."""
+    return vector_rows >= chunks > 0 and not keyword_only
+
+
+def run_complete(codes: Sequence[int], records: Sequence[dict[str, Any]],
+                 questions: int) -> tuple[bool, str]:
+    """Whether a run can be reported, and why not."""
+    if any(codes):
+        return False, f"a worker failed (exit codes {list(codes)})"
+    if len(records) != questions:
+        return False, f"{len(records)}/{questions} questions recorded"
+    if misses := sum(r["misses"] for r in records):
+        return False, f"{misses} texts not in the vector cache"
+    if degraded := sum(not r.get("hybrid_ok", False) for r in records):
+        return False, f"{degraded} questions searched without vectors"
+    return True, ""
+
+
 def _vector_rows(conn: Any) -> int:
     try:
         return int(conn.execute("SELECT count(*) FROM chunks_vec").fetchone()[0])
@@ -340,16 +396,36 @@ def worker(spec_path: Path) -> int:
     """Index and search each question of a spec; runs with the checkout's ``smriti``."""
     import logging
 
-    logging.basicConfig(level=logging.ERROR)
+    logging.basicConfig(level=logging.WARNING)  # to the run's worker log: fallbacks show
     spec = json.loads(spec_path.read_text(encoding="utf-8"))
     run = Path(spec["run"])
     questions = json.loads(Path(spec["questions"]).read_text(encoding="utf-8"))
     missed = (use_vector_cache(Path(spec["vectors"]), Path(spec["misses"]))
               if spec.get("vectors") else [0])
 
+    import importlib
+
     from smriti.store.indexer import index_tree
     from smriti.store.schema import ensure_schema
-    from smriti.store.search import search
+
+    # The module, not ``from smriti.store import search``: the package's
+    # __init__ re-exports the search function under that name.
+    search_module = importlib.import_module("smriti.store.search")
+
+    # A checkout that says why a search was keyword-only (search_with_status)
+    # is asked that way; an older one only has search.
+    with_status = getattr(search_module, "search_with_status", None)
+
+    def run_search(conn: Any, query: str, top_k: int, candidate_k: int,
+                   use_vectors: bool) -> tuple[list[Any], dict[str, Any]]:
+        kwargs = {"top_k": top_k, "candidate_k": candidate_k, "use_reranker": False,
+                  "use_vectors": use_vectors}
+        if with_status is None:
+            return list(search_module.search(conn, query, **kwargs)), {}
+        outcome = with_status(conn, query, **kwargs)
+        return list(outcome.results), {
+            "keyword_only": outcome.keyword_only, "pending": outcome.pending,
+            "nothing_close": getattr(outcome, "unrelated_below", None) is not None}
 
     with open(spec["results"], "a", encoding="utf-8") as out:
         for n, q in enumerate(questions, 1):
@@ -372,30 +448,31 @@ def worker(spec_path: Path) -> int:
             modes: dict[str, Any] = {}
             for mode, use_vectors in MODES:
                 t1 = time.perf_counter()
-                agent = search(conn, q["question"], top_k=AGENT_TOP_K,
-                               candidate_k=AGENT_CANDIDATE_K, use_reranker=False,
-                               use_vectors=use_vectors)
+                agent, status = run_search(conn, q["question"], AGENT_TOP_K,
+                                           AGENT_CANDIDATE_K, use_vectors)
                 t2 = time.perf_counter()
-                deep = search(conn, q["question"], top_k=DEEP_TOP_K,
-                              candidate_k=DEEP_CANDIDATE_K, use_reranker=False,
-                              use_vectors=use_vectors)
+                deep, _ = run_search(conn, q["question"], DEEP_TOP_K, DEEP_CANDIDATE_K,
+                                     use_vectors)
                 t3 = time.perf_counter()
                 shown = []
                 for r in agent:
                     sid = by_source.get(r.source.replace("\\", "/"), "")
                     shown.append({"session": sid, "evidence_turn": sid in evidence and
-                                  shows_evidence(r.content, evidence_of.get(sid, ()))})
+                                  shows_evidence(visible(r.content), evidence_of.get(sid, ()))})
                 modes[mode] = {"agent": shown,
                                "deep": sessions_in_order((r.source for r in deep), by_source),
                                "agent_ms": round((t2 - t1) * 1000, 1),
-                               "deep_ms": round((t3 - t2) * 1000, 1)}
+                               "deep_ms": round((t3 - t2) * 1000, 1), **status}
+            vector_rows = _vector_rows(conn)
             record = {
                 "qid": q["question_id"], "type": q["question_type"],
                 "abstention": is_abstention(q), "evidence": evidence,
                 "evidence_lines": any(evidence_of.get(s) for s in evidence),
                 "sessions": len(files), "index_s": round(index_s, 3),
                 "index": {k: int(v) for k, v in stats.items()},
-                "vector_rows": _vector_rows(conn), "misses": missed[0] - missed_before,
+                "vector_rows": vector_rows, "misses": missed[0] - missed_before,
+                "hybrid_ok": hybrid_ok(int(stats.get("chunks", 0)), vector_rows,
+                                       modes["hybrid"].get("keyword_only", "")),
                 "modes": modes,
             }
             conn.close()
@@ -469,15 +546,15 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"worker {j} exited {code}:\n{tail}", file=sys.stderr)
     records = load_records(run)
     misses = sum(r["misses"] for r in records)
+    complete, why = run_complete(codes, records, len(chosen))
     meta = {"label": label, "checkout": str(checkout), "commit": _commit(checkout),
             "data": str(Path(args.data).resolve()), "questions": len(chosen),
             "seed": args.seed, "recorded": len(records), "vectors": vectors,
-            "misses": misses, "worker_exit": codes,
-            "complete": all(c == 0 for c in codes) and len(records) == len(chosen)
-            and misses == 0}
+            "misses": misses, "worker_exit": codes, "complete": complete,
+            "incomplete_because": why}
     (run / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    print(f"{run}: {len(records)}/{len(chosen)} questions, {misses} texts not in the cache, "
-          f"{'complete' if meta['complete'] else 'INCOMPLETE'}")
+    print(f"{run}: {len(records)}/{len(chosen)} questions, "
+          f"{'complete' if complete else 'INCOMPLETE: ' + why}")
     if misses:
         print(f"  fill the cache: python {Path(__file__).name} embed --vectors {vectors} "
               f"--misses {run}/misses-*.jsonl, then run again")
@@ -591,26 +668,32 @@ def _fmt(value: Any) -> str:
 def cmd_report(args: argparse.Namespace) -> int:
     runs = []
     for name in args.runs:
-        run = Path(name)
+        run = Path(name).resolve()
         meta = json.loads((run / "meta.json").read_text(encoding="utf-8"))
         if not meta.get("complete"):
-            raise SystemExit(f"{run} is incomplete ({meta.get('misses')} texts not in the "
-                             f"cache, {meta.get('recorded')}/{meta.get('questions')} recorded)")
+            why = meta.get("incomplete_because") or f"{meta.get('misses')} texts not in the cache"
+            raise SystemExit(f"{run} is incomplete: {why}")
+        meta["run"] = run.name  # unique: labels can repeat
         runs.append((meta, load_records(run)))
+    labels = [m["label"] for m, _ in runs]
+    for meta, _ in runs:
+        meta["name"] = (meta["label"] if labels.count(meta["label"]) == 1
+                        else f"{meta['label']} ({meta['run']})")
     out: dict[str, Any] = {}
     print("| run | mode | n | " + " | ".join(MEASURES) + " |")
     print("|---|---|---|" + "---|" * len(MEASURES))
     for meta, records in runs:
+        out[meta["run"]] = {"label": meta["label"], "commit": meta["commit"]}
         for mode, _ in MODES:
             s = summarise(records, mode)
-            out.setdefault(meta["label"], {})[mode] = s
+            out[meta["run"]][mode] = s
             row = s.get("all", {"n": 0})
-            print(f"| {meta['label']} | {mode} | {row['n']} | "
+            print(f"| {meta['name']} | {mode} | {row['n']} | "
                   + " | ".join(_fmt(row.get(m)) for m in MEASURES) + " |")
     print()
     for meta, records in runs:
-        s = out[meta["label"]]["hybrid"]
-        print(f"By question type, {meta['label']}, hybrid:")
+        s = out[meta["run"]]["hybrid"]
+        print(f"By question type, {meta['name']}, hybrid:")
         print("| type | n | recall_any@5 | recall_all@10 | ndcg@10 | agent_turn_hit |")
         print("|---|---|---|---|---|---|")
         for group in sorted(g for g in s if g != "all"):
@@ -619,14 +702,20 @@ def cmd_report(args: argparse.Namespace) -> int:
                   f"{_fmt(row['recall_all@10'])} | {_fmt(row['ndcg@10'])} | "
                   f"{_fmt(row['agent_turn_hit'])} |")
         times = [r["modes"]["hybrid"]["agent_ms"] for r in records]
-        print(f"\n{meta['label']}: commit {meta['commit'][:12]}, "
-              f"vectors {'from ' + Path(meta['vectors']).name if meta['vectors'] else 'computed'}, "
-              f"search median {sorted(times)[len(times) // 2]:.0f} ms\n")
+        source = "from " + Path(meta["vectors"]).name if meta["vectors"] else "computed"
+        print(f"\n{meta['name']}: commit {meta['commit'][:12]}, vectors {source}, "
+              f"search median {sorted(times)[len(times) // 2]:.0f} ms")
+        close = nothing_close(records)
+        if close:
+            out[meta["run"]]["nothing_close"] = close
+            print(f"'nothing is close' said for {close['abstention']} of abstention questions, "
+                  f"{close['answerable']} of answerable ones")
+        print()
     if len(runs) == 2:
         for mode, _ in MODES:
             agree = agreement(runs[0][1], runs[1][1], mode)
             out.setdefault("agreement", {})[mode] = agree
-            print(f"Agreement, {runs[0][0]['label']} vs {runs[1][0]['label']}, {mode}: {agree}")
+            print(f"Agreement, {runs[0][0]['name']} vs {runs[1][0]['name']}, {mode}: {agree}")
     if args.json:
         Path(args.json).write_text(json.dumps(out, indent=2), encoding="utf-8")
     return 0
