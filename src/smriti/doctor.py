@@ -127,9 +127,9 @@ def _briefing_checks(memory_root: Path, project: Path) -> list[Check]:
             "coding audience",
         ),
         Check(
-            "Canonical project ledger",
-            "STATUS" in payload and "INDEX" in payload,
-            str(project / ".ai"),
+            "Project ledger",
+            f"--- MIRRORS / {project.name.upper()} / AI / " in payload,
+            f"{project / '.ai'}: STATUS.md and INDEX.md, else todo.md, through the mirror",
         ),
     ]
 

@@ -4,7 +4,7 @@ import json
 import sys
 from pathlib import Path
 
-from smriti.doctor import claude_code_checks, codex_checks, run_doctor
+from smriti.doctor import Check, _briefing_checks, claude_code_checks, codex_checks, run_doctor
 from smriti.integrations.claude_code import install as claude_install
 from smriti.integrations.codex import install as codex_install
 from smriti.integrations.common.hook_model import make_wake_hook_command
@@ -75,6 +75,33 @@ def test_claude_doctor_accepts_a_freshly_installed_bridge(tmp_path, monkeypatch)
     checks = claude_code_checks(memory_root=memory_root, project=project, home=home)
 
     assert all(check.passed for check in checks), [c for c in checks if not c.passed]
+
+
+def _ledger_check(memory_root: Path, project: Path) -> Check:
+    return next(c for c in _briefing_checks(memory_root, project) if c.name == "Project ledger")
+
+
+def test_the_project_ledger_passes_with_status_and_index(tmp_path) -> None:
+    _, memory_root, project = _make_entity_and_project(tmp_path)
+    assert _ledger_check(memory_root, project).passed
+
+
+def test_the_project_ledger_passes_with_the_todo_fallback(tmp_path) -> None:
+    # The briefing shows todo.md when a project keeps no STATUS.md or
+    # INDEX.md (docs/SELF.md); that is a ledger, not a broken install.
+    _, memory_root, project = _make_entity_and_project(tmp_path)
+    mirrors_ai = memory_root / "mirrors" / project.name / "ai"
+    for name in ("STATUS.md", "INDEX.md"):
+        (mirrors_ai / name).unlink()
+    (mirrors_ai / "todo.md").write_text("# TODO\n- [ ] ship\n")
+    assert _ledger_check(memory_root, project).passed
+
+
+def test_the_project_ledger_fails_without_one(tmp_path) -> None:
+    _, memory_root, project = _make_entity_and_project(tmp_path)
+    for name in ("STATUS.md", "INDEX.md"):
+        (memory_root / "mirrors" / project.name / "ai" / name).unlink()
+    assert not _ledger_check(memory_root, project).passed
 
 
 def test_claude_doctor_flags_missing_hook_target(tmp_path, monkeypatch) -> None:
