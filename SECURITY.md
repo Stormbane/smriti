@@ -76,6 +76,18 @@ security backport series or guaranteed response time.
   (`profiles-*.json`, where other users can't write), keyed on the import
   path's entries and their modification times; a missing, corrupt or stale
   cache means a fresh scan.
+- The models smriti chooses (the embedding providers' defaults,
+  `gpahal/bge-m3-onnx-int8` and `all-MiniLM-L6-v2`, and the reranker,
+  `Alibaba-NLP/gte-reranker-modernbert-base`) load at the Hugging Face Hub
+  commits pinned in `src/smriti/_vendored/memsearch/revisions.py`, from the
+  cache and from the Hub alike, never at whatever the repository's `main` holds.
+  A commit's hash names its content: a repository can add commits, or rewrite
+  its history so that the pinned one is gone (a download then fails), but a
+  change upstream doesn't change the weights and tokenizer smriti runs or the
+  vectors its index holds. The sentence-transformers paths (the `local`
+  provider, the reranker's torch backend) run no code from a model's repository
+  (`trust_remote_code` is off). The Hub itself, and the libraries that read
+  the files (onnxruntime, tokenizers, transformers), are trusted.
 - `core/scrub.py` masks recognised credential patterns before captured turns
   are persisted, and `smriti.core.memwrite` applies it to every write of memory
   text into the tree: entries, the project tools' files, the handoff, the
@@ -146,7 +158,8 @@ listens on loopback only.
   (`gpahal/bge-m3-onnx-int8`, about 560 MB) is downloaded the first time it is
   needed; later loads read the cache without a request. `smriti read` also
   reranks with `Alibaba-NLP/gte-reranker-modernbert-base`: downloaded on first
-  use, and its file list asked of the Hub on every run. The MCP server's search
+  use, and its file list asked of the Hub on every run. Both are fetched at a
+  pinned commit (see the [threat model](#threat-model)). The MCP server's search
   doesn't rerank. The requests name the model, and the library's user agent its
   versions; no memory text goes. *Off:* `HF_HUB_OFFLINE=1` (the default `onnx`
   provider's cached model still loads, and the reranker fails and the combined
