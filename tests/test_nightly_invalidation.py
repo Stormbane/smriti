@@ -14,6 +14,7 @@ their input hash alone.
 from __future__ import annotations
 
 import json
+import os
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -475,6 +476,55 @@ def test_a_day_file_gone_or_garbled_keeps_its_render_and_digest(
         cfg.day_jsonl(DAY).write_text("not a turn\n", encoding="utf-8")
     steps = _night(cfg, NIGHT.replace(minute=30))
     assert cfg.day_md(DAY).exists() and cfg.day_digest(DAY).exists()
+    assert "emptied" not in steps["render"]
+
+
+def test_a_day_file_pruned_after_the_listing_keeps_its_render_and_digest(
+        tmp_path: Path, llm: FakeProvider, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A day-file listed by the scan and gone by its read reads as no turns; that is
+    no sign it was emptied, and pruning it must not take its digest (Codex)."""
+    from smriti.daylog import nightly
+    from smriti.daylog.writer import read_day
+
+    cfg = _cfg(tmp_path)
+    _seed(cfg, DAY)
+    _night(cfg, NIGHT)
+    path = cfg.day_jsonl(DAY)
+
+    def pruned_after_the_listing(target: Path) -> object:
+        if target == path and target.exists():
+            target.unlink()
+        return read_day(target)
+
+    monkeypatch.setattr(nightly, "read_day", pruned_after_the_listing)
+    steps = _night(cfg, NIGHT.replace(minute=30))
+    assert not path.exists()
+    assert cfg.day_md(DAY).exists() and cfg.day_digest(DAY).exists()
+    assert "emptied" not in steps["render"]
+    path.write_text("", encoding="utf-8")
+    assert read_day(path).opened and not read_day(tmp_path / "missing.jsonl").opened
+
+
+def test_a_day_the_scan_took_for_emptied_is_read_again_before_its_artifacts_go(
+        tmp_path: Path, llm: FakeProvider) -> None:
+    """The scan's word can be the marker's, from an older read: here the day-file
+    held only blank lines then, and turns again now, at the same size and mtime."""
+    from smriti.daylog import nightly
+
+    day = "2026-07-01"  # outside the window: judged from the marker when unchanged
+    cfg = _cfg(tmp_path)
+    _seed(cfg, day)
+    _night(cfg, NIGHT, rollup_cap=0)
+    path = cfg.day_jsonl(day)
+    turns = path.read_bytes()
+    path.write_bytes(b"\n" * len(turns))  # no turn, and no line that isn't one
+    assert nightly._scan_days(cfg, set(), set(), date(2026, 9, 4)).emptied == [day]
+    seen = path.stat().st_mtime_ns
+    path.write_bytes(turns)  # the turns back, at the size and mtime the marker holds
+    os.utime(path, ns=(seen, seen))
+
+    steps = _night(cfg, NIGHT.replace(minute=30), rollup_cap=0)
+    assert cfg.day_md(day).exists() and cfg.day_digest(day).exists()
     assert "emptied" not in steps["render"]
 
 

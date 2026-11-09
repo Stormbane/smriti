@@ -194,7 +194,9 @@ def _scan_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
     has a render or digest is ``emptied``: its turns were removed, and the
     nightly removes those artifacts. A missing day-file is not taken as
     emptied: a tree restored without its day-files (git-ignored), or one
-    whose old day-files were pruned, keeps its renders and digests.
+    whose old day-files were pruned, keeps its renders and digests. Nor is
+    one listed and then gone before its read: only a read that opened the
+    file says it is empty.
 
     The signalled days (changed, dirty, the window) are read every night.
     Any other day-file is read only when its size or mtime differs from the
@@ -227,7 +229,9 @@ def _scan_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
             current = input_hash(read.turns) if read.turns else ""
             content = content_hash(read.turns) if read.turns else ""
             corrupt = read.invalid
-            whole = stat is not None and read.complete
+            # Listed, opened and read to its end: a file gone since the listing
+            # reads as no turns, which says nothing about what it held.
+            whole = stat is not None and read.complete and read.opened
             if not read.complete:
                 log.warning("nightly: could not read %s; it is read again next night",
                             cfg.day_jsonl(day))
@@ -236,10 +240,10 @@ def _scan_days(cfg: DaylogConfig, changed: set[date], dirty: set[str],
                 # tonight, so its render and digest stay as they are.
                 current = ""
             # Recorded with the stat taken before this read; not recorded when the
-            # file isn't listed, or the read failed (its stat would stand for turns
-            # never read).
+            # file isn't listed, is gone since, or the read failed (its stat would
+            # stand for turns never read).
             entry = (_Checked(stat[0], stat[1], current, corrupt, content)
-                     if stat is not None and read.complete else None)
+                     if whole and stat is not None else None)
         else:
             current, corrupt, content = entry.hash, entry.corrupt, entry.content
             whole = True  # listed, and unchanged since a whole read
@@ -290,17 +294,38 @@ def _has_derived(cfg: DaylogConfig, day: str) -> bool:
     return cfg.day_md(day).exists() or cfg.day_digest(day).exists()
 
 
-def _remove_derived(cfg: DaylogConfig, day: str) -> bool:
-    """Remove *day*'s render and digest, made from turns that are gone; False if
-    one stays (the next night tries again)."""
-    removed = True
+def _is_empty_now(cfg: DaylogConfig, day: str) -> bool:
+    """Whether *day*'s day-file exists and holds nothing, read whole just now."""
+    read = read_day(cfg.day_jsonl(day))
+    return read.opened and read.complete and not read.turns and not read.invalid
+
+
+# What _remove_emptied did with a day the scan found emptied.
+_REMOVED, _KEPT, _FAILED = "removed", "kept", "failed"
+
+
+def _remove_emptied(cfg: DaylogConfig, day: str) -> str:
+    """Remove *day*'s render and digest, made from turns that are gone.
+
+    The day-file is read again first, and must exist and hold nothing: the
+    scan's word may be from a listing or a marker older than the file's
+    removal, and a missing day-file keeps its artifacts (:func:`_scan_days`).
+    Returns :data:`_REMOVED`, :data:`_KEPT` when the file is gone or holds
+    something now, or :data:`_FAILED` when an artifact couldn't be deleted
+    (the next night tries again).
+    """
+    if not _is_empty_now(cfg, day):
+        log.info("nightly: %s is no longer an empty day-file; its render and digest stay",
+                 cfg.day_jsonl(day))
+        return _KEPT
+    outcome = _REMOVED
     for path in (cfg.day_md(day), cfg.day_digest(day)):
         try:
             path.unlink(missing_ok=True)
         except OSError as exc:
             log.warning("nightly: could not remove %s, whose day has no turns: %s", path, exc)
-            removed = False
-    return removed
+            outcome = _FAILED
+    return outcome
 
 
 def run_lock_key(root: Path) -> LockKey:
@@ -400,8 +425,9 @@ def _run_steps(cfg: DaylogConfig, status: dict[str, object], target: date, *,
         stale = scan.stale
         # A day whose turns were all removed loses the render and digest made
         # from them, so their text stops being searchable (the index purges it).
-        emptied = [day for day in scan.emptied if _remove_derived(cfg, day)]
-        not_removed = sorted(set(scan.emptied) - set(emptied))
+        outcomes = {day: _remove_emptied(cfg, day) for day in scan.emptied}
+        emptied = [day for day, done in outcomes.items() if done == _REMOVED]
+        not_removed = [day for day, done in outcomes.items() if done == _FAILED]
         # Render everything (cheap, deterministic); digest newest-first
         # under a per-night cap so a large backfill catches up over a
         # few nights instead of burning the seat in one.

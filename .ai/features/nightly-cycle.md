@@ -261,8 +261,11 @@ wake shows as `NIGHTLY SKIPPED for <day>: <reason>`, and exits 1. Target date: t
    file couldn't be deleted, tried again the next night). A missing day-file
    is not taken that way: a tree restored without its day-files (git-ignored)
    or with old ones pruned keeps its renders and digests; and nor is one
-   whose lines are all unreadable, which `corrupt_lines` names. To remove a
-   day, empty its day-file rather than delete it.
+   whose lines are all unreadable, which `corrupt_lines` names. Only a read
+   that opened the file counts (one pruned between the scan's listing and
+   its read reads as no turns), and the day-file is read again just before
+   its artifacts go: missing then, or holding anything, they stay. To remove
+   a day, empty its day-file rather than delete it.
 
    Every day-file in the tree is a candidate as well (and a dirty day from
    capture's state), and every candidate's render and digest heads are
