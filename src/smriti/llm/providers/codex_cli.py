@@ -56,7 +56,7 @@ class CodexCliProvider:
     def is_available(self) -> bool:
         return shutil.which("codex") is not None
 
-    def default_model(self, role: str = "executor") -> str:
+    def default_model(self) -> str:
         return ""  # whatever the ChatGPT subscription wires up
 
     def call(self, request: LLMRequest) -> LLMResponse:

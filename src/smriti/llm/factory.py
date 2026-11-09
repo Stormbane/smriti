@@ -108,9 +108,9 @@ def get_provider(name: str | None = None) -> LLMProvider:
 
 
 def list_providers() -> list[dict[str, object]]:
-    """Enumerate registered providers with availability + default models.
+    """Enumerate registered providers with availability + default model.
 
-    Each entry: ``{name, available, judge_model, executor_model, aliases}``.
+    Each entry: ``{name, available, default_model, aliases}``.
     Aliases (e.g. ``claude_api`` for ``anthropic_api``) are folded into
     the canonical entry. Useful for ``/provider list``-style commands and
     for tooling that needs to introspect what's wired up.
@@ -131,22 +131,17 @@ def list_providers() -> list[dict[str, object]]:
         try:
             p = get_provider(n)
             available = bool(p.is_available())
-            judge = p.default_model("judge")
-            executor = p.default_model("executor")
+            model = p.default_model()
         except Exception as exc:  # noqa: BLE001 — a broken provider is reported in its row
-            available = False
-            judge = executor = ""
             rows.append({
-                "name": n, "available": False,
-                "judge_model": "", "executor_model": "",
+                "name": n, "available": False, "default_model": "",
                 "aliases": aliases.get(n, []), "error": str(exc)[:200],
             })
             continue
         rows.append({
             "name": n,
             "available": available,
-            "judge_model": judge,
-            "executor_model": executor,
+            "default_model": model,
             "aliases": aliases.get(n, []),
         })
     return rows
@@ -158,7 +153,6 @@ def call_llm(
     user: str = "",
     messages: list[Message] | None = None,
     model: str | None = None,
-    role: str = "executor",
     max_tokens: int = 4096,
     response_format: str = "text",
     timeout_s: int | None = None,
@@ -166,16 +160,16 @@ def call_llm(
 ) -> LLMResponse:
     """Run one LLM call against the configured provider.
 
-    Pass either ``user`` (single-turn) or ``messages`` (multi-turn).
-    ``role`` is "judge" or "executor"; if ``model`` is None the
-    provider's default for that role is used. Set ``provider`` to
-    bypass the env var and force a specific backend (handy for tests).
+    Pass either ``user`` (single-turn) or ``messages`` (multi-turn). If
+    ``model`` is None the provider's default model is used. Set
+    ``provider`` to bypass the env var and force a specific backend
+    (handy for tests).
     """
     if not user and messages is None:
         raise ValueError("call_llm: either 'user' or 'messages' must be set")
     p = get_provider(provider)
     if model is None:
-        model = p.default_model(role)
+        model = p.default_model()
     req = LLMRequest(
         system=system,
         user=user,

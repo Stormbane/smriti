@@ -42,10 +42,9 @@ class AnthropicApiProvider:
     def is_available(self) -> bool:
         return self._get_client() is not None
 
-    def default_model(self, role: str = "executor") -> str:
-        # SMRITI_MODEL / SMRITI_EXECUTOR_MODEL preserved for back-compat.
-        if role == "judge":
-            return os.environ.get("SMRITI_MODEL", "claude-haiku-4-5-20251001")
+    def default_model(self) -> str:
+        # The variable's name is from when calls had roles (judge, executor);
+        # an install that sets it keeps its model.
         return os.environ.get(
             "SMRITI_EXECUTOR_MODEL", "claude-sonnet-4-6-20250514"
         )

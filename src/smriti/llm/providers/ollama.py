@@ -35,9 +35,8 @@ class OllamaProvider:
         except (urllib.error.URLError, TimeoutError, OSError):
             return False
 
-    def default_model(self, role: str = "executor") -> str:
-        if role == "judge":
-            return os.environ.get("SMRITI_OLLAMA_JUDGE_MODEL", "llama3.2:3b")
+    def default_model(self) -> str:
+        # Named from when calls had roles; an install that sets it keeps its model.
         return os.environ.get("SMRITI_OLLAMA_EXECUTOR_MODEL", "llama3.1:8b")
 
     def call(self, request: LLMRequest) -> LLMResponse:

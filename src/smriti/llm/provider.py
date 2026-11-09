@@ -28,12 +28,9 @@ class LLMProvider(Protocol):
         """
         ...
 
-    def default_model(self, role: str = "executor") -> str:
-        """Provider-default model for the given role.
-
-        ``role`` is "judge" or "executor". JUDGE wants fast/cheap
-        (Haiku, GPT-4o-mini); EXECUTOR wants capable (Sonnet, GPT-4o).
-        """
+    def default_model(self) -> str:
+        """The model a request that names none runs on ("" for the CLI
+        providers: whatever the subscription wires up)."""
         ...
 
     def call(self, request: LLMRequest) -> LLMResponse:

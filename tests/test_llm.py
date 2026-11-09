@@ -154,10 +154,50 @@ class TestListProviders:
         for r in list_providers():
             assert "name" in r
             assert "available" in r
-            assert "judge_model" in r
-            assert "executor_model" in r
+            assert "default_model" in r
             assert "aliases" in r
             assert isinstance(r["available"], bool)
+            # H15.7: one default model, not one per judge/executor role.
+            assert "judge_model" not in r and "executor_model" not in r
+
+
+# --- default models -------------------------------------------------------
+
+_MODEL_VARS = ("SMRITI_EXECUTOR_MODEL", "SMRITI_OLLAMA_EXECUTOR_MODEL",
+               "SMRITI_OPENAI_EXECUTOR_MODEL")
+
+
+class TestDefaultModels:
+    """H15.7: the judge/executor roles went with the deep pipeline (H3).
+
+    Each provider has one default model: the one every live call (the
+    digest, the morning message) already got, the old executor's, chosen by
+    the same variable.
+    """
+
+    def test_the_protocol_has_no_role(self):
+        import inspect
+
+        from smriti.llm.provider import LLMProvider
+
+        assert list(inspect.signature(LLMProvider.default_model).parameters) == ["self"]
+
+    def test_each_provider_keeps_the_model_live_calls_got(self, monkeypatch):
+        for var in _MODEL_VARS:
+            monkeypatch.delenv(var, raising=False)
+        assert get_provider("anthropic_api").default_model() == "claude-sonnet-4-6-20250514"
+        assert get_provider("openai_api").default_model() == "gpt-4o"
+        assert get_provider("ollama").default_model() == "llama3.1:8b"
+        assert get_provider("claude_cli").default_model() == ""
+        assert get_provider("codex_cli").default_model() == ""
+
+    def test_an_install_that_named_its_model_keeps_it(self, monkeypatch):
+        monkeypatch.setenv("SMRITI_EXECUTOR_MODEL", "claude-x")
+        monkeypatch.setenv("SMRITI_OPENAI_EXECUTOR_MODEL", "gpt-x")
+        monkeypatch.setenv("SMRITI_OLLAMA_EXECUTOR_MODEL", "llama-x")
+        assert get_provider("anthropic_api").default_model() == "claude-x"
+        assert get_provider("openai_api").default_model() == "gpt-x"
+        assert get_provider("ollama").default_model() == "llama-x"
 
 
 # --- factory.call_llm ---------------------------------------------------
@@ -172,8 +212,8 @@ class _StubProvider:
     def is_available(self) -> bool:
         return True
 
-    def default_model(self, role: str = "executor") -> str:
-        return f"stub-{role}-model"
+    def default_model(self) -> str:
+        return "stub-default-model"
 
     def call(self, request: LLMRequest) -> LLMResponse:
         self.last_request = request
@@ -210,12 +250,13 @@ class TestCallLLM:
         with pytest.raises(ValueError, match="user.*messages"):
             call_llm(system="S", provider="stub")
 
-    def test_role_drives_default_model(self, stub_provider):
-        call_llm(system="S", user="x", role="judge", provider="stub")
-        assert stub_provider.last_request.model == "stub-judge-model"
+    def test_the_providers_default_model_is_used_when_none_is_named(self, stub_provider):
+        call_llm(system="S", user="x", provider="stub")
+        assert stub_provider.last_request.model == "stub-default-model"
 
-        call_llm(system="S", user="x", role="executor", provider="stub")
-        assert stub_provider.last_request.model == "stub-executor-model"
+    def test_a_call_has_no_role(self, stub_provider):
+        with pytest.raises(TypeError, match="role"):
+            call_llm(system="S", user="x", role="judge", provider="stub")
 
     def test_explicit_model_overrides_default(self, stub_provider):
         call_llm(system="S", user="x", model="custom-model", provider="stub")

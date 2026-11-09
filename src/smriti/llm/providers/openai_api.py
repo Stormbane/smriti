@@ -1,7 +1,7 @@
 """OpenAI API provider.
 
 Auto-detected when OPENAI_API_KEY is set and the openai SDK imports
-cleanly. Defaults to gpt-4o-mini for JUDGE, gpt-4o for EXECUTOR.
+cleanly. Defaults to gpt-4o (``SMRITI_OPENAI_EXECUTOR_MODEL`` chooses another).
 """
 
 from __future__ import annotations
@@ -47,9 +47,8 @@ class OpenAIApiProvider:
     def is_available(self) -> bool:
         return self._get_client() is not None
 
-    def default_model(self, role: str = "executor") -> str:
-        if role == "judge":
-            return os.environ.get("SMRITI_OPENAI_JUDGE_MODEL", "gpt-4o-mini")
+    def default_model(self) -> str:
+        # Named from when calls had roles; an install that sets it keeps its model.
         return os.environ.get("SMRITI_OPENAI_EXECUTOR_MODEL", "gpt-4o")
 
     def call(self, request: LLMRequest) -> LLMResponse:

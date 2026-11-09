@@ -42,7 +42,7 @@ class StubLLMProvider:
     def is_available(self) -> bool:
         return allowed()
 
-    def default_model(self, role: str = "executor") -> str:
+    def default_model(self) -> str:
         return NAME
 
     def call(self, request: LLMRequest) -> LLMResponse:
