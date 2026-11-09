@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from smriti.core.files import FileBusy, create_new, edit_lock, write_atomic
+from smriti.core.files import FileBusy, LockUnavailable, create_new, edit_lock, write_atomic
 from smriti.core.tree import tree_root
 
 
@@ -110,13 +110,55 @@ def test_edit_lock_is_exclusive_and_says_busy(tmp_path: Path) -> None:
     t.start()
     held.wait(5)
     try:
-        with pytest.raises(FileBusy), edit_lock(target, wait_s=0.1):
+        busy = pytest.raises(FileBusy, match="being edited elsewhere; try again")
+        with busy, edit_lock(target, wait_s=0.1):
             pass
     finally:
         release.set()
         t.join()
     with edit_lock(target, wait_s=1):
         pass
+
+
+def test_edit_lock_says_unavailable_when_no_lock_can_be_opened(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # H15.7: a refused runtime directory leaves no lock file to open, so no
+    # writer is excluded and waiting won't help: not "busy, try again".
+    import smriti.core.rundir as runtime
+
+    def refuse(*, create: bool = True) -> Path:
+        raise runtime.RuntimeDirError("refusing the runtime directory: other users can write")
+
+    monkeypatch.setattr(runtime, "runtime_dir", refuse)
+    target = tmp_path / "f.md"
+    with pytest.raises(LockUnavailable) as raised, edit_lock(target, wait_s=0.1):
+        pytest.fail("the edit ran without a lock")
+    message = str(raised.value)
+    assert not isinstance(raised.value, FileBusy) and isinstance(raised.value, OSError)
+    why = "refusing the runtime directory: other users can write"
+    assert f"edit lock is unavailable ({why})" in message and "SMRITI_RUNTIME_DIR" in message
+    assert "try again" not in message and str(target) in message
+
+
+def test_an_mcp_write_says_why_when_no_edit_lock_can_be_had(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    import smriti.core.rundir as runtime
+    from smriti.mcp.server import call_tool
+    from smriti.mcp.tools.memory import TOOLS
+
+    write = next(t for t in TOOLS if t.name == "smriti_write")
+    args = {"content": "Ari met Sam at the harbour.", "branch": "journal"}
+    first = call_tool(write, dict(args))  # the day's file exists; the next write appends
+    assert not first.get("isError"), first
+
+    def refuse(*, create: bool = True) -> Path:
+        raise runtime.RuntimeDirError("refusing the runtime directory: other users can write")
+
+    monkeypatch.setattr(runtime, "runtime_dir", refuse)
+    reply = call_tool(write, dict(args))
+    text = reply["content"][0]["text"]
+    assert reply["isError"] and "edit lock is unavailable" in text, text
+    assert "try again" not in text
 
 
 def test_write_atomic_replaces_and_leaves_no_temp(tmp_path: Path) -> None:

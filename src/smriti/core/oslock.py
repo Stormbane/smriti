@@ -110,14 +110,19 @@ def _open(path: Path, mode: int) -> int:
     return os.open(str(path), os.O_RDWR | os.O_CREAT, mode)
 
 
-def _open_named(key: LockKey) -> int | None:
-    """Open a named lock's file; None when it can't be, so the lock can't be held."""
+def _open_key(key: LockKey | Path) -> tuple[int | None, str]:
+    """Open a lock's file: its descriptor, or None and why it can't be opened."""
+    if not isinstance(key, LockKey):
+        try:
+            return _open(key, 0o644), ""
+        except OSError as exc:
+            return None, str(exc)
     try:
-        return _open(key.private(), 0o600)
+        return _open(key.private(), 0o600), ""
     except (OSError, RuntimeError) as exc:  # RuntimeError: Path.home() can't be found
         _warn_once(type(exc).__name__,
                    "the lock directory can't be used (%s), so named locks can't be taken", exc)
-        return None
+        return None, str(exc)
 
 
 def _acquire(fd: int, deadline: float) -> bool:
@@ -166,20 +171,21 @@ def try_lock(key: LockKey | Path, wait_s: float = 2.0) -> Iterator[str]:
     named lock, a runtime directory that can't be used), so no holder can be
     excluded at all. Only HELD holds anything.
     """
-    if isinstance(key, LockKey):
-        fd = _open_named(key)
-    else:
-        try:
-            fd = _open(key, 0o644)
-        except OSError:
-            fd = None
+    with try_lock_why(key, wait_s) as (outcome, _why):
+        yield outcome
+
+
+@contextmanager
+def try_lock_why(key: LockKey | Path, wait_s: float = 2.0) -> Iterator[tuple[str, str]]:
+    """:func:`try_lock`, with why the lock is :data:`UNAVAILABLE` ("" when it isn't)."""
+    fd, why = _open_key(key)
     if fd is None:
-        yield UNAVAILABLE
+        yield UNAVAILABLE, why
         return
     try:
         held = _acquire(fd, time.monotonic() + wait_s)
         try:
-            yield HELD if held else BUSY
+            yield (HELD if held else BUSY), ""
         finally:
             if held:
                 _release(fd)

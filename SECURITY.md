@@ -52,8 +52,10 @@ security backport series or guaranteed response time.
   doesn't follow `XDG_RUNTIME_DIR`, which a cron job lacks), so all of them take
   the same files; `SMRITI_RUNTIME_DIR` must be set for all of them or for none.
   When the directory is refused (another user owns it, or others can write to
-  it) or can't be made, a lock isn't taken anywhere else: what needed it fails as
-  busy rather than running unguarded (see `smriti.core.oslock`).
+  it) or can't be made, a lock isn't taken anywhere else: what needed it fails
+  rather than running unguarded. A file edit says its lock is unavailable and
+  why, the nightly skips and says so, and the day-log writer and the handoff
+  letter fail as busy (see `smriti.core.oslock`).
 - Backups commit the tree and can push it to a git remote you choose, in plaintext
   unless git-crypt encrypts it. Use a private remote. We recommend git-crypt for
   sensitive memory backups, but **the installer does not set up git-crypt**: it asks

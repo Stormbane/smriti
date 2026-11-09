@@ -30,24 +30,34 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Any
 
-from smriti.core.oslock import exclusive_lock, lock_path
+from smriti.core.oslock import BUSY, UNAVAILABLE, lock_path, try_lock_why
 
 
 class FileBusy(TimeoutError):
     """Another writer held the file for longer than we would wait."""
 
 
+class LockUnavailable(OSError):
+    """No edit lock could be opened at all (its directory can't be used), so
+    the edit would exclude no other writer; waiting won't change that."""
+
+
 @contextmanager
 def edit_lock(path: Path, wait_s: float = 10.0) -> Iterator[None]:
-    """Hold the edit lock for ``path``, or raise :class:`FileBusy`.
+    """Hold the edit lock for ``path``, or raise :class:`FileBusy` (another
+    writer holds it) or :class:`LockUnavailable` (no lock can be had).
 
     The lock is an OS lock keyed by the resolved path, so it is released if
     its holder crashes, and junctioned paths to one file share it.
     """
     key = lock_path("edit", os.path.normcase(str(Path(path).resolve())))
-    with exclusive_lock(key, wait_s=wait_s) as held:
-        if not held:
+    with try_lock_why(key, wait_s=wait_s) as (outcome, why):
+        if outcome == BUSY:
             raise FileBusy(f"{path} is being edited elsewhere; try again")
+        if outcome == UNAVAILABLE:
+            raise LockUnavailable(
+                f"{path} was not changed: its edit lock is unavailable ({why}). Check the "
+                "runtime directory (SMRITI_RUNTIME_DIR)")
         yield
 
 
