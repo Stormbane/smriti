@@ -8,7 +8,7 @@ Status words: **built** means the code exists and runs in the reference install;
 
 ## 1. The working self: the wake briefing
 
-At session start the harness runs `<root>/.smriti/wake.py`. Claude Code runs it from a `SessionStart` hook; Codex runs it from `[[hooks.SessionStart]]`, with JSON framing. The hook sets `SMRITI_WAKE=1`; without it the script prints nothing, so headless `claude -p` calls stay clean. The script also touches `.smriti/last-activity`. It doesn't back the tree up; the hourly `smriti-backup` task does.
+At session start the harness runs `<root>/.smriti/wake.py`. Claude Code runs it from a `SessionStart` hook; Codex runs it from `[[hooks.SessionStart]]`, with JSON framing. The hook sets `SMRITI_WAKE=1`; without it the script prints nothing, so headless `claude -p` calls stay clean. The hook runs the script with the python that ran the installer; if that python can't import smriti, the script prints one line on stderr saying the briefing is missing and why, and exits 1, which each harness reports without stopping the session. The script also touches `.smriti/last-activity`. It doesn't back the tree up; the hourly `smriti-backup` task does.
 
 The text comes from `briefing()` in [`src/smriti/wake/briefing.py`](../src/smriti/wake/briefing.py), plus the sections an enabled profile adds; the reference profile's three come from [`profiles/reference/src/smriti_reference/presence.py`](../profiles/reference/src/smriti_reference/presence.py). Without a profile, sections 5 to 7 below are absent. It is at most 9,500 characters, because Claude Code truncates hook output at 10,000. It is the **working self**: the part of your memory that is present without a tool call. Everything else has to be read or searched for.
 

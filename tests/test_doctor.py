@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from smriti.doctor import claude_code_checks, codex_checks, run_doctor
@@ -138,3 +139,42 @@ def test_codex_doctor_tolerates_hooks_state_table(tmp_path, monkeypatch) -> None
 
     checks = codex_checks(memory_root=memory_root, project=project, home=home)
     assert all(check.passed for check in checks), [c for c in checks if not c.passed]
+
+
+def _claude_settings(home: Path, wake_cmd: str) -> None:
+    claude = home / ".claude"
+    claude.mkdir(exist_ok=True)
+    settings = {"hooks": {"SessionStart": [
+        {"matcher": "", "hooks": [{"type": "command", "command": wake_cmd}]}]}}
+    (claude / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+
+
+def test_doctor_finds_the_wake_script_after_a_quoted_interpreter(tmp_path) -> None:
+    """H15.1: the wake hook names its interpreter by a quoted path. The target
+    check found scripts only after a bare python, so a deleted wake.py
+    passed it."""
+    home, memory_root, project = _make_entity_and_project(tmp_path)
+    _claude_settings(home, make_wake_hook_command(
+        memory_root, home=home, framing="raw", interpreter="/opt/py env/bin/python3"))
+    (memory_root / ".smriti" / "wake.py").unlink()
+
+    checks = {c.name: c
+              for c in claude_code_checks(memory_root=memory_root, project=project, home=home)}
+
+    assert checks["Claude hook targets exist"].passed is False
+    assert "wake.py" in checks["Claude hook targets exist"].detail
+
+
+def test_doctor_fails_a_wake_hook_that_runs_python_from_path(tmp_path) -> None:
+    """H15.1: every install before it wrote a bare python, which the harness
+    looks up on its own PATH; doctor says so, and a reinstall pins it."""
+    home, memory_root, project = _make_entity_and_project(tmp_path)
+    _claude_settings(home, 'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/.narada" '
+                           'python "$HOME/.narada/.smriti/wake.py"')
+
+    checks = {c.name: c
+              for c in claude_code_checks(memory_root=memory_root, project=project, home=home)}
+
+    assert checks["Claude wake hook"].passed is False
+    assert checks["Claude wake hook"].detail == f"runs python from PATH, not {sys.executable}"
+    assert checks["Claude hook targets exist"].passed is True

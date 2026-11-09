@@ -28,7 +28,7 @@ from smriti.integrations.common import (
     classify_wake_hook,
     mcp_registration_matches,
 )
-from smriti.integrations.common.hook_model import ENCODED_RE
+from smriti.integrations.common.hook_model import ENCODED_RE, SH_INTERPRETER
 from smriti.wake import briefing
 
 
@@ -41,7 +41,9 @@ class Check:
 
 # --- shared helpers -------------------------------------------------------
 
-_SH_SCRIPT_RE = re.compile(r'python3?\s+"?((?:\$HOME|~)/[^"\s]+\.py)"?')
+# The script after the interpreter, which is a python (a bare one from earlier
+# installs) or a quoted path (the wake hook's, now).
+_SH_SCRIPT_RE = re.compile(rf'{SH_INTERPRETER}\s+"?((?:\$HOME|~)/[^"\s]+\.py)"?')
 _PS_SCRIPT_RE = re.compile(r"\(Join-Path \$HOME '([^']+\.py)'\)")
 
 

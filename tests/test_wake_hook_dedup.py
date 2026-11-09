@@ -8,6 +8,7 @@ deficient. Applies to both harnesses.
 
 from __future__ import annotations
 
+import base64
 import json
 import tomllib
 
@@ -16,9 +17,12 @@ import pytest
 from smriti.integrations.claude_code import install as cc_install
 from smriti.integrations.codex import install as codex_install
 from smriti.integrations.common.hook_model import (
+    DEFICIENT,
     EQUIVALENT,
     classify_wake_hook,
+    installing_interpreter,
     make_wake_hook_command,
+    parse_wake_command,
 )
 from tests._home import use_home
 
@@ -127,10 +131,10 @@ class TestCodexWakeHookDedup:
             'matcher = "startup|resume|clear|compact"\n'
             "[[hooks.SessionStart.hooks]]\n"
             'type = "command"\n'
-            f"command = '{eq}'\n"
+            f"command = {json.dumps(eq)}\n"  # a basic string: the command holds quotes
             "[[hooks.SessionStart.hooks]]\n"
             'type = "command"\n'
-            f"command = '{eq}'\n",
+            f"command = {json.dumps(eq)}\n",
             encoding="utf-8",
         )
 
@@ -143,3 +147,69 @@ class TestCodexWakeHookDedup:
             for h in g["hooks"]
         ]
         assert wake_cmds == [eq]
+
+
+# H15.1: the hook runs the python that installed it. One that runs `python`
+# from PATH (as every install before H15.1 wrote it) is brought up to date.
+
+def _legacy_command(framing: str, style: str) -> str:
+    """The wake hook as installers wrote it before H15.1: a bare ``python``."""
+    if style == "sh":
+        framing_var = f'SMRITI_WAKE_FRAMING="{framing}" ' if framing != "raw" else ""
+        return ('SMRITI_WAKE=1 SMRITI_ROOT="$HOME/.narada" SMRITI_WAKE_AUDIENCE="coding" '
+                f'{framing_var}python "$HOME/.narada/.smriti/wake.py"')
+    script = ("$ProgressPreference='SilentlyContinue'; $ErrorActionPreference='Stop'; "
+              "$env:SMRITI_WAKE='1'; $env:SMRITI_ROOT=(Join-Path $HOME '.narada'); "
+              "$env:SMRITI_WAKE_AUDIENCE='coding'; "
+              f"$env:SMRITI_WAKE_FRAMING='{framing}'; "
+              "python (Join-Path $HOME '.narada/.smriti/wake.py')")
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return f"powershell.exe -NoProfile -NonInteractive -EncodedCommand {encoded}"
+
+
+def test_claude_upgrades_a_hook_that_runs_python_from_path(fake_home):
+    memory_root = fake_home / ".narada"
+    legacy = _legacy_command("raw", "sh")
+    settings_path = fake_home / ".claude" / "settings.json"
+    settings_path.write_text(json.dumps({"hooks": {"SessionStart": [
+        {"matcher": "", "hooks": [{"type": "command", "command": legacy}]},
+    ]}}), encoding="utf-8")
+    verdict, detail = classify_wake_hook(legacy, memory_root=memory_root, home=fake_home)
+    assert verdict == DEFICIENT and "python from PATH" in detail
+
+    cc_install.patch_settings_json(memory_root)
+
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
+    [wake] = _wake_hooks_in(data, memory_root, fake_home)
+    assert wake == make_wake_hook_command(memory_root, home=fake_home, framing="raw")
+    spec = parse_wake_command(wake)
+    assert spec is not None
+    assert spec.interpreter.replace("\\", "/") == installing_interpreter().replace("\\", "/")
+
+
+def test_codex_upgrades_a_hook_that_runs_python_from_path(tmp_path, monkeypatch):
+    home = use_home(monkeypatch, tmp_path)
+    (home / ".codex").mkdir()
+    memory_root = home / ".narada"
+    style = codex_install._wake_style()
+    legacy = _legacy_command("codex-json", style)
+    config = home / ".codex" / "config.toml"
+    config.write_text(
+        "[features]\nhooks = true\n\n"
+        "[[hooks.SessionStart]]\n"
+        'matcher = "startup|resume|clear|compact"\n'
+        "[[hooks.SessionStart.hooks]]\n"
+        'type = "command"\n'
+        f"command = {json.dumps(legacy)}\n",
+        encoding="utf-8",
+    )
+    verdict, detail = classify_wake_hook(legacy, memory_root=memory_root, home=home,
+                                         framing="codex-json")
+    assert verdict == DEFICIENT and "python from PATH" in detail
+
+    codex_install.patch_config_toml(memory_root)
+
+    data = tomllib.loads(config.read_text(encoding="utf-8"))
+    wake_cmds = [h["command"] for g in data["hooks"]["SessionStart"] for h in g["hooks"]]
+    assert wake_cmds == [make_wake_hook_command(memory_root, home=home, framing="codex-json",
+                                                style=style)]

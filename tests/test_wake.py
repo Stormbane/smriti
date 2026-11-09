@@ -205,6 +205,39 @@ class TestWakeEdgeCases:
         )
 
 
+class TestWakeWithoutSmriti:
+    """H15.1: run by a python that can't import smriti, wake.py exited 0 and
+    said nothing, and the session started without its briefing unnoticed."""
+
+    @staticmethod
+    def _run_without_smriti(wake_tree: Path, wake: str | None) -> subprocess.CompletedProcess:
+        env = os.environ.copy()
+        env.pop("SMRITI_WAKE", None)
+        if wake is not None:
+            env["SMRITI_WAKE"] = wake
+        # -I ignores PYTHONPATH and the user's site-packages, -S the site
+        # packages: smriti (installed, or editable) can't be imported.
+        return subprocess.run(
+            [sys.executable, "-I", "-S", str(wake_tree / ".smriti" / "wake.py")],
+            capture_output=True, text=True, env=env, timeout=30,
+        )
+
+    def test_a_missing_briefing_is_said_on_stderr(self, wake_tree: Path) -> None:
+        result = self._run_without_smriti(wake_tree, "1")
+        assert result.stdout == ""  # stdout goes into the session: nothing there
+        lines = result.stderr.splitlines()
+        assert len(lines) == 1, result.stderr
+        assert lines[0].startswith("[wake] no memory briefing: ")
+        assert sys.executable in lines[0] and "can't import smriti" in lines[0]
+        # Not 0, so Claude Code shows the line (it drops stderr at 0); neither
+        # harness stops a session for a SessionStart hook that fails.
+        assert result.returncode == 1
+
+    def test_silent_when_no_briefing_was_asked_for(self, wake_tree: Path) -> None:
+        result = self._run_without_smriti(wake_tree, None)
+        assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+
+
 class TestIdentityFallback:
     """H14.4 (Opus, outside review #7): nothing creates ``.smriti/wake-context.md``, so a
     new root woke with no identity section. Without it, the section is the trunk's

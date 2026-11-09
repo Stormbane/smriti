@@ -32,7 +32,15 @@ any `~/.<entity>/` root) wakes up with:
 
 The transport is a `SessionStart` hook that runs `wake.py` from the
 entity root's `.smriti/` dir; the core sections are fixed in
-`src/smriti/wake/briefing.py`. Per-project access is via directory
+`src/smriti/wake/briefing.py`. The hook runs it with the python that ran
+the installer, by its absolute path, as the MCP registration does: a bare
+`python` is whichever one the harness's PATH finds first, which may not
+have smriti. Installs before hardening H15.1 wrote a bare `python`; rerun
+the installer to pin it (`smriti doctor` names the gap). If the python
+running `wake.py` can't import smriti, the briefing is missing and
+`wake.py` says so in one line on stderr, exiting 1: Claude Code shows that
+line as a hook error and Codex reports a hook failure, and neither stops
+the session. Per-project access is via directory
 junctions under `<entity>/mirrors/{project}/`. The memory search tool is
 registered as an MCP server in `~/.claude.json`.
 
