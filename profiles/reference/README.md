@@ -7,6 +7,7 @@ smriti grew inside one setup, an agent named Narada working with one user, Suti,
 - MCP tools that reach Suti: `tell_suti` (a message now, through the installation's fan-out sender), `smriti_ask_suti` and `smriti_propose_goal_shift` (queued in `outbox/`), and `smriti_resolve_outbox`.
 - Three wake-briefing sections: `HANDS`, `SUTI NOW` (the akhada health app and the latest `people/` notes) and `ACROSS SURFACES` (Telegram, the phone app, voice, notifications sent).
 - The morning message's persona: Narada as the wandering sage.
+- A Claude Code `UserPromptSubmit` hook, `python -P -m smriti_reference.session_end`, wired by hand in the installation's settings: when Suti's prompt sounds like goodbye, it reminds the agent to write down what's worth keeping first.
 
 It is called "reference" because it is the installation the code is developed and checked against, and its behaviour is the one the core must keep when this profile is enabled. It is not a template or a recommended setup: an adopter runs the core alone, or writes a profile of their own.
 
