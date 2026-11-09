@@ -224,7 +224,7 @@ Nothing in the memory tree is run by them, or by the backup and the nightly: the
 On [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (questions about a user's past conversations with an assistant, each over its own history of about 50 sessions):
 
 - **Answers.** An agent (Claude Sonnet 5) answering through `smriti_read` alone got 88 of 100 sampled questions right, and declined all 9 that the history can't answer. Counting across conversations was the weakest kind (72%).
-- **Search.** An evidence session is among the first five results for 98.5% of the 470 answerable questions (keyword search alone: 96.2%), the same before and after the hardening.
+- **Search.** An evidence session is among the first five results for 98.5% of the 470 answerable questions (keyword search alone: 96.2%), the same before and after the hardening. What those five results show includes part of the evidence turn itself for 86.6%, up from 84.3% now that results are shown whole.
 - **Not like for like.** The other figures are each system's own, mostly from its makers, with different answering models, graders and dataset releases: the chart places smriti, it doesn't rank it. And smriti searched raw conversations here, where an install searches its nightly digests; how much an install remembers once a day is digested isn't measured yet.
 
 Method, results by question type, what the runs found, and how to reproduce them: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).

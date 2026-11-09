@@ -41,9 +41,9 @@ answered from the history (abstention).
 Over the 470 answerable questions. Session recall@k: an evidence session among
 the first k sessions of a 50-chunk ranking (any: one of them; all: every
 one). The agent's view is the 5 results `smriti_read` returns by default, and
-of each the 1,000 characters it showed (both checkouts measured cut there; since
-H15.11 it shows a whole chunk): whether one comes from an evidence session, and
-whether one shows part of an evidence turn.
+of each what it showed (the first 1,000 characters before and after; at H15, the
+whole chunk): whether one comes from an evidence session, and whether one shows
+part of an evidence turn.
 
 | | recall_any@5 | recall_all@5 | recall_any@10 | recall_all@10 | NDCG@10 | MRR | agent: evidence session | agent: evidence turn |
 |---|---|---|---|---|---|---|---|---|
@@ -51,18 +51,22 @@ whether one shows part of an evidence turn.
 | hybrid, after (`49d31d5`) | 0.985 | 0.891 | 0.994 | 0.957 | 0.937 | 0.941 | 0.972 | 0.843 |
 | keyword only, before | 0.962 | 0.806 | 0.985 | 0.898 | 0.887 | 0.899 | 0.945 | 0.794 |
 | keyword only, after | 0.962 | 0.806 | 0.985 | 0.898 | 0.887 | 0.899 | 0.945 | 0.794 |
+| hybrid, H15 (`ee317df`) | 0.985 | 0.891 | 0.994 | 0.957 | 0.937 | 0.941 | 0.972 | 0.866 |
+| keyword only, H15 | 0.962 | 0.806 | 0.985 | 0.898 | 0.887 | 0.899 | 0.945 | 0.811 |
 
 Before is the commit of the first outside review (2026-11-04); after is master
-once hardening H1-H14 were done. By question type, after, hybrid:
+once hardening H1-H14 were done; H15 is master once H15 was (2026-11-10), with
+long lines cut into chunks and whole chunks shown. By question type, H15,
+hybrid, with after's evidence-turn figure for comparison:
 
-| type | n | recall_any@5 | recall_all@10 | NDCG@10 | agent: evidence turn |
+| type | n | recall_any@5 | recall_all@10 | NDCG@10 | agent: evidence turn (after) |
 |---|---|---|---|---|---|
-| knowledge-update | 72 | 1.000 | 1.000 | 0.985 | 0.889 |
-| multi-session | 121 | 0.983 | 0.942 | 0.927 | 0.851 |
-| single-session-assistant | 56 | 1.000 | 1.000 | 0.987 | 0.964 |
-| single-session-preference | 30 | 0.967 | 0.967 | 0.842 | 0.567 |
-| single-session-user | 64 | 0.984 | 1.000 | 0.973 | 0.812 |
-| temporal-reasoning | 127 | 0.976 | 0.906 | 0.902 | 0.835 |
+| knowledge-update | 72 | 1.000 | 1.000 | 0.985 | 0.903 (0.889) |
+| multi-session | 121 | 0.983 | 0.942 | 0.927 | 0.851 (0.851) |
+| single-session-assistant | 56 | 1.000 | 1.000 | 0.987 | 0.982 (0.964) |
+| single-session-preference | 30 | 0.967 | 0.967 | 0.842 | 0.633 (0.567) |
+| single-session-user | 64 | 0.984 | 1.000 | 0.973 | 0.906 (0.812) |
+| temporal-reasoning | 127 | 0.976 | 0.906 | 0.902 | 0.843 (0.835) |
 
 Per question, indexing took a median 1.25 s before and 1.07 s after (vectors
 from the cache, so this is chunking and the database); a search, 11.6 ms and
@@ -117,7 +121,10 @@ session was among what it saw for 90 of the 91 answerable questions.
   cut off. Since H15.10 the chunker cuts such a line into chunks of at most
   1,500 characters, and since H15.11 `smriti_read` shows every chunk the
   chunker makes whole (at most 4,502 characters, a chunk with the lines it
-  repeats from the one before); these runs predate both.
+  repeats from the one before). With both (the H15 run), part of an evidence
+  turn is shown for 86.6% of questions, 63% for preferences, and every other
+  measure is the same; the cost is longer results for the agent to read. The
+  answers above predate both.
 - **Counting across sessions is the weak answer type** (72%): most failures
   were short counts, where the agent stopped searching after finding some of
   the sessions. For multi-session questions, recall_all@5 is 0.835 against
@@ -135,7 +142,7 @@ session was among what it saw for 90 of the 91 answerable questions.
   batch by length when its attention would exceed that of 32 texts of 512
   tokens.
 - **"Nothing is close" never fired**: for none of the 30 unanswerable questions
-  and none of the answerable ones. The model's calibration (chosen on the
+  and none of the answerable ones, in every run. The model's calibration (chosen on the
   synthetic quality set, for the int8 model) doesn't separate them here. The
   answering agent still declined all 9 unanswerable questions in the sample.
 
