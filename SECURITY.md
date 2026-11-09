@@ -73,12 +73,13 @@ security backport series or guaranteed response time.
   interpreter it is installed in. `-P` keeps the current directory off the
   import path, so a session started in the tree can't import from it. The
   installer copies one script into `<root>/.smriti/`, `narada-p.sh`, which only
-  a person runs; a reinstall removes the `wake.py` and `backup.py` earlier
-  installs copied there (a hand-written one is left, and nothing runs it). What
-  `daylog.json` configures is the operator's: `notify_cmd` is run by the morning
-  message and the reference profile's `tell_suti`, and without one the reference
-  profile runs `<root>/.smriti/hooks/notify_suti.py`, a script in the tree; keep
-  such a command out of the tree to keep the tree free of code that runs.
+  a person runs; a reinstall removes the `backup.py` earlier installs copied
+  there, and their `wake.py` once no hook smriti manages still runs it (a
+  hand-written one is left, and nothing runs it). What `daylog.json` configures
+  is the operator's: `notify_cmd` is run by the morning message and the
+  reference profile's `tell_suti`, and without one the reference profile runs
+  `<root>/.smriti/hooks/notify_suti.py`, a script in the tree; keep such a
+  command out of the tree to keep the tree free of code that runs.
 - A profile (`"profile"` in `daylog.json`) is code from an installed package,
   found through the `smriti.profiles` entry-point group of the Python
   environment smriti runs in; nothing is loaded from the memory tree, so the

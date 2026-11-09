@@ -36,8 +36,9 @@ All notable changes to this project are documented here, following
   smriti.wake` and `smriti backup` runs `python -P -m smriti.backup`, both the
   installed package's code, where they ran `<root>/.smriti/wake.py` and
   `backup.py`, copies in the tree that a write to it or a restore could change.
-  A reinstall rewrites the hook in place and removes those copies (a hand-written
-  one is left, with a warning); until then the old hook keeps working. The backup
+  A reinstall rewrites the hook in place and removes those copies, `wake.py` only
+  once no Claude Code or Codex hook still runs it (a hand-written one is left, with
+  a warning); until then the old hook keeps working. The backup
   has no detached mode any more: only session hooks used it.
 - The nightly's codex fallback is opt-in: `"nightly_fallback": "codex_cli"` in
   `daylog.json`, or `SMRITI_NIGHTLY_FALLBACK`, which wins when set (empty: none).

@@ -46,11 +46,17 @@ INSTALL_RECORD = "install.json"
 # The scripts the installer copies into <root>/.smriti/.
 DEPLOYED = ("narada-p.sh",)
 # Scripts earlier installs copied there, which nothing runs any more, each
-# with what runs in its place: a reinstall removes smriti's copies.
+# with what runs in its place: the core step removes smriti's copies. Only
+# backup.py is here: nothing outside the tree ran it but `smriti backup` (the
+# hourly task, the nightly), which runs the package's backup now.
 RETIRED = {
-    "wake.py": "the SessionStart hook runs `python -m smriti.wake` from the installed package",
     "backup.py": "`smriti backup` runs the installed package's backup",
 }
+# The wake script earlier installs copied there, which harness hooks outside
+# the tree run until a reinstall rewrites them: it goes only at the end of an
+# install that left no such hook (retire_wake_script).
+WAKE_SCRIPT = "wake.py"
+WAKE_INSTEAD = "the SessionStart hook runs `python -m smriti.wake` from the installed package"
 
 
 def default_memory_root() -> Path:
@@ -360,7 +366,8 @@ def _smriti_managed(data: bytes) -> bool:
 
 def install_wake_files(memory_root: Path) -> None:
     """Copy the scripts in :data:`DEPLOYED` into ``<memory_root>/.smriti/``,
-    and remove the :data:`RETIRED` ones an earlier install put there.
+    and remove the :data:`RETIRED` ones an earlier install put there (the wake
+    script waits for :func:`retire_wake_script`).
 
     Auto-upgrades smriti-managed scripts in place (:func:`_smriti_managed`).
     When upgrading we drop a ``.pre-upgrade.bak`` next to the file so
@@ -413,6 +420,71 @@ def install_wake_files(memory_root: Path) -> None:
             continue
         shutil.copy2(src, dst)
         print(f"[wake] upgraded {dst.name} (backup: {backup.name})")
+
+
+def wake_script_users(memory_root: Path, home: Path) -> list[str]:
+    """What may still run ``<memory_root>/.smriti/wake.py``: one reason each, [] for nothing.
+
+    The hook configs smriti's integrations write (Claude Code's
+    ``settings.json``, Codex's ``config.toml``), any hook in them that names
+    the script (:func:`runs_tree_wake`), and the deployed ``narada-p.sh``. A
+    config that exists but can't be read may hold one, so it counts.
+    """
+    import tomllib
+
+    from smriti.integrations.claude_code.install import settings_path
+    from smriti.integrations.codex.install import config_toml_path
+    from smriti.integrations.common.hook_model import hook_commands, runs_tree_wake
+
+    reasons: list[str] = []
+    configs: list[tuple[str, Path, str]] = [
+        ("Claude Code", settings_path(home), "claude_code"),
+        ("Codex", config_toml_path(home), "codex"),
+    ]
+    for harness, config, flag in configs:
+        try:
+            text = config.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            reasons.append(f"{config} can't be read ({exc}), so a hook in it may run it")
+            continue
+        try:
+            data = json.loads(text) if config.suffix == ".json" else tomllib.loads(text)
+        except (ValueError, tomllib.TOMLDecodeError) as exc:
+            reasons.append(f"{config} can't be read ({exc}), so a hook in it may run it")
+            continue
+        hooks = data.get("hooks", {}) if isinstance(data, dict) else {}
+        if any(runs_tree_wake(cmd, memory_root=memory_root, home=home)
+               for cmd in hook_commands(hooks)):
+            reasons.append(f"a {harness} hook in {config} still runs it; rerun with "
+                           f"--harness {flag}")
+    wrapper = memory_root / ".smriti" / "narada-p.sh"
+    try:
+        if f".smriti/{WAKE_SCRIPT}" in wrapper.read_text(encoding="utf-8", errors="replace"):
+            reasons.append(f"{wrapper} still runs it")
+    except OSError:
+        pass  # none, or unreadable: the installer just deployed or upgraded it
+    return reasons
+
+
+def retire_wake_script(memory_root: Path, home: Path | None = None) -> None:
+    """Remove the ``wake.py`` an earlier install deployed, once nothing runs it.
+
+    Called at the end of a successful install, after the harness steps have
+    rewritten the hooks they manage. While a hook (or ``narada-p.sh``) still
+    runs it, it stays, and the reason is printed: the old script keeps waking
+    sessions until a reinstall rewrites that hook, so keeping it is always
+    safe. Otherwise it is removed as :func:`_remove_retired` removes a script.
+    """
+    path = memory_root / ".smriti" / WAKE_SCRIPT
+    if not path.is_file():
+        return
+    users = wake_script_users(memory_root, home if home is not None else Path.home())
+    for why in users:
+        print(f"[wake] kept {path}: {why}")
+    if not users:
+        _remove_retired(path, WAKE_INSTEAD)
 
 
 def _remove_retired(path: Path, instead: str) -> None:

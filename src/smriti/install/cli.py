@@ -47,6 +47,7 @@ from smriti.install.core import (
     default_memory_root,
     record_projects_root,
     resolve_projects_root,
+    retire_wake_script,
     run_core,
 )
 
@@ -202,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if harness == "none":
+        retire_wake_script(memory_root)
         print("\ndone (core-only). To wire into an agent harness, "
               "re-run with --harness=<name> or write your own integration.")
         print(privacy.summary(memory_root, plan))
@@ -236,6 +238,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         mod.run(memory_root)
 
+    # Last, once the harness step has rewritten the hooks it manages.
+    retire_wake_script(memory_root)
     print(f"\ndone ({harness}). start a new session in your harness to verify.")
     print("LLM provider:  SMRITI_LLM_PROVIDER={anthropic_api|claude_cli|openai_api|ollama}.")
     print(privacy.summary(memory_root, plan))

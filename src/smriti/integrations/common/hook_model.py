@@ -218,6 +218,45 @@ def _interpreter_key(python: str) -> str:
     return python
 
 
+def hook_commands(hooks: object) -> list[str]:
+    """Every command string under a hook config's list-shaped event entries.
+
+    Skips non-event tables that share the ``hooks`` namespace (Codex keeps a
+    ``[hooks.state]`` trust registry there) and any entry that is not
+    dict-shaped.
+    """
+    if not isinstance(hooks, dict):
+        return []
+    return [
+        str(hook.get("command", ""))
+        for groups in hooks.values()
+        if isinstance(groups, list)
+        for group in groups
+        if isinstance(group, dict)
+        for hook in group.get("hooks", [])
+        if isinstance(hook, dict)
+    ]
+
+
+def runs_tree_wake(command: str, *, memory_root: Path, home: Path) -> bool:
+    """Whether *command* runs ``<memory_root>/.smriti/wake.py``, the script earlier
+    installs deployed, in any form: sh or PowerShell-encoded, by ``$HOME``, ``~`` or
+    a written-out path. A command that names the path at all counts."""
+    texts = [command]
+    encoded = ENCODED_RE.search(command)
+    if encoded:
+        try:
+            texts.append(base64.b64decode(encoded.group(1)).decode("utf-16-le"))
+        except (ValueError, UnicodeDecodeError):
+            pass
+    names = [(memory_root / ".smriti" / "wake.py").as_posix().lower()]
+    try:
+        names.append(f"{memory_root.relative_to(home).as_posix()}/.smriti/wake.py".lower())
+    except ValueError:
+        pass
+    return any(name in text.replace("\\", "/").lower() for text in texts for name in names)
+
+
 def _flags(found: str | None) -> tuple[str, ...]:
     return tuple(found.split()) if found else ()
 
@@ -376,5 +415,7 @@ __all__ = [
     "make_wake_hook_command",
     "parse_wake_command",
     "classify_wake_hook",
+    "hook_commands",
+    "runs_tree_wake",
     "woken_root",
 ]

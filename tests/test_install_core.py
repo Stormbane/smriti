@@ -9,6 +9,7 @@ stale shims (false negative). Pin all the branches.
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import io
 import json
@@ -198,25 +199,23 @@ EARLIER_BACKUP = ('#!/usr/bin/env python\n"""Backup helper for the memory tree.\
 ACTIVITY = 'touch "$HOME/.narada/.smriti/last-activity" 2>/dev/null || true'
 
 
-def _install(home: Path, root: Path) -> int:
-    """scripts/install.py for Claude Code, as a person reruns it, without a terminal."""
+def _install(home: Path, root: Path, *flags: str, harness: str = "claude_code") -> int:
+    """scripts/install.py, as a person reruns it, without a terminal."""
     path = Path(__file__).resolve().parents[1] / "scripts" / "install.py"
     spec = importlib.util.spec_from_file_location("smriti_install_script", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    result = module.main(["--harness", "claude_code", "--memory-root", str(root),
-                          "--projects-root", str(home / "no-projects"), "--no-capture"])
+    result = module.main(["--harness", harness, "--memory-root", str(root),
+                          "--projects-root", str(home / "no-projects"), "--no-capture",
+                          *flags])
     assert isinstance(result, int)
     return result
 
 
-def test_a_reinstall_moves_an_earlier_install_off_the_trees_code(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str]) -> None:
-    """The memory tree held the wake and the backup that ran every session start and
-    every hour. A reinstall rewrites the hook to the package's wake, in place and
-    once, and removes the two scripts, with no .bak (git history keeps them)."""
+def _earlier_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """A home whose Claude Code hook runs the tree's wake.py, and the tree with both
+    scripts an earlier install deployed: (home, root)."""
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
@@ -227,14 +226,126 @@ def test_a_reinstall_moves_an_earlier_install_off_the_trees_code(
     (root / ".smriti" / "wake.py").write_text(EARLIER_WAKE, encoding="utf-8")
     (root / ".smriti" / "backup.py").write_text(EARLIER_BACKUP, encoding="utf-8")
     (home / ".claude").mkdir()
-    settings = home / ".claude" / "settings.json"
-    settings.write_text(json.dumps({"hooks": {
+    (home / ".claude" / "settings.json").write_text(json.dumps({"hooks": {
         "SessionStart": [{"matcher": "", "hooks": [
             {"type": "command", "command": EARLIER_HOOK}]}],
         "UserPromptSubmit": [{"matcher": "", "hooks": [
             {"type": "command", "command": ACTIVITY}]}],
     }}), encoding="utf-8")
     (home / ".claude.json").write_text("{}", encoding="utf-8")
+    return home, root
+
+
+# Codex review of H15.8 (P1): wake.py goes only once no hook smriti knows runs it.
+
+def _kept(out: str, root: Path, why: str) -> bool:
+    return f"[wake] kept {root / '.smriti' / 'wake.py'}: {why}" in out
+
+
+@pytest.mark.parametrize("harness,flags", [("none", ()), ("claude_code", ("--skip-settings",))],
+                         ids=["core-only", "skip-settings"])
+def test_a_reinstall_that_leaves_the_hook_keeps_wake_py(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+        harness: str, flags: tuple[str, ...]) -> None:
+    home, root = _earlier_install(tmp_path, monkeypatch)
+    assert _install(home, root, *flags, harness=harness) == 0
+    out = capsys.readouterr().out
+    assert (root / ".smriti" / "wake.py").read_text(encoding="utf-8") == EARLIER_WAKE
+    settings = home / ".claude" / "settings.json"
+    assert _kept(out, root, f"a Claude Code hook in {settings} still runs it; rerun with "
+                            "--harness claude_code")
+    assert not (root / ".smriti" / "backup.py").exists()  # nothing outside the tree runs it
+
+
+def _codex_config(home: Path) -> Path:
+    """Codex's config with the wake hook an earlier install wrote (PowerShell's form)."""
+    script = ("$env:SMRITI_WAKE='1'; $env:SMRITI_ROOT=(Join-Path $HOME '.narada'); "
+              "$env:SMRITI_WAKE_FRAMING='codex-json'; "
+              "python (Join-Path $HOME '.narada/.smriti/wake.py')")
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    config = home / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "[[hooks.SessionStart]]\n"
+        'matcher = "startup|resume|clear|compact"\n'
+        "[[hooks.SessionStart.hooks]]\n"
+        'type = "command"\n'
+        f'command = "powershell.exe -NoProfile -NonInteractive -EncodedCommand {encoded}"\n',
+        encoding="utf-8")
+    return config
+
+
+def test_a_codex_hook_keeps_wake_py_until_codex_is_reinstalled(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    home, root = _earlier_install(tmp_path, monkeypatch)
+    config = _codex_config(home)
+
+    assert _install(home, root) == 0  # Claude Code only
+    out = capsys.readouterr().out
+    assert (root / ".smriti" / "wake.py").exists()
+    assert _kept(out, root, f"a Codex hook in {config} still runs it; rerun with "
+                            "--harness codex")
+
+    assert _install(home, root, harness="codex") == 0
+    out = capsys.readouterr().out
+    assert not (root / ".smriti" / "wake.py").exists()
+    assert f"[wake] removed {root / '.smriti' / 'wake.py'}: " in out
+
+
+def test_a_failed_harness_step_keeps_wake_py(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from smriti.integrations.claude_code import install as cc_install
+
+    home, root = _earlier_install(tmp_path, monkeypatch)
+    monkeypatch.setattr(cc_install, "patch_settings_json", lambda *a, **k: False)
+    assert _install(home, root) == 1
+    assert (root / ".smriti" / "wake.py").exists()
+
+
+def test_a_hook_config_that_cant_be_read_keeps_wake_py(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    home, root = _earlier_install(tmp_path, monkeypatch)
+    settings = home / ".claude" / "settings.json"
+    settings.write_text("{not json", encoding="utf-8")
+    assert _install(home, root, harness="none") == 0
+    out = capsys.readouterr().out
+    assert (root / ".smriti" / "wake.py").exists()
+    assert f"[wake] kept {root / '.smriti' / 'wake.py'}: {settings} can't be read" in out
+
+
+def test_a_hand_written_narada_p_that_runs_it_keeps_wake_py(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    home, root = _earlier_install(tmp_path, monkeypatch)
+    (home / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    mine = root / ".smriti" / "narada-p.sh"
+    # Hand-written: no "smriti" in its first 400 bytes, so the installer leaves it.
+    mine.write_text("#!/bin/sh\n" + "# Sam's own wrapper, with long notes\n" * 15
+                    + 'python "$HOME/.narada/.smriti/wake.py"\n', encoding="utf-8")
+    assert _install(home, root, harness="none") == 0
+    out = capsys.readouterr().out
+    assert (root / ".smriti" / "wake.py").exists()
+    assert _kept(out, root, f"{mine} still runs it")
+
+
+def test_with_no_hook_left_a_core_only_reinstall_removes_wake_py(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home, root = _earlier_install(tmp_path, monkeypatch)
+    (home / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    assert _install(home, root, harness="none") == 0
+    assert not (root / ".smriti" / "wake.py").exists()
+
+
+def test_a_reinstall_moves_an_earlier_install_off_the_trees_code(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """The memory tree held the wake and the backup that ran every session start and
+    every hour. A reinstall rewrites the hook to the package's wake, in place and
+    once, and removes the two scripts, with no .bak (git history keeps them)."""
+    home, root = _earlier_install(tmp_path, monkeypatch)
+    settings = home / ".claude" / "settings.json"
 
     assert _install(home, root) == 0
 

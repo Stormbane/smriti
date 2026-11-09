@@ -226,7 +226,7 @@ python scripts/install.py --harness none  # core memory setup only
 | Ask the privacy questions | `<entity>/.smriti/daylog.json` (`sources` only), `<entity>/.smriti/privacy.json` | Capture on or off; whether the backup remote is private ([above](#privacy-capture-and-the-backup-remote)) |
 | Copy the memory template | `<entity>/` from `memory_template/` | Empty identity tree (never overwrites existing files) |
 | Copy `narada-p.sh` | `<entity>/.smriti/narada-p.sh` | Wake-injecting wrapper for headless `claude -p`, run by hand. A smriti-managed copy is upgraded, keeping a `.pre-upgrade.bak` |
-| Remove `wake.py`, `backup.py` | `<entity>/.smriti/` | Copies an earlier install deployed; the wake and the backup run from the installed package now. A smriti-managed copy is removed (the tree's git history keeps it); a hand-written one is left, with a warning |
+| Remove `backup.py`, `wake.py` | `<entity>/.smriti/` | Copies an earlier install deployed; the wake and the backup run from the installed package now. A smriti-managed copy is removed (the tree's git history keeps it); a hand-written one is left, with a warning. `wake.py` goes at the end of a successful install, and only when no hook in `~/.claude/settings.json` or `~/.codex/config.toml` (nor `narada-p.sh`) still runs it; otherwise it stays, and the installer says which harness to reinstall |
 | Ensure `.smriti/` dir | `<entity>/.smriti/` | Smriti runtime state (index, metrics, `last-activity`) |
 | Create junctions | `<entity>/mirrors/{project}/auto-memory`, `/knowledge`, `/ai` | Per-project memory and knowledge access, for each project under the projects root |
 | Record the projects root | `<entity>/.smriti/install.json` | The next run links the same projects without `--projects-root` |
