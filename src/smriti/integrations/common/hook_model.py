@@ -15,7 +15,11 @@ brings back from git: a write or a restore could change what every session
 start ran. Such a hook, for this tree, is ours and DEFICIENT, so a
 reinstall turns it into the module form in place and doctor names the gap.
 One for another tree's ``wake.py`` is UNRELATED, as is a module-form hook
-whose SMRITI_ROOT names another tree.
+that wakes another tree. Which tree a module-form hook wakes is the one
+smriti's own rule chooses (:func:`smriti.core.tree.choose_root`) for the
+hook's SMRITI_ROOT or NARADA_ROOT, and, where it sets neither, for the
+environment as the installer sees it: a hook that names no root is not
+claimed by whichever root is being installed.
 
 This module is the single source of truth both sides share:
 
@@ -46,6 +50,8 @@ import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
+
+from smriti.core.tree import ROOT_VARIABLES, choose_root
 
 _VALID_FRAMINGS = ("raw", "codex-json")
 
@@ -174,7 +180,7 @@ _PS_WAKE_RE = re.compile(
     r"(?:&\s*'(?P<path>(?:[^']|'')*)'|(?P<bare>python3?(?:\.exe)?))\s+"
     rf"(?:{_FLAGS}{_MODULE}|\(Join-Path \$HOME '(?P<wake>[^']*wake\.py)'\))"
 )
-_SH_ENV_RE = re.compile(r'\b(SMRITI_\w+)=("([^"]*)"|\'([^\']*)\'|(\S+))')
+_SH_ENV_RE = re.compile(r'\b(SMRITI_\w+|NARADA_ROOT)=("([^"]*)"|\'([^\']*)\'|(\S+))')
 # The POSIX shell's interpreter, one word: single-quoted (the generated form;
 # an embedded quote is '"'"'), double-quoted, or unquoted and naming a python
 # (the bare python or python3 of earlier installs, or a path to one). Doctor
@@ -184,6 +190,11 @@ _SH_WAKE_RE = re.compile(
     rf'(?P<interp>{SH_INTERPRETER})\s+'
     rf'(?:{_FLAGS}{_MODULE}|"?\$HOME/(?P<wake>[^"\s]*wake\.py)"?)'
 )
+
+
+def _read_env(name: str) -> bool:
+    """Whether a hook's assignment of *name* is one smriti reads."""
+    return name.startswith("SMRITI_") or name in ROOT_VARIABLES
 
 
 def _normalize(rel: str) -> str:
@@ -231,10 +242,10 @@ def parse_wake_command(command: str) -> WakeHookSpec | None:
         interpreter = path.replace("''", "'") if path is not None else wake.group("bare")
         env: dict[str, str] = {}
         for name, value in _PS_ENV_LITERAL_RE.findall(script):
-            if name.startswith("SMRITI_"):
+            if _read_env(name):
                 env[name] = value
         for name, rel in _PS_ENV_JOINPATH_RE.findall(script):
-            if name.startswith("SMRITI_"):
+            if _read_env(name):
                 env[name] = f"$HOME/{_normalize(rel)}"
         return WakeHookSpec(wake_path=_normalize(wake.group("wake") or ""), env=env,
                             interpreter=interpreter, flags=_flags(wake.group("flags")))
@@ -255,15 +266,32 @@ def parse_wake_command(command: str) -> WakeHookSpec | None:
 _WAKE_ON = {"1", "full", "on", "true", "yes"}
 
 
-def _root_key(value: str, home: Path) -> str:
-    """A root as a hook's SMRITI_ROOT names it, for comparison: ``$HOME`` or
-    ``~`` expanded, in either slash and, on Windows, any case."""
+def _expand_home(value: str, home: Path) -> str:
+    """A root as a hook names it, ``$HOME`` or ``~`` at its start made *home*."""
     path = value.replace("\\", "/")
     for prefix in ("$HOME/", "${HOME}/", "~/"):
         if path.startswith(prefix):
-            path = f"{home.as_posix()}/{path[len(prefix):]}"
-            break
-    return os.path.normcase(os.path.normpath(path))
+            return f"{home.as_posix()}/{path[len(prefix):]}"
+    return path
+
+
+def _path_key(path: Path) -> str:
+    """*path* for comparison: resolved, in either slash and, on Windows, any case."""
+    return os.path.normcase(str(path.resolve()))
+
+
+def woken_root(env: dict[str, str], home: Path) -> tuple[Path, str]:
+    """The tree a module-form hook with the assignments *env* wakes, and the rule
+    that chose it (:func:`smriti.core.tree.choose_root`).
+
+    The hook's own SMRITI_ROOT and NARADA_ROOT, over the environment it runs
+    in, which is taken to be the one this process sees.
+    """
+    merged = {name: os.environ.get(name, "") for name in ROOT_VARIABLES}
+    for name in ROOT_VARIABLES:
+        if name in env:
+            merged[name] = _expand_home(env[name], home)
+    return choose_root(merged, home)
 
 
 def _keeps_cwd_off_the_path(flags: tuple[str, ...]) -> bool:
@@ -305,9 +333,11 @@ def classify_wake_hook(
         gaps.append(f"runs $HOME/{expected_wake} from the memory tree, "
                     f"not {WAKE_MODULE} from the installed package")
     else:
-        named = spec.env.get("SMRITI_ROOT", "")
-        if named and _root_key(named, home) != _root_key(memory_root.as_posix(), home):
-            return UNRELATED, f"wakes {named}, not $HOME/{memory_rel}"
+        woken, rule = woken_root(spec.env, home)
+        if _path_key(woken) != _path_key(memory_root):
+            named = spec.env.get("SMRITI_ROOT", "")
+            shown = named or f"{woken.as_posix()} ({rule}: the hook sets no SMRITI_ROOT)"
+            return UNRELATED, f"wakes {shown}, not $HOME/{memory_rel}"
         if not _keeps_cwd_off_the_path(spec.flags):
             gaps.append("runs without -P, so the current directory comes first on its "
                         "import path")
@@ -346,4 +376,5 @@ __all__ = [
     "make_wake_hook_command",
     "parse_wake_command",
     "classify_wake_hook",
+    "woken_root",
 ]

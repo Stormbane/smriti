@@ -216,10 +216,10 @@ class TestClassify:
         assert verdict == UNRELATED
         assert detail == "wakes $HOME/.tara, not $HOME/.narada"
 
-    @pytest.mark.parametrize("root", [f"{HOME.as_posix()}/.narada", "~/.narada", ""])
+    @pytest.mark.parametrize("root", [f"{HOME.as_posix()}/.narada", "~/.narada"])
     def test_a_module_hook_naming_this_tree_otherwise_is_ours(self, root):
-        """An absolute or ~ path to this tree, or no SMRITI_ROOT (the default
-        tree): ours, and brought to the canonical form, never a second hook."""
+        """An absolute or ~ path to this tree: ours, and brought to the canonical
+        form, never a second hook."""
         env = f'SMRITI_ROOT="{root}" ' if root else ""
         cmd = f"SMRITI_WAKE=1 {env}'{sys.executable}' -P -m smriti.wake"
         verdict, detail = _classify(cmd)
@@ -297,6 +297,94 @@ class TestClassify:
     def test_non_wake_hook_is_unrelated(self):
         verdict, _ = _classify("python ~/.claude/hooks/associative_recall.py")
         assert verdict == UNRELATED
+
+
+# --- a hook that names no root ---------------------------------------------
+# Codex review of H15.8 (P2): a module-form hook without SMRITI_ROOT wakes the
+# root smriti finds by its own rule (SMRITI_ROOT, NARADA_ROOT, ~/.narada if it
+# is a directory, else ~/.smriti), not whichever root is being installed.
+
+ROOTLESS = f"SMRITI_WAKE=1 '{sys.executable}' -P -m smriti.wake"
+
+
+@pytest.fixture()
+def rule_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A home with no root variable set, as the installer sees the environment."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("SMRITI_ROOT", raising=False)
+    monkeypatch.delenv("NARADA_ROOT", raising=False)
+    return home
+
+
+def _verdict(cmd: str, root: Path, home: Path) -> tuple[str, str]:
+    return classify_wake_hook(cmd, memory_root=root, home=home)
+
+
+def test_a_rootless_hook_serving_the_legacy_tree_is_not_claimed_by_another(
+        rule_home: Path) -> None:
+    (rule_home / ".narada").mkdir()
+    verdict, detail = _verdict(ROOTLESS, rule_home / ".second", rule_home)
+    assert verdict == UNRELATED
+    assert detail.startswith("wakes ") and ".narada" in detail
+    # Installing the tree it does wake: ours, and given its SMRITI_ROOT.
+    assert _verdict(ROOTLESS, rule_home / ".narada", rule_home) == (
+        DEFICIENT, "SMRITI_ROOT != $HOME/.narada")
+
+
+def test_a_rootless_hook_wakes_the_default_tree_without_a_legacy_one(rule_home: Path) -> None:
+    assert _verdict(ROOTLESS, rule_home / ".narada", rule_home)[0] == UNRELATED
+    assert _verdict(ROOTLESS, rule_home / ".smriti", rule_home)[0] == DEFICIENT
+
+
+def test_a_rootless_hook_follows_the_installers_smriti_root(
+        rule_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (rule_home / ".narada").mkdir()
+    monkeypatch.setenv("SMRITI_ROOT", str(rule_home / ".second"))
+    assert _verdict(ROOTLESS, rule_home / ".second", rule_home)[0] == DEFICIENT
+    assert _verdict(ROOTLESS, rule_home / ".narada", rule_home)[0] == UNRELATED
+
+
+def test_a_hooks_narada_root_names_its_tree(rule_home: Path,
+                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    cmd = f"SMRITI_WAKE=1 NARADA_ROOT=\"$HOME/.narada\" '{sys.executable}' -P -m smriti.wake"
+    assert _verdict(cmd, rule_home / ".second", rule_home)[0] == UNRELATED
+    assert _verdict(cmd, rule_home / ".narada", rule_home) == (
+        DEFICIENT, "SMRITI_ROOT != $HOME/.narada")
+    # SMRITI_ROOT, from the environment the hook runs in, wins over it.
+    monkeypatch.setenv("SMRITI_ROOT", str(rule_home / ".second"))
+    assert _verdict(cmd, rule_home / ".second", rule_home)[0] == DEFICIENT
+    assert _verdict(cmd, rule_home / ".narada", rule_home)[0] == UNRELATED
+
+
+def test_a_powershell_hooks_narada_root_is_read(rule_home: Path) -> None:
+    script = ("$env:SMRITI_WAKE='1'; $env:NARADA_ROOT=(Join-Path $HOME '.narada'); "
+              f"$env:SMRITI_WAKE_FRAMING='codex-json'; & '{sys.executable}' -P -m smriti.wake")
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    cmd = f"powershell.exe -NoProfile -NonInteractive -EncodedCommand {encoded}"
+    assert classify_wake_hook(cmd, memory_root=rule_home / ".second", home=rule_home,
+                              framing="codex-json")[0] == UNRELATED
+
+
+def test_installing_a_second_tree_leaves_a_rootless_hook_alone(rule_home: Path) -> None:
+    """The installer adds the second tree's hook beside the first's, which it keeps."""
+    from smriti.integrations.claude_code import install as cc_install
+
+    (rule_home / ".narada").mkdir()
+    (rule_home / ".claude").mkdir()
+    settings = rule_home / ".claude" / "settings.json"
+    settings.write_text(json.dumps({"hooks": {"SessionStart": [
+        {"matcher": "", "hooks": [{"type": "command", "command": ROOTLESS}]}]}}),
+        encoding="utf-8")
+
+    assert cc_install.patch_settings_json(rule_home / ".second", rule_home) is True
+
+    commands = [h["command"] for g in json.loads(settings.read_text(encoding="utf-8"))
+                ["hooks"]["SessionStart"] for h in g["hooks"]]
+    assert commands == [ROOTLESS, make_wake_hook_command(rule_home / ".second",
+                                                          home=rule_home)]
 
 
 # --- running the commands -------------------------------------------------

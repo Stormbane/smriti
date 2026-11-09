@@ -13,21 +13,27 @@ has distance 2; and so on.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 
-_ROOT_VARIABLES = ("SMRITI_ROOT", "NARADA_ROOT")
+ROOT_VARIABLES = ("SMRITI_ROOT", "NARADA_ROOT")  # in order: the first set wins
 DEFAULT_ROOT_NAME = ".smriti"
 LEGACY_ROOT_NAME = ".narada"  # the default root before 0.2
 
 
 def _choose_root() -> tuple[Path, str]:
     """The tree root and the rule that chose it (see :func:`tree_root_source`)."""
-    for name in _ROOT_VARIABLES:
-        value = os.environ.get(name)
+    return choose_root(os.environ, Path.home())
+
+
+def choose_root(env: Mapping[str, str], home: Path) -> tuple[Path, str]:
+    """The tree root the rules choose for the variables *env* and the home *home*,
+    and the rule that chose it: what a process with that environment uses."""
+    for name in ROOT_VARIABLES:
+        value = env.get(name)
         if value:
             return Path(value).expanduser().resolve(), name
-    home = Path.home()
     legacy = home / LEGACY_ROOT_NAME
     # Checked first, so an install made before 0.2 never moves to a new,
     # empty ~/.smriti, even when one appears beside it.
@@ -56,7 +62,7 @@ def tree_root_warning() -> str:
     With no variable set and both ``~/.narada`` and ``~/.smriti`` present,
     the legacy one is used and the other is ignored; say so.
     """
-    if any(os.environ.get(name) for name in _ROOT_VARIABLES):
+    if any(os.environ.get(name) for name in ROOT_VARIABLES):
         return ""
     home = Path.home()
     if (home / LEGACY_ROOT_NAME).is_dir() and (home / DEFAULT_ROOT_NAME).exists():
