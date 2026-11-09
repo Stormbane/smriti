@@ -4,7 +4,10 @@
 Vendored from zilliztech/memsearch (MIT License, (c) 2025 Zilliz Inc.)
 Upstream: https://github.com/zilliztech/memsearch/blob/main/src/memsearch/reranker.py
 Vendored on: 2026-04-12
-Modifications from upstream: None yet (verbatim copy).
+Modifications from upstream:
+  - A model with a pin in smriti's revisions.py (the default one) loads at
+    that commit on both backends: every Hub call names it. Upstream loaded
+    whatever the repository's main held.
 License: see smriti/NOTICE.md and smriti/src/smriti/_vendored/memsearch/LICENSE
 ---
 
@@ -118,22 +121,25 @@ def _load_onnx_model(model_name: str) -> _OnnxCachedModel:
     from huggingface_hub import hf_hub_download, list_repo_files
     from tokenizers import Tokenizer
 
+    from .revisions import pinned_revision
+
     repo_id = model_name
     onnx_file = None
     if model_name in _KNOWN_ONNX_MODELS:
         repo_id, onnx_file = _KNOWN_ONNX_MODELS[model_name]
+    revision = pinned_revision(model_name)  # smriti: None (main) for a model with no pin
 
-    repo_files = list(list_repo_files(repo_id))
+    repo_files = list(list_repo_files(repo_id, revision=revision))
     if onnx_file is None:
         onnx_file = _find_onnx_file(repo_id, repo_files)
 
     # Download external data file if present (e.g. model.onnx_data)
     data_file = onnx_file + "_data"
     if data_file in repo_files:
-        hf_hub_download(repo_id, data_file)
-    model_path = hf_hub_download(repo_id, onnx_file)
+        hf_hub_download(repo_id, data_file, revision=revision)
+    model_path = hf_hub_download(repo_id, onnx_file, revision=revision)
 
-    tok_path = hf_hub_download(repo_id, "tokenizer.json")
+    tok_path = hf_hub_download(repo_id, "tokenizer.json", revision=revision)
     tokenizer = Tokenizer.from_file(tok_path)
     tokenizer.enable_truncation(max_length=_MAX_RERANK_TOKENS)
     tokenizer.no_padding()
@@ -214,7 +220,11 @@ def _load_torch_model(model_name: str) -> Any:
 
     from sentence_transformers import CrossEncoder
 
-    model = CrossEncoder(model_name, max_length=_MAX_RERANK_TOKENS)
+    from .revisions import pinned_revision
+
+    # smriti: at the pinned commit; trust_remote_code stays at its default, off.
+    model = CrossEncoder(model_name, max_length=_MAX_RERANK_TOKENS,
+                         revision=pinned_revision(model_name))
     logger.info("Loaded PyTorch cross-encoder reranker: %s", model_name)
 
     with _torch_cache_lock:

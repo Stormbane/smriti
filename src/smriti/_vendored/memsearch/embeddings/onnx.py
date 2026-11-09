@@ -84,15 +84,23 @@ class OnnxEmbedding:
 
         Returns (tok_path, model_path).
         """
+        from ..revisions import pinned_revision
+
+        # smriti: every call names the commit the model is pinned to (None,
+        # the repository's main, for a model with no pin), so the cache and
+        # the Hub give the same files whatever main holds now.
+        revision = pinned_revision(model)
         # --- Attempt 1: offline from cache (no network at all) ---
         try:
-            tok_path = hf_hub_download(model, "tokenizer.json", local_files_only=True)
+            tok_path = hf_hub_download(model, "tokenizer.json", revision=revision,
+                                       local_files_only=True)
             # Try well-known ONNX filenames to avoid list_repo_files() network call
             model_path = None
             onnx_file = None
             for candidate in ("model_quantized.onnx", "model.onnx"):
                 try:
-                    model_path = hf_hub_download(model, candidate, local_files_only=True)
+                    model_path = hf_hub_download(model, candidate, revision=revision,
+                                                 local_files_only=True)
                     onnx_file = candidate
                     break
                 except Exception:
@@ -103,14 +111,15 @@ class OnnxEmbedding:
             import contextlib
 
             with contextlib.suppress(Exception):
-                hf_hub_download(model, onnx_file + "_data", local_files_only=True)
+                hf_hub_download(model, onnx_file + "_data", revision=revision,
+                                local_files_only=True)
             return tok_path, model_path
         except Exception:
             pass
 
         # --- Attempt 2: online download (first run or cache evicted) ---
-        tok_path = hf_hub_download(model, "tokenizer.json")
-        repo_files = list_repo_files(model)
+        tok_path = hf_hub_download(model, "tokenizer.json", revision=revision)
+        repo_files = list_repo_files(model, revision=revision)
         onnx_files = [f for f in repo_files if f.endswith(".onnx")]
         if not onnx_files:
             raise ValueError(f"No .onnx files found in {model}")
@@ -124,8 +133,8 @@ class OnnxEmbedding:
         # Also download external data file if present
         data_file = onnx_file + "_data"
         if data_file in repo_files:
-            hf_hub_download(model, data_file)
-        model_path = hf_hub_download(model, onnx_file)
+            hf_hub_download(model, data_file, revision=revision)
+        model_path = hf_hub_download(model, onnx_file, revision=revision)
         return tok_path, model_path
 
     @property

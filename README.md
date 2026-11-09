@@ -143,7 +143,7 @@ python scripts/install.py     # the same installer, with the same flags
 
 Then start a new Claude Code session. The briefing appears in the opening context, and `smriti_read`, `smriti_write` and `smriti_status` are among the tools.
 
-**The embedding model.** With the `read` extra, the first index, search or write that needs a model downloads `gpahal/bge-m3-onnx-int8` from the Hugging Face Hub into its cache (`~/.cache/huggingface/hub`, or under `HF_HOME`); no memory text is sent, and later loads make no request. Set `HF_HUB_OFFLINE=1` to forbid any request: a model not yet cached is then an error instead of a download, and search and writes fall back to keywords. That holds for the default `onnx` provider; an index made with the `local` provider (sentence-transformers) can't load even its cached model under `HF_HUB_OFFLINE=1` (sentence-transformers 4.1), so leave it unset there. [`docs/PRIVACY.md`](docs/PRIVACY.md#other-network-requests) lists what else leaves the machine.
+**The embedding model.** With the `read` extra, the first index, search or write that needs a model downloads `gpahal/bge-m3-onnx-int8` from the Hugging Face Hub into its cache (`~/.cache/huggingface/hub`, or under `HF_HOME`); no memory text is sent, and later loads make no request. It loads at a pinned commit, as do the `local` provider's model and the reranker `smriti read` uses (`src/smriti/_vendored/memsearch/revisions.py`), so a change to the model's repository doesn't change what runs; none of them runs code from its repository. Set `HF_HUB_OFFLINE=1` to forbid any request: a model not yet cached is then an error instead of a download, and search and writes fall back to keywords. That holds for the default `onnx` provider; an index made with the `local` provider (sentence-transformers) can't load even its cached model under `HF_HUB_OFFLINE=1` (sentence-transformers 4.1), so leave it unset there. [`docs/PRIVACY.md`](docs/PRIVACY.md#other-network-requests) lists what else leaves the machine.
 
 **The installer** (`python -m smriti.install`, or `python scripts/install.py` in a checkout):
 - **Asks the two [privacy](#privacy) questions** first, or takes the answers from `--capture`/`--no-capture` and `--remote-is-private`/`--remote-not-private`, and ends by saying what is captured, committed and pushed.
@@ -187,7 +187,7 @@ The embedding service reads three environment variables: `SMRITI_EMBED_SERVICE=0
 - **CLI:** 14 `smriti` subcommands: `backup`, `doctor`, `embed`, `eval`, `index`, `logd`, `metrics`, `morning`, `nightly`, `read`, `status`, `tasks`, `witness`, `write`. Nested: `embed` has `serve`, `status`, `stop`.
 - **MCP:** 9 core tools: `smriti_read`, `smriti_write`, `smriti_status`, `smriti_write_handoff`, `smriti_add_todo`, `smriti_record_finding`, `smriti_record_decision`, `smriti_record_feature`, `smriti_update_feature_status`.
 - **MCP, `reference` profile:** 4 more tools when it is enabled: `tell_suti`, `smriti_ask_suti`, `smriti_propose_goal_shift`, `smriti_resolve_outbox`.
-- **Tests:** 1124 test functions in 98 files under `tests/` (pytest collects more, because some are parametrised).
+- **Tests:** 1135 test functions in 99 files under `tests/` (pytest collects more, because some are parametrised).
 <!-- doc-facts:end -->
 
 **CLI.** `smriti --help` lists the commands; each takes `--help`.

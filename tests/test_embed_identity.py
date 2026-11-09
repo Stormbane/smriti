@@ -20,6 +20,7 @@ import pytest
 
 import smriti.store.indexer as indexer
 from smriti._vendored.memsearch.embeddings.stub import StubEmbedding
+from smriti._vendored.memsearch.revisions import PINNED_REVISIONS
 from smriti.embed import provider as embedding
 from smriti.embed.identity import (
     EmbeddingIdentity,
@@ -729,8 +730,10 @@ def test_a_local_providers_revision_is_its_hub_snapshot(
 
     snap = tmp_path / "models--sentence-transformers--all-MiniLM-L6-v2" / "snapshots" / "abc123"
 
-    def cached(repo: str, filename: str) -> str:
+    def cached(repo: str, filename: str, revision: str | None = None) -> str:
         assert repo == "sentence-transformers/all-MiniLM-L6-v2"
+        # The default model is looked up at the commit it loads at.
+        assert revision == PINNED_REVISIONS["all-MiniLM-L6-v2"]
         return str(snap / filename)
 
     monkeypatch.setattr(hub, "try_to_load_from_cache", cached)
