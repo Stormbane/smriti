@@ -132,4 +132,4 @@ def test_a_missing_template_is_reported_and_the_install_goes_on(
     core.install_wake_files(tmp_path / "root")
     out = capsys.readouterr().out
     assert "[memory] template not found (memory_template)" in out
-    assert out.count("[wake] template missing") == 3
+    assert out.count("[wake] template missing") == len(core.DEPLOYED)

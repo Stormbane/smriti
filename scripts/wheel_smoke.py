@@ -21,7 +21,9 @@ nothing from a checkout can stand in for the wheel:
    ``SMRITI_EMBED_SERVICE=0``);
 4. one ``smriti nightly`` (no witness) that captures a planted Claude Code
    transcript and digests it with the canned ``test_stub`` LLM, allowed by
-   ``SMRITI_ALLOW_TEST_STUB=1``.
+   ``SMRITI_ALLOW_TEST_STUB=1``;
+5. ``smriti backup`` in the memory root made a git repository (skipped
+   without git): the package's backup commits it.
 
 It stops at the first failure, printing the command and its output, and
 exits 1.
@@ -33,6 +35,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import venv
@@ -138,8 +141,9 @@ def smoke(wheel: Path, work: Path, extras: str) -> None:
     print(out)
     check((root / "identity.md").is_file(), "the memory template was copied")
     check((root / "journal").is_dir(), "its empty directories were made")
-    for name in ("wake.py", "backup.py", "narada-p.sh"):
+    for name in ("wake.py", "narada-p.sh"):
         check((root / ".smriti" / name).is_file(), f".smriti/{name} was deployed")
+    check(not (root / ".smriti" / "backup.py").exists(), ".smriti/backup.py was not deployed")
     record = json.loads((root / ".smriti" / "install.json").read_text(encoding="utf-8"))
     check(Path(record["projects_root"]) == projects, "the projects root was recorded", str(record))
     check((root / "mirrors" / "kite" / "ai").exists(), "the project's mirror was linked")
@@ -172,6 +176,19 @@ def smoke(wheel: Path, work: Path, extras: str) -> None:
           "with the canned LLM")
     status = json.loads((root / "log" / ".nightly-status.json").read_text(encoding="utf-8"))
     check(status.get("ok") is True, "the night is ok", json.dumps(status, indent=1))
+
+    print("== backup", flush=True)
+    if shutil.which("git") is None:
+        print("  skipped: git is not installed", flush=True)
+    else:
+        git_env = {**env, "GIT_AUTHOR_NAME": "Ari", "GIT_AUTHOR_EMAIL": "ari@example.com",
+                   "GIT_COMMITTER_NAME": "Ari", "GIT_COMMITTER_EMAIL": "ari@example.com"}
+        run(["git", "init", "-q"], cwd=root, env=git_env)
+        out = run([smriti, "backup"], cwd=work, env=git_env)
+        check("Backup (manual): commit ok; push not asked" in out,
+              "smriti backup committed the tree", out)
+        out = run(["git", "log", "-1", "--format=%s"], cwd=root, env=git_env)
+        check(out.strip() == "snapshot: manual", "with the backup's message", out)
 
 
 def main(argv: list[str] | None = None) -> int:

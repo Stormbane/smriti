@@ -102,12 +102,16 @@ def test_lock_replaced_after_inspection_is_kept(repo: Path,
 
 
 def test_stamp_writes_manifest_and_proof(repo: Path, calendars: list[str]) -> None:
+    night = _git(repo, "rev-parse", "HEAD")
     result = witness.run_witness(repo, "2026-10-20", push=False)
     assert result["ok"] is True
     assert result["calendars"] == len(witness.CALENDARS)
     manifest = repo / "witness" / "2026" / "2026-10-20.txt"
-    assert witness.read_manifest(manifest)["head"] == _git(repo, "rev-parse", "HEAD")
+    assert witness.read_manifest(manifest)["head"] == night
     assert manifest.with_name("2026-10-20.txt.ots").exists()
+    # The step's backup then commits the manifest and its proof.
+    assert _git(repo, "log", "-1", "--format=%s") == "snapshot: witness"
+    assert _git(repo, "status", "--porcelain") == ""
 
 
 def test_same_night_is_stamped_once(repo: Path, calendars: list[str]) -> None:
@@ -127,7 +131,10 @@ def test_too_few_calendars_fails_visibly(repo: Path, monkeypatch: pytest.MonkeyP
     assert "calendar" in str(result["error"])
 
 
-def test_verify_passes_then_catches_rewritten_history(repo: Path, calendars: list[str]) -> None:
+def test_verify_passes_then_catches_rewritten_history(
+        repo: Path, calendars: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    # No backup commit on top of the night's, so amending HEAD rewrites the night.
+    monkeypatch.setattr(witness, "_commit", lambda root, tag, push=False: {})
     witness.run_witness(repo, "2026-10-20", push=False)
     [check] = witness.verify(repo, offline=True)
     assert check.ok and check.in_history and check.digest_ok

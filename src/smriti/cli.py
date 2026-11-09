@@ -177,7 +177,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 
 def _print_backup_status(root: Path) -> None:
-    """The last backup commit and push, from the backup script's log."""
+    """The last backup commit and push, from the backup log."""
     try:
         from smriti.backup import backup_status
         from smriti.daylog.model import day_tz

@@ -33,8 +33,6 @@ def test_a_backup_that_cannot_run_warns_and_does_not_raise(
 
     from smriti import backup
 
-    (tmp_path / ".smriti").mkdir()
-    (tmp_path / ".smriti" / "backup.py").write_text("", encoding="utf-8")
     (tmp_path / ".git").mkdir()
 
     def cannot_start(*args: object, **kwargs: object) -> None:

@@ -1,15 +1,14 @@
 """The installer's privacy check names the remote the backup really pushes to.
 
-``narada/.smriti/backup.py`` pushes the current branch to its upstream
-(``origin`` when it has none, nothing on a detached HEAD). It is a
-standalone script, so ``smriti.install.privacy.backup_remote`` is a copy of
-its rule; these tests hold the two together on several repositories, check
-that a push lands exactly where the installer said it would, and that an
-answer about one remote isn't reused for another.
+The backup pushes the current branch to its upstream (``origin`` when it has
+none, nothing on a detached HEAD), by ``smriti.core.gitproc.push_target``,
+which the installer's ``smriti.install.privacy.backup_remote`` asks too.
+These tests check, on several repositories, that a push lands exactly where
+the installer said it would, and that an answer about one remote isn't
+reused for another.
 """
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import shutil
@@ -18,7 +17,6 @@ import sys
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
@@ -26,19 +24,9 @@ from smriti.install import core, privacy
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
 
-_SCRIPT = Path(__file__).resolve().parents[1] / "narada" / ".smriti" / "backup.py"
 ORIGIN = "git@example.com:sam/ari-memory.git"
 MIRROR = "https://example.com/sam/ari-public.git"
 NOW = datetime(2026, 11, 6, 9, 0, tzinfo=timezone.utc)
-
-
-@pytest.fixture()
-def backup() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("smriti_backup_script", _SCRIPT)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 @pytest.fixture(autouse=True)
@@ -164,31 +152,25 @@ SETUPS: dict[str, Setup] = {
 }
 
 
-def _script_remote(backup: ModuleType, repo: Path) -> str | None:
-    target = backup.push_target(repo)
-    if isinstance(target, str):
-        return None  # pushes nothing
-    args: list[str] = target[0]
-    return args[-2]  # push [-q] [-u] <remote> <refspec>
-
-
-@pytest.mark.parametrize("setup", list(SETUPS), ids=list(SETUPS))
-def test_the_installer_and_the_backup_agree_on_the_remote(
-        backup: ModuleType, tmp_path: Path, setup: str) -> None:
-    repo, _ = SETUPS[setup](tmp_path)
-    assert privacy.backup_remote(repo)[0] == _script_remote(backup, repo)
-
-
 @pytest.mark.parametrize("setup", list(SETUPS), ids=list(SETUPS))
 def test_the_status_knows_whether_the_backups_remote_has_a_destination(
-        backup: ModuleType, tmp_path: Path, setup: str) -> None:
+        tmp_path: Path, setup: str) -> None:
     """``smriti.backup`` reports a failed push as "nowhere to push" only when git knows
-    no destination for the remote the script pushed to: here, only without a remote."""
+    no destination for the remote the backup pushed to: here, only without a remote."""
     repo, _ = SETUPS[setup](tmp_path)
-    remote = _script_remote(backup, repo)
+    remote, _ = privacy.backup_remote(repo)
     if remote is None:
-        return  # the script pushes nothing, and logs why
+        assert setup == "detached HEAD"
+        return  # the backup pushes nothing, and logs why
     assert privacy.push_has_destination(repo, remote) == (setup != "no remote")
+
+
+def _back_up(repo: Path) -> None:
+    """One backup run with a push, as the hourly task's ``smriti backup --push`` starts it."""
+    env = {**os.environ, "SMRITI_ROOT": str(repo)}
+    env.pop("SMRITI_INTERNAL", None)
+    subprocess.run([sys.executable, "-P", "-m", "smriti.backup", "--root", str(repo),
+                    "--tag", "t", "--push"], env=env, check=True, timeout=120)
 
 
 @pytest.mark.parametrize("setup", ["upstream on another remote", "no upstream",
@@ -199,10 +181,7 @@ def test_the_backup_pushes_exactly_where_the_installer_says(tmp_path: Path, setu
     (repo / "note.md").write_text("hello\n", encoding="utf-8")
     said = {os.path.normcase(str(Path(u).resolve())) for u in privacy.inspect_git(repo).remote_urls}
 
-    env = {**os.environ, "SMRITI_ROOT": str(repo)}
-    env.pop("SMRITI_INTERNAL", None)
-    subprocess.run([sys.executable, str(_SCRIPT), "--tag", "t", "--foreground", "--push"],
-                   env=env, check=True, timeout=120)
+    _back_up(repo)
 
     head = _git(repo, "rev-parse", "HEAD")
     received = {os.path.normcase(str(Path(u).resolve())) for u in remotes
@@ -536,10 +515,7 @@ def test_the_backup_pushes_where_the_installer_says_with_a_global_remote(
     assert asked == [f"{privacy.REMOTE_QUESTION.format(url=state.remote_urls[0])} [y/n] "]
 
     (repo / "note.md").write_text("hello\n", encoding="utf-8")
-    env = {**os.environ, "SMRITI_ROOT": str(repo)}
-    env.pop("SMRITI_INTERNAL", None)
-    subprocess.run([sys.executable, str(_SCRIPT), "--tag", "t", "--foreground", "--push"],
-                   env=env, check=True, timeout=120)
+    _back_up(repo)
     head = _git(repo, "rev-parse", "HEAD")
     received = {os.path.normcase(str(Path(u).resolve())) for u in (fetch, push)
                 if head in _git(Path(u), "for-each-ref", "--format=%(objectname)")}

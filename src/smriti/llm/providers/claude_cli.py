@@ -118,9 +118,9 @@ class ClaudeCliProvider:
         if request.cli_args:
             cmd.extend(request.cli_args)
 
-        # SMRITI_INTERNAL=1 lets SessionEnd hooks (backup.py) skip on
-        # smriti-internal subprocesses so they don't pile up and fail
-        # the LLM call.
+        # SMRITI_INTERNAL=1 lets the backup (smriti.backup.trigger) and
+        # session hooks skip on smriti-internal subprocesses so they don't
+        # pile up and fail the LLM call.
         env = {**os.environ, "SMRITI_INTERNAL": "1"}
 
         # Run from the dedicated LLM workdir: claude -p writes a session

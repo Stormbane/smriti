@@ -1,14 +1,15 @@
-"""Trigger git backup of the memory tree, and read how backups went.
+"""Back the memory tree up with git, and read how backups went.
 
-Wraps the `.smriti/backup.py` script deployed into the memory root. The
-script is the one that actually runs `git commit` / `git push`. This
-module exists so Python callers (writer, CLI) don't duplicate subprocess
-boilerplate and all trigger points stay consistent.
+:func:`trigger` starts one backup run, ``python -m smriti.backup``
+(:mod:`smriti.backup.run`, which runs ``git commit`` and ``git push``), in a
+process of its own, and waits for it: ``smriti backup`` (the hourly task)
+and the nightly's witness step call it. The run's code is the installed
+package's; nothing in the memory tree is run.
 
-Fire-and-forget: a backup that can't run is logged as a warning and goes
-no further, and the next trigger catches up. The script appends every
-outcome to ``<git dir>/smriti-backup.jsonl``. :func:`trigger` reads back
-what its own run did (the nightly's witness step records it), and
+Best effort: a backup that can't run is logged as a warning and goes no
+further, and the next trigger catches up. The run appends every outcome to
+``<git common dir>/smriti-backup.jsonl``. :func:`trigger` reads back what
+its own run did (the nightly's witness step records it), and
 :func:`backup_status` the last commit and push, whoever ran them (the
 hourly task, the nightly), for ``smriti status`` and the nightly's status,
 so a failed push shows where the wake and the CLI look, not only in that log.
@@ -21,27 +22,29 @@ import os
 import sys
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from datetime import datetime, timezone, tzinfo
+from datetime import datetime, tzinfo
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-# subprocess is imported by the functions that run git or the script:
+# subprocess is imported by the functions that run git or the backup:
 # `smriti status` reads the backup log through this module and doesn't
 # import it (tests/test_import_costs.py).
 
-LOG_NAME = "smriti-backup.jsonl"  # the script's LOG_NAME
-_RUN_ENV = "SMRITI_BACKUP_RUN"  # the script puts it on each line of the run
+LOG_NAME = "smriti-backup.jsonl"  # in the git common dir
+_RUN_ENV = "SMRITI_BACKUP_RUN"  # the run puts it on each line it logs
+# What trigger runs, after the interpreter: -P keeps the current directory
+# (which may be the memory tree) off the import path.
+_WORKER: tuple[str, ...] = ("-P", "-m", "smriti.backup")
 _DETAIL_CHARS = 300
-_NO_OUTCOME = ("the run logged no outcome; the deployed backup script may be older "
-               "than smriti (the installer updates it)")
+_NO_OUTCOME = "the run logged no outcome"
 
 
 @dataclass(frozen=True)
 class BackupRun:
     """What one :func:`trigger` did, from the lines its run logged."""
 
-    ran: bool  # the script ran to its end
+    ran: bool  # the run went to its end
     # "ok", "failed", "nothing to commit", "skipped", "unknown" (the run logged no outcome)
     commit: str = ""
     push: str = ""  # "ok", "failed", "up to date", "skipped", "not asked", "unknown"
@@ -68,7 +71,7 @@ def trigger(
     root: Path | None = None,
     timeout: int = 900,
 ) -> BackupRun:
-    """Invoke the memory-tree backup script; returns what the run did.
+    """Run one backup of the memory tree (``python -m smriti.backup``); what it did.
 
     Parameters
     ----------
@@ -83,6 +86,9 @@ def trigger(
         Memory tree root. If omitted, resolves via tree_root(). Callers
         operating on non-default roots (tests, custom entities) must pass
         root explicitly so the backup runs in the right repo.
+    timeout:
+        How long to wait for the run. One still going then is left to
+        finish, never killed, and reported as not done.
     """
     try:
         if root is None:
@@ -91,40 +97,31 @@ def trigger(
         else:
             root = Path(root)
 
-        script = root / ".smriti" / "backup.py"
-        if not script.exists():
-            return BackupRun(ran=False, detail=f"no backup script at {script}")
-        # The script's own reasons to do nothing, which it doesn't log.
+        # Reasons to do nothing, which the run wouldn't log.
         if os.environ.get("SMRITI_INTERNAL"):
             return BackupRun(ran=False, detail="not run inside smriti's own LLM calls")
         if not (root / ".git").exists():
             return BackupRun(ran=False, detail=f"no git repository at {root}")
-        return _run_script(script, root, tag, push=push, timeout=timeout)
+        return _run(root, tag, push=push, timeout=timeout)
     except Exception as exc:  # noqa: BLE001 — best-effort; the next trigger catches up
         log.warning("backup (%s) did not run: %s", tag, exc)
         return BackupRun(ran=False, detail=f"did not run: {exc}"[:_DETAIL_CHARS])
 
 
-def _run_script(script: Path, root: Path, tag: str, *, push: bool, timeout: int) -> BackupRun:
+def _run(root: Path, tag: str, *, push: bool, timeout: int) -> BackupRun:
     import subprocess
     import uuid
 
-    # --foreground: callers (the nightly witness) need the commit to exist
-    # when this returns. Hooks call the script directly and get the
-    # detached default instead.
-    args = [sys.executable, str(script), "--tag", tag, "--foreground"]
+    args = [sys.executable, *_WORKER, "--root", str(root), "--tag", tag]
     if push:
         args.append("--push")
     run_id = uuid.uuid4().hex[:12]
     env = os.environ.copy()
     env["SMRITI_ROOT"] = str(root)
     env[_RUN_ENV] = run_id
-    log_path = backup_log_path(root)
-    start = _size(log_path)
-    started = _now_iso()
-    # Wait, but never kill: killing the script mid-run cuts off its
+    # Wait, but never kill: killing the run mid-way cuts off its
     # commit/push/logging, and a killed git leaves .git/*.lock behind.
-    # On timeout the script is left to finish on its own.
+    # On timeout the run is left to finish on its own.
     flags = 0
     if sys.platform == "win32":  # a statement, which mypy narrows on every platform
         flags = subprocess.CREATE_NO_WINDOW
@@ -140,57 +137,30 @@ def _run_script(script: Path, root: Path, tag: str, *, push: bool, timeout: int)
     except subprocess.TimeoutExpired:
         # Not a success: the commit and push may still fail. Never killed (above).
         return BackupRun(ran=False, detail=f"still running after {timeout}s; left to finish")
-    events = _events_of_run(log_path, run_id, start, started, tag)
+    events = _events_of_run(backup_log_path(root), run_id)
     if code != 0:
-        # The script exits 0 whatever git did, so this is the script itself
-        # failing (it couldn't start, or raised): what it logged first, if
-        # anything, and nothing it didn't log taken as done.
+        # A run exits 0 whatever git did, so this is the run itself failing
+        # (it couldn't start, or raised): what it logged first, if anything,
+        # and nothing it didn't log taken as done.
         done = _summarise(events, push=push, finished=False)
-        why = f"the backup script exited {code}" + (f"; {done.detail}" if done.detail else "")
+        why = f"the backup exited {code}" + (f"; {done.detail}" if done.detail else "")
         return BackupRun(ran=False, commit=done.commit, push=done.push,
                          detail=why[:_DETAIL_CHARS])
     return _summarise(events, push=push)
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _size(path: Path | None) -> int:
-    try:
-        return path.stat().st_size if path is not None else 0
-    except OSError:
-        return 0
-
-
-def _events_of_run(log_path: Path | None, run_id: str, start: int, started: str,
-                   tag: str) -> list[dict[str, object]]:
-    """The lines this run logged.
-
-    By the run id when the script writes one. An older script's lines carry
-    none: then the lines added since the run began (all of the log's lines
-    from its start time on, if the log was trimmed meanwhile), less the
-    tagged lines of other runs. Backups run one at a time, so those are this
-    run's, unless another run that was finishing as this one began logged
-    its push after that.
-    """
-    trimmed = _size(log_path) < start  # the script keeps the log's last lines only
-    events = _read_events(log_path, offset=0 if trimmed else start)
-    mine = [e for e in events if e.get("run") == run_id]
-    if mine:
-        return mine
-    if trimmed:
-        events = [e for e in events if str(e.get("at", "")) >= started]
-    return [e for e in events if not e.get("run") and e.get("tag", tag) in (tag, "")]
+def _events_of_run(log_path: Path | None, run_id: str) -> list[dict[str, object]]:
+    """The lines a run logged: those that carry its id."""
+    return [e for e in _read_events(log_path) if e.get("run") == run_id]
 
 
 def _summarise(events: list[dict[str, object]], *, push: bool,
                finished: bool = True) -> BackupRun:
     """What a run's lines say it did; a step it didn't log is not taken as done.
 
-    "nothing to commit" and "up to date" are lines of their own, so neither a
-    failed ``git status`` nor a script too old to log them reads as a
-    success: a finished run with no line for a step reports it "unknown".
+    "nothing to commit" and "up to date" are lines of their own, so a failed
+    ``git status`` doesn't read as a success, nor does a run whose lines are
+    lost: a finished run with no line for a step reports it "unknown".
     """
     commit, push_state = "", "not asked" if finished and not push else ""
     detail = ""
@@ -232,17 +202,18 @@ def _detail(event: dict[str, object]) -> str:
 # ── what the log says ─────────────────────────────────────────────────
 
 
-def git_common_dir(root: Path) -> Path | None:
-    """The repository's common git directory, where the backup log is; None without one.
+def git_dirs(root: Path) -> tuple[Path, Path] | None:
+    """The repository's git directory and its common one; None without a repository.
 
     ``.git`` is a directory, or in a linked worktree a file naming the
-    worktree's git directory, whose ``commondir`` names the common one.
-    Read from the files, as git would, without running git.
+    worktree's git directory, whose ``commondir`` names the common one, where
+    the backup's log and run lock are. Read from the files, as git would,
+    without running git.
     """
     dot = root / ".git"
     try:
         if dot.is_dir():
-            return dot
+            return dot, dot
         text = dot.read_text(encoding="utf-8").strip()
     except OSError:
         return None
@@ -253,8 +224,14 @@ def git_common_dir(root: Path) -> Path | None:
     try:
         common = Path((gitdir / "commondir").read_text(encoding="utf-8").strip())
     except OSError:
-        return gitdir
-    return common if common.is_absolute() else (gitdir / common).resolve()
+        return gitdir, gitdir
+    return gitdir, (common if common.is_absolute() else (gitdir / common).resolve())
+
+
+def git_common_dir(root: Path) -> Path | None:
+    """The repository's common git directory, where the backup log is; None without one."""
+    dirs = git_dirs(root)
+    return dirs[1] if dirs is not None else None
 
 
 def backup_log_path(root: Path) -> Path | None:
@@ -397,7 +374,7 @@ def backup_status(root: Path) -> BackupStatus:
     """The last commit and push in the backup log, and since when pushes fail.
 
     A push that failed because its remote isn't configured at all (no
-    upstream and no ``origin``: the script then tries ``origin``) is
+    upstream and no ``origin``: the run then tries ``origin``) is
     reported as skipped, not failed: such an install has nowhere to push,
     which isn't a failure of its backups. Git decides whether the remote is
     configured (:func:`_remote_configured`); it is asked only when the last

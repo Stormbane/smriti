@@ -1,7 +1,6 @@
-"""Tests for the deployed memory-tree backup script (narada/.smriti/backup.py)."""
+"""Tests for one backup run of the memory tree (``python -m smriti.backup``)."""
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import sys
@@ -12,16 +11,12 @@ from typing import Any
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parents[1] / "narada" / ".smriti" / "backup.py"
+import smriti.backup.run as backup_run
 
 
 @pytest.fixture()
 def backup() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("smriti_backup_script", _SCRIPT)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    return backup_run
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -75,34 +70,7 @@ def test_a_lock_replaced_after_inspection_is_not_deleted(
     assert (repo / ".git" / "index.lock").read_text(encoding="utf-8") == "live"
 
 
-@pytest.mark.parametrize("returncode,stdout,expect", [
-    (0, '"git.exe","1234","Console","1","50,000 K"\n', True),
-    (0, "INFO: No tasks are running which match the specified criteria.\n", False),
-    (1, "", True),  # the check itself failed: unknown counts as running
-])
-def test_git_running_trusts_only_a_successful_listing(
-        backup: ModuleType, monkeypatch: pytest.MonkeyPatch,
-        returncode: int, stdout: str, expect: bool) -> None:
-    import subprocess
-
-    monkeypatch.setattr(backup.os, "name", "nt")
-    monkeypatch.setattr(backup.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
-        a[0], returncode, stdout=stdout, stderr=""))
-    assert backup.git_running() is expect
-
-
-@pytest.mark.parametrize("returncode,expect", [(0, True), (1, False), (2, True), (3, True)])
-def test_pgrep_status_other_than_none_found_counts_as_running(
-        backup: ModuleType, monkeypatch: pytest.MonkeyPatch, returncode: int, expect: bool) -> None:
-    import subprocess
-
-    monkeypatch.setattr(backup.os, "name", "posix")
-    monkeypatch.setattr(backup.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
-        a[0], returncode, stdout=b"", stderr=b""))
-    assert backup.git_running() is expect
-
-
-# The run lock (H15.6): an OS lock held for the run, never a file whose
+# The run lock: an OS lock held for the run, never a file whose
 # existence is the lock. "Held" below is a RunLock; a refusal is its reason.
 
 
@@ -210,12 +178,10 @@ def test_a_lock_file_deleted_before_it_was_locked_is_let_go(
 
 
 _HOLDER = """
-import importlib.util, sys, time
+import sys, time
 from pathlib import Path
-spec = importlib.util.spec_from_file_location("held_backup", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-lock = mod.acquire_run_lock(Path(sys.argv[2]))
+from smriti.backup.run import acquire_run_lock
+lock = acquire_run_lock(Path(sys.argv[1]))
 print("busy" if isinstance(lock, str) else "held", flush=True)
 time.sleep(120)
 """
@@ -226,7 +192,7 @@ def test_a_lock_whose_holder_died_is_taken(backup: ModuleType, tmp_path: Path) -
     import subprocess
 
     repo = _repo(tmp_path)
-    proc = subprocess.Popen([sys.executable, "-c", _HOLDER, str(_SCRIPT), str(repo)],
+    proc = subprocess.Popen([sys.executable, "-c", _HOLDER, str(repo)],
                             stdout=subprocess.PIPE, text=True)
     try:
         assert proc.stdout is not None and proc.stdout.readline().strip() == "held"
@@ -252,8 +218,8 @@ def test_a_lock_whose_holder_died_is_taken(backup: ModuleType, tmp_path: Path) -
 def test_an_older_scripts_token_is_honoured_while_its_run_goes(
         backup: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         alive: bool, age_s: float, busy: bool) -> None:
-    """Before H15.6 the lock was the file holding "<pid> <hex>"; such a run
-    overlapping the upgrade still excludes the new script."""
+    """An older backup.py's lock was the file holding "<pid> <hex>"; such a run
+    overlapping the upgrade still excludes this one."""
     repo = _repo(tmp_path)
     (repo / ".git" / backup.RUN_LOCK_NAME).write_text("4242 cafe", encoding="ascii")
     old = time.time() - age_s
@@ -317,19 +283,6 @@ def test_run_lock_works_in_a_linked_worktree(backup: ModuleType, tmp_path: Path)
     backup.release_run_lock(second)
 
 
-@pytest.mark.parametrize("without_psutil", [False, True])
-def test_pid_alive_sees_this_process_and_not_a_finished_one(
-        backup: ModuleType, monkeypatch: pytest.MonkeyPatch, without_psutil: bool) -> None:
-    import subprocess
-
-    if without_psutil:  # exercise the ctypes / os.kill fallback that fresh installs use
-        monkeypatch.setitem(sys.modules, "psutil", None)
-    assert backup.pid_alive(os.getpid())
-    proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    proc.wait()
-    assert not backup.pid_alive(proc.pid)
-
-
 def _real_repo(tmp_path: Path) -> Path:
     import shutil
     import subprocess
@@ -353,37 +306,51 @@ def _commits(repo: Path) -> int:
     return int(out.stdout.strip() or 0)
 
 
-def _run_script(repo: Path, *args: str) -> float:
+def _run(repo: Path, *args: str) -> int:
+    """``python -m smriti.backup`` on *repo*, as trigger starts it; its exit code."""
     import subprocess
 
     env = {**os.environ, "SMRITI_ROOT": str(repo)}
     env.pop("SMRITI_INTERNAL", None)
-    start = time.monotonic()
-    subprocess.run([sys.executable, str(_SCRIPT), "--tag", "t", *args], env=env, check=True,
-                   timeout=120)
-    return time.monotonic() - start
+    return subprocess.run([sys.executable, "-P", "-m", "smriti.backup", "--root", str(repo),
+                           "--tag", "t", *args], env=env, timeout=120).returncode
 
 
-def test_default_run_detaches_and_the_worker_still_commits(backup: ModuleType,
-                                                           tmp_path: Path) -> None:
+def test_a_run_commits_before_returning_and_lets_go_of_its_lock(
+        backup: ModuleType, tmp_path: Path) -> None:
     repo = _real_repo(tmp_path)
-    _run_script(repo)
-    deadline = time.time() + 60
-    while _commits(repo) < 2 and time.time() < deadline:
-        time.sleep(0.5)
-    assert _commits(repo) == 2, "the detached worker never committed"
-    lock = backup.acquire_run_lock(repo)  # the worker let go of the run lock
-    while not _holds(backup, lock) and time.time() < deadline:
-        time.sleep(0.2)
-        lock = backup.acquire_run_lock(repo)
+    assert _run(repo) == 0
+    assert _commits(repo) == 2
+    lock = backup.acquire_run_lock(repo)
     assert _holds(backup, lock)
     backup.release_run_lock(lock)
+    assert json.loads((repo / ".git" / "smriti-backup.jsonl").read_text(
+        encoding="utf-8").splitlines()[-1])["event"] == "commit"
 
 
-def test_foreground_commits_before_returning(tmp_path: Path) -> None:
+def test_a_run_takes_the_memory_root_when_none_is_given(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _real_repo(tmp_path)
-    _run_script(repo, "--foreground")
+    monkeypatch.setenv("SMRITI_ROOT", str(repo))
+    assert backup_run.main(["--tag", "t"]) == 0
     assert _commits(repo) == 2
+
+
+def test_a_tree_that_is_no_repository_is_left_alone(tmp_path: Path) -> None:
+    assert backup_run.main(["--root", str(tmp_path), "--tag", "t"]) == 0
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_run_skipped_for_another_backup_logs_why(backup: ModuleType, tmp_path: Path) -> None:
+    repo = _real_repo(tmp_path)
+    held = backup.acquire_run_lock(repo)
+    try:
+        assert backup_run.main(["--root", str(repo), "--tag", "t"]) == 0
+    finally:
+        backup.release_run_lock(held)
+    assert _commits(repo) == 1
+    assert _log(repo)[-1] | {"at": ""} == {"at": "", "event": "skipped", "tag": "t",
+                                           "reason": backup.RUN_LOCK_BUSY}
 
 
 def test_push_happens_only_when_there_is_something_new(tmp_path: Path) -> None:
@@ -396,13 +363,13 @@ def test_push_happens_only_when_there_is_something_new(tmp_path: Path) -> None:
                       (["remote", "add", "origin", str(remote)], repo)):
         subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
 
-    _run_script(repo, "--foreground", "--push")  # commits note.md, pushes
-    _run_script(repo, "--foreground", "--push")  # nothing new: no network call
+    _run(repo, "--push")  # commits note.md, pushes
+    _run(repo, "--push")  # nothing new: no network call
     pushes = [e for e in _log(repo) if e.get("event") == "push"]
     assert [p["ok"] for p in pushes] == [True]
 
     (repo / "note.md").write_text("changed\n", encoding="utf-8")
-    _run_script(repo, "--foreground", "--push")
+    _run(repo, "--push")
     pushes = [e for e in _log(repo) if e.get("event") == "push"]
     assert [p["ok"] for p in pushes] == [True, True]
 
@@ -432,7 +399,7 @@ def _pushes(repo: Path) -> list[dict[str, object]]:
 
 def test_a_main_branch_is_pushed_to_its_upstream(tmp_path: Path) -> None:
     repo, remote = _main_repo(tmp_path)
-    _run_script(repo, "--foreground", "--push")
+    _run(repo, "--push")
     assert [p["ok"] for p in _pushes(repo)] == [True]
     assert _git(remote, "rev-parse", "main") == _git(repo, "rev-parse", "HEAD")
     assert _git(repo, "rev-list", "--count", "@{u}..HEAD") == "0"
@@ -440,14 +407,14 @@ def test_a_main_branch_is_pushed_to_its_upstream(tmp_path: Path) -> None:
 
 def test_a_main_branch_with_nothing_new_is_not_pushed(tmp_path: Path) -> None:
     repo, _ = _main_repo(tmp_path)
-    _run_script(repo, "--foreground", "--push")
-    _run_script(repo, "--foreground", "--push")  # nothing new: no push at all
+    _run(repo, "--push")
+    _run(repo, "--push")  # nothing new: no push at all
     assert [p["ok"] for p in _pushes(repo)] == [True]
 
 
 def test_the_upstream_is_honoured_when_its_name_differs(tmp_path: Path) -> None:
     repo, remote = _main_repo(tmp_path, upstream="trunk")
-    _run_script(repo, "--foreground", "--push")
+    _run(repo, "--push")
     assert [p["ok"] for p in _pushes(repo)] == [True]
     assert _git(remote, "rev-parse", "trunk") == _git(repo, "rev-parse", "HEAD")
     assert _git(remote, "branch", "--list", "main") == ""  # never a same-named guess
@@ -455,11 +422,11 @@ def test_the_upstream_is_honoured_when_its_name_differs(tmp_path: Path) -> None:
 
 def test_a_branch_without_an_upstream_gets_one_on_its_first_push(tmp_path: Path) -> None:
     repo, remote = _main_repo(tmp_path, upstream=None)
-    _run_script(repo, "--foreground", "--push")
+    _run(repo, "--push")
     assert [p["ok"] for p in _pushes(repo)] == [True]
     assert _git(remote, "rev-parse", "main") == _git(repo, "rev-parse", "HEAD")
     assert _git(repo, "rev-parse", "--abbrev-ref", "main@{u}") == "origin/main"
-    _run_script(repo, "--foreground", "--push")
+    _run(repo, "--push")
     assert len(_pushes(repo)) == 1  # and then compares against it
 
 
@@ -467,11 +434,11 @@ def test_a_detached_head_is_not_pushed_and_says_why(tmp_path: Path) -> None:
     repo, remote = _main_repo(tmp_path)
     before = _git(remote, "rev-parse", "main")
     _git(repo, "checkout", "-q", "--detach")
-    _run_script(repo, "--foreground", "--push")
+    _run(repo, "--push")
     assert _commits(repo) == 2  # the commit still happens
     assert _pushes(repo) == []
     skipped = [e for e in _log(repo) if e.get("event") == "push_skipped"]
-    assert len(skipped) == 1 and "detached HEAD" in str(skipped[0]["reason"])
+    assert len(skipped) == 1 and skipped[0]["reason"] == "HEAD is detached"
     assert _git(remote, "rev-parse", "main") == before
 
 
@@ -493,27 +460,6 @@ def test_no_locks_means_no_log_line(backup: ModuleType, tmp_path: Path) -> None:
     assert not (repo / ".git" / "smriti-backup.jsonl").exists()
 
 
-def test_timeout_leaves_the_process_running(backup: ModuleType, tmp_path: Path) -> None:
-    done = tmp_path / "done"
-    code, msg = backup.run_cmd(
-        [sys.executable, "-c",
-         f"import time; time.sleep(2); open({str(done)!r}, 'w').write('x')"],
-        tmp_path, timeout=0.3,
-    )
-    assert code == 124 and "left to finish" in msg
-    deadline = time.time() + 15
-    while not done.exists() and time.time() < deadline:
-        time.sleep(0.2)
-    assert done.exists(), "the timed-out process was killed"
-
-
-def test_run_cmd_returns_output_and_code(backup: ModuleType, tmp_path: Path) -> None:
-    code, out = backup.run_cmd(
-        [sys.executable, "-c", "import sys; print('hi'); sys.exit(3)"], tmp_path, timeout=30,
-    )
-    assert code == 3 and out == "hi"
-
-
 def test_log_is_bounded(backup: ModuleType, tmp_path: Path,
                         monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
@@ -523,5 +469,5 @@ def test_log_is_bounded(backup: ModuleType, tmp_path: Path,
         backup.log_event(repo, event="push", n=i)
     lines = _log(repo)
     # Bounded in bytes, so the line count depends on the platform's newline.
-    size = (backup.git_dirs(repo)[1] / backup.LOG_NAME).stat().st_size
+    size = (repo / ".git" / backup.LOG_NAME).stat().st_size
     assert size <= 2_000 + 100 and len(lines) >= 10 and lines[-1]["n"] == 99

@@ -31,7 +31,7 @@ from typing import Any
 from smriti.install import templates
 
 # What the installer copies (None when neither the package nor a checkout has it).
-SCRIPTS_DIR = templates.template(templates.SCRIPTS)  # wake.py, backup.py, narada-p.sh
+SCRIPTS_DIR = templates.template(templates.SCRIPTS)  # the scripts in DEPLOYED
 MEMORY_TEMPLATE = templates.template(templates.MEMORY_TEMPLATE)  # identity tree skeleton
 
 HOME = Path.home()
@@ -40,6 +40,14 @@ HOME = Path.home()
 # install: see resolve_projects_root.
 LEGACY_PROJECTS_ROOT = Path("C:/Projects")
 INSTALL_RECORD = "install.json"
+
+# The scripts the installer copies into <root>/.smriti/.
+DEPLOYED = ("wake.py", "narada-p.sh")
+# Scripts earlier installs copied there, which nothing runs any more, each
+# with what runs in its place: a reinstall removes smriti's copies.
+RETIRED = {
+    "backup.py": "`smriti backup` runs the installed package's backup",
+}
 
 
 def default_memory_root() -> Path:
@@ -338,27 +346,34 @@ def install_memory_template(memory_root: Path) -> None:
         print(f"[memory] {copied} files installed, {skipped} already existed")
 
 
+def _smriti_managed(data: bytes) -> bool:
+    """Whether a script in ``.smriti/`` is one smriti deployed: it names smriti early on.
+
+    "First 400 bytes mention 'smriti'": every template version shipped names
+    the project in its docstring, while a hand-rolled replacement would not.
+    """
+    return "smriti" in data[:400].decode("utf-8", errors="ignore").lower()
+
+
 def install_wake_files(memory_root: Path) -> None:
-    """Copy wake.py / backup.py / narada-p.sh into ``<memory_root>/.smriti/``.
+    """Copy the scripts in :data:`DEPLOYED` into ``<memory_root>/.smriti/``,
+    and remove the :data:`RETIRED` ones an earlier install put there.
 
-    Auto-upgrades smriti-managed scripts in place. The detection rule is
-    "first 400 bytes mention 'smriti'" — cheap and effective because every
-    template version we've ever shipped names the project in its docstring,
-    while a genuinely hand-rolled replacement would not. When upgrading we
-    drop a ``.pre-upgrade.bak`` next to the file so nothing is lost.
-
-    Hand-customized files (no 'smriti' marker) are left alone with a
-    warning. ``narada-p.sh`` and other future templates use the same path.
+    Auto-upgrades smriti-managed scripts in place (:func:`_smriti_managed`).
+    When upgrading we drop a ``.pre-upgrade.bak`` next to the file so
+    nothing is lost. Hand-customized files (no 'smriti' marker) are left
+    alone with a warning.
     """
     memory_root.mkdir(parents=True, exist_ok=True)
     (memory_root / ".smriti").mkdir(parents=True, exist_ok=True)
-    names = ("wake.py", "backup.py", "narada-p.sh")
+    for name, instead in RETIRED.items():
+        _remove_retired(memory_root / ".smriti" / name, instead)
     scripts = SCRIPTS_DIR
     if scripts is None:
-        for name in names:
+        for name in DEPLOYED:
             print(f"[wake] template missing: {templates.SCRIPTS}/{name}")
         return
-    files = [(scripts / name, memory_root / ".smriti" / name) for name in names]
+    files = [(scripts / name, memory_root / ".smriti" / name) for name in DEPLOYED]
     for src, dst in files:
         if not src.exists():
             print(f"[wake] template missing: {src}")
@@ -380,10 +395,7 @@ def install_wake_files(memory_root: Path) -> None:
             print(f"[wake] {dst.name} up to date")
             continue
 
-        # Marker check on the first 400 bytes (covers the docstring of any
-        # smriti-managed template we've shipped).
-        head = dst_bytes[:400].decode("utf-8", errors="ignore").lower()
-        if "smriti" not in head:
+        if not _smriti_managed(dst_bytes):
             print(
                 f"[wake] {dst.name} differs from template but is not "
                 "smriti-managed (no 'smriti' marker in head); leaving untouched"
@@ -398,6 +410,34 @@ def install_wake_files(memory_root: Path) -> None:
             continue
         shutil.copy2(src, dst)
         print(f"[wake] upgraded {dst.name} (backup: {backup.name})")
+
+
+def _remove_retired(path: Path, instead: str) -> None:
+    """Remove a script an earlier install deployed and nothing runs any more.
+
+    Executable code in the memory tree is code that a restore of the tree, or
+    a write to it, could change. A smriti-managed copy (:func:`_smriti_managed`)
+    is removed without a ``.bak``: the tree is usually a git repository that
+    tracks ``.smriti/``, so its history keeps the copy. A hand-written one is
+    left where it is, with a warning that nothing runs it.
+    """
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        print(f"[wake] {path} can't be read ({exc}); left where it is, and nothing runs it")
+        return
+    if not _smriti_managed(data):
+        print(f"[wake] {path} is not smriti-managed (no 'smriti' marker in head), so it is "
+              f"left where it is, but nothing runs it any more: {instead}")
+        return
+    try:
+        path.unlink()
+    except OSError as exc:
+        print(f"[wake] {path} couldn't be removed ({exc}); nothing runs it any more")
+        return
+    print(f"[wake] removed {path}: {instead}")
 
 
 # ── Top-level core entry point ──────────────────────────────────────

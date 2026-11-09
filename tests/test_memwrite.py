@@ -60,6 +60,10 @@ ALLOWED: dict[tuple[str, str], str] = {
         "the metrics log: event names, sizes and timings, the write's source masked first",
     ("smriti/witness.py", "write_manifest"): "the witness manifest: a commit and tree hash",
     ("smriti/witness.py", "_save"): "the OpenTimestamps proof of that manifest's hash",
+    ("smriti/backup/run.py", "log_event"): "the backup's log, in the git directory",
+    ("smriti/backup/run.py", "acquire_run_lock"): "the backup's run lock, in the git directory",
+    ("smriti/backup/run.py", "_take"): "the backup's run lock, in the git directory",
+    ("smriti/core/gitproc.py", "run_cmd"): "a temp file holding a command's output",
     ("smriti/llm/providers/claude_cli.py", "ClaudeCliProvider.call"):
         "the call's system prompt, in the isolated LLM work directory",
     ("smriti/llm/workdir.py", "*"): "the isolated LLM work directory's settings",

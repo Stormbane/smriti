@@ -79,7 +79,7 @@ def clear_stale_lock(root: Path, *, max_age_s: float = _STALE_LOCK_S) -> bool:
     git that died mid-commit. Left alone it silently blocks every later
     backup, for as long as it stays. Age alone isn't proof,
     though: it is removed only when no git process is running and the lock
-    is still the one that was inspected, the same rule ``backup.py`` uses.
+    is still the one that was inspected, the same rule the backup run uses.
     """
     from smriti.core.gitproc import git_running
 

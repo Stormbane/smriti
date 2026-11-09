@@ -117,7 +117,7 @@ class GitState:
     no_push: str = ""  # why the backup pushes nothing at all (a detached HEAD), else ""
     log_ignored: bool = False  # git ignores the day-log files capture will write
     # Day-log files git already tracks. An ignore rule doesn't untrack them,
-    # and backup.py's `git add -A` keeps committing their changes.
+    # and the backup's `git add -A` keeps committing their changes.
     log_tracked: int = 0
     # Day-log files on disk, not ignored and not yet committed: written
     # before the first backup, they go with the next one, capture on or off.
@@ -621,10 +621,10 @@ def _push_urls(root: Path, remote: str) -> list[str]:
 
 
 def inspect_git(root: Path) -> GitState:
-    """The repository, the remote ``backup.py`` pushes to (:func:`backup_remote`)
+    """The repository, the remote the backup pushes to (:func:`backup_remote`)
     and its push URLs, and how git treats the day-log: which of it is
     committed, and whether git-crypt is asked to encrypt it."""
-    if not (root / ".git").exists():  # backup.py's own test for a repository
+    if not (root / ".git").exists():  # the backup's own test for a repository
         return GitState(is_repo=False)
     try:
         remote, no_push = backup_remote(root)

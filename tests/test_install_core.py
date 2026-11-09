@@ -1,10 +1,10 @@
 """Tests for src/smriti/install/core.py.
 
-The Phase 9 install_wake_files upgrade logic decides whether to
-overwrite an existing wake.py / backup.py / narada-p.sh on re-install.
-Getting the rule wrong either nukes user customizations (false
-positive) or strands users on stale shims (false negative). Pin all
-four branches.
+The install_wake_files upgrade logic decides whether to overwrite a
+deployed script on re-install, and whether to remove one an earlier
+install deployed that nothing runs any more. Getting the rule wrong
+either nukes user customizations (false positive) or strands users on
+stale shims (false negative). Pin all the branches.
 """
 
 from __future__ import annotations
@@ -107,28 +107,79 @@ class TestInstallWakeFilesUpgradePath:
         """If a template file disappears we should log and continue,
         not crash mid-install."""
         memory_root = tmp_path / "narada"
-        # Point SCRIPTS_DIR at a directory missing the wake template.
+        # Point SCRIPTS_DIR at a directory missing one of the templates.
         broken_templates = tmp_path / "broken" / ".smriti"
         broken_templates.mkdir(parents=True)
-        # Only backup.py exists; wake.py + narada-p.sh missing.
-        (broken_templates / "backup.py").write_text(
-            "# smriti backup\n", encoding="utf-8"
-        )
+        (broken_templates / "present.sh").write_text("# smriti\n", encoding="utf-8")
         monkeypatch.setattr(core, "SCRIPTS_DIR", broken_templates)
+        monkeypatch.setattr(core, "DEPLOYED", ("absent.sh", "present.sh"))
 
         core.install_wake_files(memory_root)
         out = capsys.readouterr().out
 
         # Behavior: prints "template missing" for the absent file,
-        # continues to install backup.py.
-        assert "template missing" in out
-        assert (memory_root / ".smriti" / "backup.py").exists()
+        # continues to install the present one.
+        assert "template missing" in out and "absent.sh" in out
+        assert (memory_root / ".smriti" / "present.sh").exists()
 
     def test_creates_smriti_dir_if_missing(self, tmp_path):
         memory_root = tmp_path / "narada"
         assert not memory_root.exists()
         core.install_wake_files(memory_root)
         assert (memory_root / ".smriti").is_dir()
+
+
+class TestRetiredScriptsAreRemoved:
+    """Scripts an earlier install deployed and nothing runs any more."""
+
+    def test_a_smriti_managed_copy_is_removed_and_said_so(self, tmp_path, capsys):
+        smriti_dir = tmp_path / "ari" / ".smriti"
+        smriti_dir.mkdir(parents=True)
+        for name in core.RETIRED:
+            (smriti_dir / name).write_text(f'"""{name}: a smriti script."""\n',
+                                           encoding="utf-8")
+
+        core.install_wake_files(tmp_path / "ari")
+        out = capsys.readouterr().out
+
+        for name, instead in core.RETIRED.items():
+            assert not (smriti_dir / name).exists()
+            assert f"removed {smriti_dir / name}: {instead}" in out
+        # git history keeps the copy: no .bak in the tree.
+        assert not [p for p in smriti_dir.iterdir() if p.name.endswith(".bak")]
+
+    def test_a_hand_written_one_is_left_with_a_warning(self, tmp_path, capsys):
+        smriti_dir = tmp_path / "ari" / ".smriti"
+        smriti_dir.mkdir(parents=True)
+        mine = "# Sam's own backup\nprint('hi')\n"
+        for name in core.RETIRED:
+            (smriti_dir / name).write_text(mine, encoding="utf-8")
+
+        core.install_wake_files(tmp_path / "ari")
+        out = capsys.readouterr().out
+
+        for name in core.RETIRED:
+            assert (smriti_dir / name).read_text(encoding="utf-8") == mine
+            assert f"{smriti_dir / name} is not smriti-managed" in out
+        assert "nothing runs it any more" in out
+
+    def test_none_left_says_nothing(self, tmp_path, capsys):
+        core.install_wake_files(tmp_path / "ari")
+        assert "removed" not in capsys.readouterr().out
+
+    def test_retired_copies_go_even_without_templates(self, tmp_path, monkeypatch):
+        smriti_dir = tmp_path / "ari" / ".smriti"
+        smriti_dir.mkdir(parents=True)
+        for name in core.RETIRED:
+            (smriti_dir / name).write_text("# smriti\n", encoding="utf-8")
+        monkeypatch.setattr(core, "SCRIPTS_DIR", None)
+        core.install_wake_files(tmp_path / "ari")
+        assert not any((smriti_dir / name).exists() for name in core.RETIRED)
+
+    def test_no_retired_script_is_deployed(self):
+        assert not set(core.RETIRED) & set(core.DEPLOYED)
+        assert core.SCRIPTS_DIR is not None
+        assert not any((core.SCRIPTS_DIR / name).exists() for name in core.RETIRED)
 
 
 class TestPlatformHelpers:
