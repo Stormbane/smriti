@@ -45,6 +45,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from smriti.core.gitproc import push_target
 from smriti.daylog.config import SourceSpec, load_config
 
 GIT_CRYPT_URL = "https://github.com/AGWA/git-crypt"
@@ -580,30 +581,18 @@ def _configured_push_urls(root: Path, remote: str) -> list[str]:
 
 
 def backup_remote(root: Path) -> tuple[str | None, str]:
-    """The remote ``backup.py`` pushes to, or (None, why) when it pushes nothing.
+    """The remote the backup pushes to, or (None, why) when it pushes nothing.
 
-    The rule of ``push_target`` in ``narada/.smriti/backup.py``, which is a
-    standalone script and can't import this, so the two are copies that a
-    test holds together: the current branch's upstream remote when it has
-    an upstream (``branch.<b>.remote`` and ``branch.<b>.merge``), otherwise
-    ``origin``; a detached HEAD isn't pushed. Raises SubprocessError when
-    git can't say what HEAD is.
+    The backup's own rule, :func:`smriti.core.gitproc.push_target`: the
+    current branch's upstream remote when it has an upstream
+    (``branch.<b>.remote`` and ``branch.<b>.merge``), otherwise ``origin``;
+    a detached HEAD isn't pushed. Raises SubprocessError when git can't say
+    what HEAD is.
     """
-    head = _git(root, "symbolic-ref", "-q", "HEAD")
-    ref = head.stdout.strip()
-    if head.returncode == 1:
-        return None, "HEAD is detached"
-    if head.returncode != 0:
-        raise subprocess.SubprocessError(head.stderr.strip() or "git symbolic-ref failed")
-    if not ref.startswith("refs/heads/"):
-        return None, f"HEAD is on {ref}, not a branch"
-    branch = ref[len("refs/heads/"):]
-    remote = _git(root, "config", "--get", f"branch.{branch}.remote")
-    merge = _git(root, "config", "--get", f"branch.{branch}.merge")
-    if (remote.returncode == 0 and merge.returncode == 0
-            and remote.stdout.strip() and merge.stdout.strip()):
-        return remote.stdout.strip(), ""
-    return "origin", ""
+    target = push_target(root)
+    if isinstance(target, str):
+        return None, target
+    return target.remote, ""
 
 
 def _push_urls(root: Path, remote: str) -> list[str]:
