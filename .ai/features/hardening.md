@@ -696,10 +696,37 @@ a recheck.
   copies of the reference tree, a game running on the machine): MCP start,
   reads, the wake, index and memory at parity, the top 5 and the wake text
   the same; `smriti status` and writes within run-to-run noise (12 alternating
-  `status` runs: 247.5 against 254 ms). Waiting on Suti: H15.8, H15.9 and
-  H15.12; a LongMemEval-S rerun to check H15.10 and H15.11; and a reinstall
-  of the reference install to refresh the hook command and the deployed
-  `wake.py` and `backup.py`.
+  `status` runs: 247.5 against 254 ms).
+  Suti's decisions (2026-11-09): H15.8 and H15.9 yes, H15.12 left until it can
+  be tested against digests, the LongMemEval-S rerun not yet.
+  - **H15.9** done (fast-forwarded to `c826a92`, CI green): the onnx default,
+    the local fallback and the reranker load at pinned commits (the live
+    cache's, so no index re-embeds), and the local provider runs no
+    repository code. Codex found nothing but the doc counts.
+  - **H15.8** done (merged by `cfe717d`, CI green): the wake hook runs
+    `python -P -m smriti.wake` and the backup runs from the package; a
+    reinstall upgrades the old hook in place, removes a deployed `backup.py`,
+    and removes `wake.py` last, once no hook still runs it. Codex found three
+    real bugs, each fixed with a test and rechecked: `wake.py` deleted while a
+    skipped or other harness's hook still ran it; a rootless module hook
+    claimed by another tree's install; a hook config that isn't UTF-8
+    crashing the install.
+  - **The reference install's own scripts in the tree** (Suti: move them to
+    prana): the fan-out to Suti and its Telegram channel are prana's `python
+    -m prana.notify` (prana `briefing`, `8f3c790`..`e5ee664`), which
+    `notify_cmd` names; the profile has no fallback to a tree script and
+    knows the module as level-aware (`bc69184`); the session-end reminder is
+    `python -P -m smriti_reference.session_end` (`06dc08d`, `27966e2`, a UTF-8
+    fix from Codex's review). CI green at `27966e2`.
+  - **Reinstalled** (2026-11-10, Claude Code then Codex): both wake hooks run
+    the package, `wake.py` and `backup.py` are gone, and the three hand-wired
+    scripts are retired from `.smriti/hooks/`; the tree holds no code that
+    runs but the hand-run `narada-p.sh`. Codex's hand-wired SessionEnd hook
+    ran the tree's `backup.py` detached; it was removed rather than repointed,
+    since `smriti backup` runs in the foreground and the hourly task covers
+    it. Checked live: the wake hook's briefing, `smriti doctor` for both
+    harnesses (all hook checks pass), and a `log`-level row through the new
+    sender.
 - **H14.7 done** (2026-11-08, `hardening/h14b`; not yet reviewed or merged). Three
   removals, each its own commit with its tests; the code is in the git history.
   - The private store: `smriti.private`, the CLI's init on every command,
