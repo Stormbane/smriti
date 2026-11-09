@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -288,12 +289,32 @@ def _fake_wake(home: Path) -> Path:
     return root
 
 
-def _ran(out: subprocess.CompletedProcess[str], root: Path) -> None:
+def _ran(out: subprocess.CompletedProcess[str], root: Path, *, linked: bool = True) -> None:
     assert out.returncode == 0, out.stderr
     report = json.loads(out.stdout)
-    assert LINK_NAME in report["executable"]
+    if linked:  # reached through the link, as the interpreter reports itself
+        assert LINK_NAME in report["executable"]
     assert Path(report["root"]) == root
     assert report["wake"] == "1"
+
+
+def _wrapped_interpreter(tmp_path: Path) -> tuple[str, Path]:
+    """A ``python`` in a directory named :data:`LINK_NAME` that leaves a mark
+    and then runs this interpreter: proof the command ran that very path.
+
+    (A macOS framework build reports its resolved path as ``sys.executable``
+    whatever path started it, so the executable can't show the link there.)
+    """
+    folder = tmp_path / LINK_NAME
+    folder.mkdir()
+    mark = tmp_path / "ran-the-named-interpreter"
+    wrapper = folder / "python"
+    wrapper.write_text(
+        f"#!/bin/sh\n: > {shlex.quote(str(mark))}\nexec {shlex.quote(sys.executable)} \"$@\"\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    return str(wrapper), mark
 
 
 @pytest.mark.skipif(sys.platform == "win32" or shutil.which("sh") is None,
@@ -301,13 +322,14 @@ def _ran(out: subprocess.CompletedProcess[str], root: Path) -> None:
 def test_the_sh_form_runs_the_named_interpreter(tmp_path: Path) -> None:
     home = tmp_path / "home"
     root = _fake_wake(home)
-    python = _linked_interpreter(tmp_path)
+    python, mark = _wrapped_interpreter(tmp_path)
     cmd = make_wake_hook_command(root, home=home, interpreter=python)
 
     out = subprocess.run(["sh", "-c", cmd], env={**os.environ, "HOME": str(home)},
                          capture_output=True, text=True, timeout=60)
 
-    _ran(out, root)
+    _ran(out, root, linked=False)
+    assert mark.exists()
 
 
 @pytest.mark.skipif(sys.platform != "win32" or shutil.which("powershell.exe") is None,
