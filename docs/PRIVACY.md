@@ -8,8 +8,8 @@ how to keep it unreadable there.
 
 ## What is pushed in the clear
 
-The backup (`<root>/.smriti/backup.py`, run by the hourly `smriti-backup`
-task and by the nightly witness step) runs `git add -A`, commits, and
+The backup (`smriti backup`, run by the hourly `smriti-backup` task, and
+the nightly witness step) runs `git add -A`, commits, and
 pushes the current branch to its upstream (`origin` and the same branch
 name when it has none yet; a detached HEAD isn't pushed): to every push
 URL that remote has, not only the first. Whatever git tracks reaches the
@@ -39,7 +39,8 @@ the memory template's `.gitignore`, that is:
 - **Configuration and session files under `.smriti/`:** `daylog.json`
   (names, `location`, `notify_cmd`), `privacy.json` (the installer's
   record of your answers), `wake-context.md`, a pending handoff and its
-  archive, and the scripts `wake.py` and `backup.py`.
+  archive, and the script `narada-p.sh` (and, until a reinstall removes
+  them, the `wake.py` and `backup.py` an earlier install copied there).
 - **Witness manifests** under `witness/`.
 
 Never pushed, because the template's `.gitignore` excludes it: the search
@@ -106,7 +107,7 @@ Do one of these before the backups run (`smriti tasks install`):
   ```
 
   A new clone needs `git-crypt unlock <key file>` before its files can be
-  read, `wake.py` included. Until then the clone has no git-crypt filter
+  read. Until then the clone has no git-crypt filter
   configured, and git commits files marked `filter=git-crypt` in
   plaintext, because it passes an unconfigured filter straight through.
   The same goes for a `.gitattributes` copied into a tree where

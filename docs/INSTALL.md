@@ -30,26 +30,29 @@ any `~/.<entity>/` root) wakes up with:
 - `smriti_read` / `smriti_write` / `smriti_status` as first-class MCP
   tools in every session
 
-The transport is a `SessionStart` hook that runs `wake.py` from the
-entity root's `.smriti/` dir; the core sections are fixed in
-`src/smriti/wake/briefing.py`. The hook runs it with the python that ran
-the installer, by its absolute path, as the MCP registration does: a bare
-`python` is whichever one the harness's PATH finds first, which may not
-have smriti. Installs before hardening H15.1 wrote a bare `python`; rerun
-the installer to pin it (`smriti doctor` names the gap). If the python
-running `wake.py` can't import smriti, the briefing is missing and
-`wake.py` says so in one line on stderr, exiting 1: Claude Code shows that
-line as a hook error and Codex reports a hook failure, and neither stops
-the session. Per-project access is via directory
-junctions under `<entity>/mirrors/{project}/`. The memory search tool is
-registered as an MCP server in `~/.claude.json`.
+The transport is a `SessionStart` hook that runs the installed
+package's wake, `<python> -P -m smriti.wake`; the core sections are fixed
+in `src/smriti/wake/briefing.py`. Nothing in the memory tree is run, and
+`-P` keeps the current directory (which may be the tree) off the import
+path. The hook names the python that ran the installer, by its absolute
+path, as the MCP registration does: a bare `python` is whichever one the
+harness's PATH finds first, which may not have smriti. Installs before
+hardening H15.1 wrote a bare `python`, and before H15.8 ran
+`<root>/.smriti/wake.py`, a copy in the tree; rerun the installer to bring
+the hook up to date in place (`smriti doctor` names the gap). If the
+python can't import smriti, the briefing is missing and it says so in one
+line on stderr, exiting 1: Claude Code shows that line as a hook error and
+Codex reports a hook failure, and neither stops the session. Per-project
+access is via directory junctions under `<entity>/mirrors/{project}/`.
+The memory search tool is registered as an MCP server in `~/.claude.json`.
 
 **Wake is silent unless `SMRITI_WAKE=1` is set** in its environment — the
 SessionStart hook sets this so interactive sessions wake fully, while
 `claude -p` and other headless callers (such as the nightly digest) stay
 clean. To inject the entity's identity into a one-shot
 headless call anyway, use `<entity>/.smriti/narada-p.sh "your prompt"` —
-it prepends the wake output and forwards to `claude -p`.
+it prepends the wake output (`python -P -m smriti.wake`, with the `python`
+on your PATH) and forwards to `claude -p`.
 
 ### Prerequisites
 
@@ -82,7 +85,8 @@ pip install "smriti[read] @ git+https://github.com/Stormbane/smriti.git"
 # 3. Run the installer: asks whether to capture conversations and whether
 #    the backup remote is private (see "Privacy" below), then copies the
 #    memory template (never overwriting),
-#    copies wake.py, backup.py and narada-p.sh into <root>/.smriti/,
+#    copies narada-p.sh into <root>/.smriti/ (and removes the wake.py
+#    and backup.py an earlier install put there),
 #    creates mirrors/ junctions, registers the smriti MCP server,
 #    patches ~/.claude/settings.json, writes the managed block in
 #    ~/.claude/CLAUDE.md. --projects-root names the directory whose
@@ -170,10 +174,12 @@ How each question is settled, in order:
 | No terminal, no flag, new root | **Off**: `"capture": false`, with a note | Not confirmed private: the summary says so and prints the git-crypt steps |
 | No terminal, no flag, existing root | `daylog.json` is left as it is, with a note saying whether it captures | The same |
 
-An existing root is one with `.smriti/daylog.json`, `.smriti/wake.py` or
-`log/`. Without a terminal, capture stays off for a new root because it
-can be turned on later (re-run with `--capture`; the nightly then reads
-the transcripts still on disk) while a push can't be taken back. A
+An existing root is one with `.smriti/daylog.json`, `.smriti/install.json`
+(every install records itself there), the `.smriti/wake.py` or `backup.py`
+an install from before that record left, or `log/`. Without a terminal,
+capture stays off for a new root because it can be turned on later
+(re-run with `--capture`; the nightly then reads the transcripts still on
+disk) while a push can't be taken back. A
 "yes" recorded before H11.1, whose `daylog.json` says neither `"capture"`
 nor `"sources"` (or that has none), relied on the old default; a rerun
 writes `"capture": true` for it, with a note, and asks nothing. A
@@ -219,13 +225,13 @@ python scripts/install.py --harness none  # core memory setup only
 |---|---|---|
 | Ask the privacy questions | `<entity>/.smriti/daylog.json` (`sources` only), `<entity>/.smriti/privacy.json` | Capture on or off; whether the backup remote is private ([above](#privacy-capture-and-the-backup-remote)) |
 | Copy the memory template | `<entity>/` from `memory_template/` | Empty identity tree (never overwrites existing files) |
-| Copy `wake.py`, `backup.py` | `<entity>/.smriti/` | Wake shim; backup script. smriti-managed copies are upgraded, keeping a `.pre-upgrade.bak` |
-| Copy `narada-p.sh` | `<entity>/.smriti/narada-p.sh` | Wake-injecting wrapper for headless `claude -p` |
-| Ensure `.smriti/` dir | `<entity>/.smriti/` | Smriti runtime state (index, metrics, wake) |
+| Copy `narada-p.sh` | `<entity>/.smriti/narada-p.sh` | Wake-injecting wrapper for headless `claude -p`, run by hand. A smriti-managed copy is upgraded, keeping a `.pre-upgrade.bak` |
+| Remove `wake.py`, `backup.py` | `<entity>/.smriti/` | Copies an earlier install deployed; the wake and the backup run from the installed package now. A smriti-managed copy is removed (the tree's git history keeps it); a hand-written one is left, with a warning |
+| Ensure `.smriti/` dir | `<entity>/.smriti/` | Smriti runtime state (index, metrics, `last-activity`) |
 | Create junctions | `<entity>/mirrors/{project}/auto-memory`, `/knowledge`, `/ai` | Per-project memory and knowledge access, for each project under the projects root |
 | Record the projects root | `<entity>/.smriti/install.json` | The next run links the same projects without `--projects-root` |
 | Register MCP server | `~/.claude.json` | Exposes `smriti_read` / `smriti_write` / `smriti_status` |
-| Patch settings.json | `~/.claude/settings.json` | SessionStart → `wake.py`; UserPromptSubmit → touch `last-activity` |
+| Patch settings.json | `~/.claude/settings.json` | SessionStart → `python -P -m smriti.wake` (an earlier install's hook is rewritten in place); UserPromptSubmit → touch `last-activity` |
 | Write CLAUDE.md | `~/.claude/CLAUDE.md` | Managed block: the memory contract from `src/smriti/templates/AGENT.md` |
 
 Claude Code rewrites `~/.claude.json` and `settings.json` while it runs, so
@@ -377,7 +383,7 @@ Two installed packages claiming one name is an error, not a choice.
 When starting a new project that should use smriti for memory, two things
 need to happen: the project needs a `.ai/` skeleton with knowledge docs
 and a CLAUDE.md, and the entity's memory tree needs mirror junctions so
-wake.py can find the project on session start.
+the wake can find the project on session start.
 
 ### The project template
 
@@ -399,7 +405,7 @@ project_template/
 ```
 
 Memory persistence is handled entirely by smriti (`smriti_write` /
-`smriti_read`). Identity loads from `~/.<entity>/` via wake.py. There
+`smriti_read`). Identity loads from `~/.<entity>/` via the wake hook. There
 are no per-project memory files, agent definitions, or session hooks
 in the template -- the global smriti install handles all of that.
 
@@ -440,7 +446,7 @@ the missing entries.
   ai/           --> C:/Projects/foo/.ai/
 ```
 
-These junctions let wake.py load the project's auto-memory and todo.md
+These junctions let the wake load the project's auto-memory and todo.md
 on session start. Stale junctions from old setups are cleaned up
 automatically.
 
@@ -577,7 +583,7 @@ python scripts/install.py --harness claude_code   # or codex
 ```
 
 The entity tree is itself a versioned git repository (committed and
-pushed by `backup.py` from the hourly `smriti-backup` task), so entity-level
+pushed by `smriti backup` from the hourly `smriti-backup` task), so entity-level
 hook scripts that live under `<root>/.smriti/hooks/` — e.g. a
 personal session-ending reminder — come back with the clone. Harness
 configs that reference them assume the clone exists; `smriti doctor`

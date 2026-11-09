@@ -46,7 +46,7 @@ session observations, decisions, and project notes. Branch suggestions:
 - `journal` for significant moments
 - `notes` for general observations
 
-Identity files live in `~/.narada/` and load automatically via wake.py.
+Identity files live in `~/.narada/` and load automatically via the wake hook.
 
 ## Rules
 

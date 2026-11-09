@@ -66,14 +66,26 @@ security backport series or guaranteed response time.
   commit messages, and other metadata remain visible even when file contents are
   encrypted. [`docs/PRIVACY.md`](docs/PRIVACY.md#what-is-pushed-in-the-clear) lists
   what is pushed in the clear.
+- smriti runs no code from the memory tree, which agents write to and a restore
+  brings back from git. The SessionStart hook runs `<python> -P -m smriti.wake`
+  and `smriti backup` (the hourly task, and the nightly's witness step) runs
+  `<python> -P -m smriti.backup`: the installed package's code, by the
+  interpreter it is installed in. `-P` keeps the current directory off the
+  import path, so a session started in the tree can't import from it. The
+  installer copies one script into `<root>/.smriti/`, `narada-p.sh`, which only
+  a person runs; a reinstall removes the `wake.py` and `backup.py` earlier
+  installs copied there (a hand-written one is left, and nothing runs it). What
+  `daylog.json` configures is the operator's: `notify_cmd` is run by the morning
+  message and the reference profile's `tell_suti`, and without one the reference
+  profile runs `<root>/.smriti/hooks/notify_suti.py`, a script in the tree; keep
+  such a command out of the tree to keep the tree free of code that runs.
 - A profile (`"profile"` in `daylog.json`) is code from an installed package,
   found through the `smriti.profiles` entry-point group of the Python
   environment smriti runs in; nothing is loaded from the memory tree, so the
   config can only choose among packages the operator installed. smriti's own
   wheel carries no profile. The current directory and the running script's
-  directory (for the wake hook, the tree's `.smriti/`) are not searched. What
-  the lookup finds is cached in the private runtime directory
-  (`profiles-*.json`, where other users can't write), keyed on the import
+  directory are not searched. What the lookup finds is cached in the private
+  runtime directory (`profiles-*.json`, where other users can't write), keyed on the import
   path's entries and their modification times; a missing, corrupt or stale
   cache means a fresh scan.
 - `core/scrub.py` masks recognised credential patterns before captured turns

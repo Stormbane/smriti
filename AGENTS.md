@@ -24,9 +24,9 @@ Historical: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), `.ai/knowledge/spec.
 - Day-log capture: `smriti logd` merges Claude Code transcripts, Codex rollouts and voice transcripts into `log/YYYY/MM/DD.jsonl` (`src/smriti/daylog/`). It is off until `<root>/.smriti/daylog.json` says `"capture": true` or lists `"sources"` (hardening H11.1).
 - `smriti nightly` (03:00): reconcile → render → digest (one `claude -p` call per day, `codex exec` as an opt-in fallback) → week/month/year rollups → index → witness (a git commit plus an OpenTimestamps stamp) → status file.
 - `smriti morning` (07:00): one message a day composed from the digest, from the configured agent to the configured user; a profile can supply its own prompt (the reference profile's carries its persona).
-- The wake briefing: a SessionStart hook prints `smriti.wake.briefing()`, at most 9,500 characters.
+- The wake briefing: a SessionStart hook runs `python -P -m smriti.wake`, which prints `smriti.wake.briefing()`, at most 9,500 characters. Nothing in the memory tree is run by it, or by the backup.
 - The embedding service (hardening H10): `smriti embed serve`, one per memory root, holds the model; the MCP servers and `smriti read` ask it over authenticated loopback TCP and start it on demand. An MCP server holds it while it runs (H12.0b: a workless request every 5 minutes, from its first search or write on), so the model stays loaded while sessions are open; it exits 15 minutes after the last request or hold. `smriti index` (and so the nightly) loads its own model. A write without vectors is indexed for keyword search, its vectors pending until the service fills them. `SMRITI_EMBED_SERVICE=0` turns it off. `SECURITY.md` has its trust boundary.
-- Backups: `<root>/.smriti/backup.py` commits the memory tree hourly (the `smriti-backup` task; it pushes only when there is something new) and in the nightly. Sessions don't trigger it.
+- Backups: `smriti backup` commits the memory tree hourly (the `smriti-backup` task; it pushes only when there is something new) and in the nightly, running `python -P -m smriti.backup` from the installed package. Sessions don't trigger it.
 
 **Removed** (the code is in the git history):
 - 2026-11-05, hardening H3: the deep pipeline that `smriti sleep --deep` ran (cognitive cascade, JUDGE, ingest and routing, consolidation, thread synthesis, actionables, journal rollups, the wake-context rebuild), its task queue and file watcher, and the `sleep`, `queue`, `daemon`, `watch`, `ingest` and `merge-concepts` commands. `smriti eval` keeps only its search cases.
@@ -65,7 +65,8 @@ src/smriti/
   daylog/                capture adapters, logd, render, digest, rollups, nightly, morning, schedule
   wake/                  briefing.py: the wake briefing, with a hook for a profile's sections
   profiles/              the profile seam: installed profiles, found by entry point (tools, wake sections, morning prompt)
-  witness.py, backup.py  tamper-evidence; the backup trigger
+  witness.py             tamper-evidence
+  backup/                the backup: its trigger and log reader, and one run (`python -m smriti.backup`)
   install/               the installer (python -m smriti.install): core steps, privacy questions, templates
   integrations/          claude_code, codex, hermes installers; the wake-hook model; the managed agent-doc block
   llm/                   providers: claude_cli, codex_cli, anthropic_api, openai_api, ollama; test_stub (tests only)
@@ -73,7 +74,7 @@ src/smriti/
   _vendored/memsearch/   vendored MIT code (see NOTICE.md)
 scripts/                 install.py, setup_project.py, doc_facts.py, bench.py, wheel_smoke.py, longmemeval.py, longmemeval_chart.py
 memory_template/         skeleton for a new memory root (a wheel carries it, under smriti/_data/)
-narada/                  wake.py, backup.py, narada-p.sh, copied into <root>/.smriti/ by the installer (and the wheel)
+narada/                  narada-p.sh, copied into <root>/.smriti/ by the installer (and the wheel)
 project_template/        skeleton for a project that uses smriti
 tests/                   pytest; conftest.py points SMRITI_ROOT at a temp dir
 profiles/reference/      the reference profile (the maintainer's installation): its own package, smriti-reference, with its tests

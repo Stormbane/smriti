@@ -29,8 +29,8 @@ Run::
 This sets up:
 
 - `[features] codex_hooks = true` in `~/.codex/config.toml`.
-- `[[hooks.SessionStart]]` pointing at `<root>/.smriti/wake.py`
-  with `SMRITI_WAKE_FRAMING=codex-json`. Codex runs this **before the
+- `[[hooks.SessionStart]]` running `python -P -m smriti.wake` (the
+  installed package's wake) with `SMRITI_WAKE_FRAMING=codex-json`. Codex runs this **before the
   first user turn** and appends the briefing JSON
   (`hookSpecificOutput.additionalContext`) to the developer context.
   The agent has no opportunity to skip it — identity loads at the

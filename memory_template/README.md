@@ -93,4 +93,4 @@ which you keep current by hand. Where a directory has an `index.md`, each
 After copying this template:
 1. Write `identity.md` — even a few lines is enough to start
 2. Run `smriti index` to build the search index
-3. Start a Claude Code session — wake.py will load the identity briefing
+3. Start a Claude Code session — the wake hook will load the identity briefing

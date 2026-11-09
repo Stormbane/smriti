@@ -352,7 +352,7 @@ def main() -> int:
     )
 
     print()
-    print("Done. wake.py will load this project's mirror on session start.")
+    print("Done. The wake will load this project's mirror on session start.")
     return 0
 
 
