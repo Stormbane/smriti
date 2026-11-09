@@ -56,6 +56,10 @@ def main() -> int:
         return 0
     text = reminder_for(payload)
     if text:
+        # Claude Code reads the hook's stdout as UTF-8; a Windows pipe is
+        # in the locale's codepage, which garbles or refuses the em dash.
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8")
         print(text)
     return 0
 

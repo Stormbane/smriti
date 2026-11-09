@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 
@@ -45,11 +46,15 @@ def test_main_stays_out_of_the_way_of_a_bad_payload(
     assert capsys.readouterr().out == ""
 
 
-def test_it_runs_as_the_settings_hook_runs_it() -> None:
+@pytest.mark.parametrize("locale_encoding", ["cp1252", "cp932"])
+def test_it_runs_as_the_settings_hook_runs_it(locale_encoding: str) -> None:
+    # The whole reminder arrives as UTF-8 whatever the pipe's codepage:
+    # cp1252 would garble its em dash, cp932 would refuse it.
+    env = {**os.environ, "PYTHONIOENCODING": locale_encoding, "PYTHONUTF8": "0"}
     result = subprocess.run(
         [sys.executable, "-P", "-m", "smriti_reference.session_end"],
         input=json.dumps({"prompt": "goodbye"}).encode(),
-        capture_output=True, timeout=60, check=False,
+        capture_output=True, timeout=60, check=False, env=env,
     )
-    assert result.returncode == 0
-    assert b"--- SESSION ENDING ---" in result.stdout
+    assert result.returncode == 0, result.stderr
+    assert REMINDER in result.stdout.decode("utf-8").replace("\r\n", "\n")
