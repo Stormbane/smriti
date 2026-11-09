@@ -171,9 +171,10 @@ def test_the_agent_sees_what_the_checkouts_smriti_read_shows(
         lme: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     from smriti.mcp.tools import memory
 
-    assert lme.preview_chars() == memory.PREVIEW_CHARS > lme.MCP_PREVIEW_CHARS  # this one says
-    assert lme.visible("x" * 9000, memory.PREVIEW_CHARS) == "x" * memory.PREVIEW_CHARS
-    monkeypatch.delattr(memory, "PREVIEW_CHARS")  # a checkout from before H15.11
+    limit = memory.preview_chars()
+    assert lme.preview_chars() == limit > lme.MCP_PREVIEW_CHARS  # this one says
+    assert lme.visible("x" * 9000, limit) == "x" * limit
+    monkeypatch.delattr(memory, "preview_chars")  # a checkout from before H15.11
     assert lme.preview_chars() == lme.MCP_PREVIEW_CHARS == 1000
     monkeypatch.setitem(sys.modules, "smriti.mcp.tools.memory", None)  # older still
     assert lme.preview_chars() == 1000

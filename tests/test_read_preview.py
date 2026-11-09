@@ -66,7 +66,7 @@ def test_the_longest_chunk_the_chunker_makes_is_shown_whole(
     # Two lines repeated from the chunk before, and one that didn't fit beside them.
     lines = ["a" * MAX_CHUNK_SIZE, "b" * MAX_CHUNK_SIZE, "c" * MAX_CHUNK_SIZE]
     longest = "\n".join(lines)
-    assert len(longest) == max_chunk_chars() == memory.PREVIEW_CHARS
+    assert len(longest) == max_chunk_chars() == memory.preview_chars()
     reply = _read(monkeypatch, longest)
     assert longest in reply and MARK not in reply
 
@@ -75,7 +75,7 @@ def test_a_longer_chunk_is_cut_and_marked(monkeypatch: pytest.MonkeyPatch) -> No
     old = "x " * 6_000  # one chunk of a long line, from an index built before H15.10
     reply = _read(monkeypatch, old, _items(1_000))
     shown = reply.split("\n", 1)[1].split(f"\n{MARK}\n", 1)[0]
-    assert shown == old.strip()[:memory.PREVIEW_CHARS]
+    assert shown == old.strip()[:memory.preview_chars()]
     assert reply.count(MARK) == 1  # the second result is whole
     assert _items(1_000) in reply
 

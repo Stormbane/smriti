@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from smriti._vendored.memsearch.chunker import max_chunk_chars
 from smriti.core.frontmatter import one_line
 from smriti.mcp.tool import Arguments, Tool, ToolError
 
@@ -23,12 +22,16 @@ _db_path: Path | None = None  # the index _db was opened on
 # smriti_read's most results: its schema bounds top_k (smriti.mcp.tool.check_arguments).
 MAX_TOP_K = 50
 
-# The most smriti_read shows of a result: the longest chunk the chunker makes,
-# so every chunk is shown whole. That is a chunk of the chunker's size, or one
-# that starts with the few lines it repeats from the chunk before it (its
-# overlap). A longer chunk, from an index built before the chunker cut long
-# lines, is cut, and says so.
-PREVIEW_CHARS: int = max_chunk_chars()
+
+def preview_chars() -> int:
+    """The most smriti_read shows of a result: the longest chunk the chunker
+    makes, so every chunk is shown whole. That is a chunk of the chunker's
+    size, or one that starts with the few lines it repeats from the chunk
+    before it (its overlap). A longer chunk, from an index built before the
+    chunker cut long lines, is cut, and says so."""
+    from smriti._vendored.memsearch.sizes import max_chunk_chars
+
+    return int(max_chunk_chars())
 
 
 def _get_db() -> IndexDB:
@@ -70,13 +73,14 @@ def handle_read(arguments: Arguments) -> str:
     if not results:
         return "\n".join([*notes, f"No results for: {query}"])
 
+    limit = preview_chars()
     lines = [*notes, ""] if notes else []
     for i, r in enumerate(results, 1):
         heading = f" :: {r.heading}" if r.heading else ""
         lines.append(f"[{i}] {r.source}{heading} (score: {r.score:.2f}, depth: {r.trunk_distance})")
         content = r.content.strip()
-        if len(content) > PREVIEW_CHARS:
-            content = content[:PREVIEW_CHARS] + "\n... (truncated)"
+        if len(content) > limit:
+            content = content[:limit] + "\n... (truncated)"
         lines.append(content)
         lines.append("")
     return "\n".join(lines)

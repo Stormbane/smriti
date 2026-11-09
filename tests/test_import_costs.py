@@ -93,7 +93,20 @@ def test_a_server_starts_with_no_embedding_module_and_no_thread() -> None:
         "assert len(replies) == 2, replies",
         "assert threading.active_count() == 1, threading.enumerate()"))
     imported = _imported_by(
-        step, ["smriti.embed", "smriti.embed.client", "smriti.store.search", "socket"])
+        step, ["smriti.embed", "smriti.embed.client", "smriti.store.search", "socket",
+               "smriti._vendored"])
+    assert not any(imported.values()), imported
+
+
+def test_smriti_read_sizes_its_preview_without_the_chunker() -> None:
+    """H15.11's preview limit is the chunker's bound. Importing the chunker
+    (hashlib, regexes, dataclasses) cost every MCP server's start about 11 ms;
+    smriti_read reads the bound from its small sizes module, when it runs."""
+    step = "\n".join((
+        "from smriti.mcp.tools.memory import preview_chars",
+        "from smriti._vendored.memsearch.sizes import max_chunk_chars",
+        "assert preview_chars() == max_chunk_chars() > 1500"))
+    imported = _imported_by(step, ["smriti._vendored.memsearch.chunker", "hashlib"])
     assert not any(imported.values()), imported
 
 

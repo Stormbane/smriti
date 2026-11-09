@@ -97,7 +97,7 @@ AGENT_TOP_K = 5  # smriti_read's default top_k
 AGENT_CANDIDATE_K = 20  # search's default candidate_k
 # smriti_read shows each result's content stripped and cut at this many
 # characters in a checkout from before H15.11; a later one says how many
-# (smriti.mcp.tools.memory.PREVIEW_CHARS: see preview_chars).
+# (smriti.mcp.tools.memory.preview_chars(): see preview_chars).
 MCP_PREVIEW_CHARS = 1000
 DEEP_TOP_K = 50
 DEEP_CANDIDATE_K = 50
@@ -201,15 +201,16 @@ def visible(content: str, limit: int = MCP_PREVIEW_CHARS) -> str:
 
 def preview_chars() -> int:
     """How many characters of a result the imported checkout's ``smriti_read``
-    shows: its ``PREVIEW_CHARS``, or :data:`MCP_PREVIEW_CHARS` for a checkout
-    from before H15.11, which has none."""
+    shows: what its ``preview_chars()`` says, or :data:`MCP_PREVIEW_CHARS` for
+    a checkout from before H15.11, which has none."""
     import importlib
 
     try:
         memory = importlib.import_module("smriti.mcp.tools.memory")
     except ImportError:  # older still: no such module
         return MCP_PREVIEW_CHARS
-    return int(getattr(memory, "PREVIEW_CHARS", MCP_PREVIEW_CHARS))
+    says = getattr(memory, "preview_chars", None)
+    return int(says()) if callable(says) else MCP_PREVIEW_CHARS
 
 
 def evidence_windows(line: str) -> list[str]:

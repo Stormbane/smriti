@@ -21,6 +21,6 @@ those components.
 Modifications from upstream:
 - Recorded per file: in the docstring at the top of a modified module,
   or, in embeddings/ (whose modules carry no header of their own), in
-  its __init__ and in comments where the code differs. embeddings/stub.py
-  is smriti's own.
+  its __init__ and in comments where the code differs. sizes.py and
+  embeddings/stub.py are smriti's own.
 """

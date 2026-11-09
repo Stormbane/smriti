@@ -10,8 +10,9 @@ Modifications from upstream:
     whole, so no chunk holds such a line: upstream let it through, and one
     24,000-character line became one chunk. Every other line is
     chunked as upstream does.
-  - MAX_CHUNK_SIZE and OVERLAP_LINES name chunk_markdown's defaults, and
-    max_chunk_chars says how long a chunk can be with them.
+  - chunk_markdown's defaults, MAX_CHUNK_SIZE and OVERLAP_LINES, come from
+    smriti's sizes.py, with max_chunk_chars, how long a chunk can be with
+    them (re-exported here).
 License: see smriti/NOTICE.md and smriti/src/smriti/_vendored/memsearch/LICENSE
 ---
 """
@@ -22,11 +23,10 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 
-_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+from .sizes import MAX_CHUNK_SIZE, OVERLAP_LINES
+from .sizes import max_chunk_chars as max_chunk_chars  # smriti: the bound, read by callers
 
-# chunk_markdown's defaults (smriti: named, for callers that size what they show).
-MAX_CHUNK_SIZE = 1500
-OVERLAP_LINES = 2
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 # Minimum meaningful text length after stripping metadata noise.
@@ -95,22 +95,6 @@ def compute_chunk_id(
     """
     raw = f"markdown:{source}:{start_line}:{end_line}:{content_hash}:{model}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-
-def max_chunk_chars(
-    max_chunk_size: int = MAX_CHUNK_SIZE,
-    overlap_lines: int = OVERLAP_LINES,
-) -> int:
-    """The longest chunk :func:`chunk_markdown` makes with these settings (smriti).
-
-    A chunk is at most *max_chunk_size* characters, with one exception: a
-    chunk that starts with the lines it repeats from the chunk before it
-    (at most *overlap_lines* of them) and holds the one line that didn't fit
-    beside them. That chunk is at most *overlap_lines* + 1 lines, each at
-    most *max_chunk_size* characters (a longer line is cut into pieces),
-    joined by newlines. With *overlap_lines* 0 no chunk exceeds the size.
-    """
-    return (overlap_lines + 1) * max_chunk_size + overlap_lines
 
 
 def chunk_markdown(
