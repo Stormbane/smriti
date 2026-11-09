@@ -127,7 +127,10 @@ def model_revision(key: str, model: str) -> str:
     """The hub snapshot (a hash of the model's files) a local provider loads, or "".
 
     The ``local`` and ``onnx`` providers load from the Hugging Face cache, whose
-    snapshot directories are named by the repository commit they hold. Looked
+    snapshot directories are named by the repository commit they hold: for a
+    model pinned to a commit (``smriti._vendored.memsearch.revisions``), that
+    commit's snapshot, which is what the provider loads whatever the cache's
+    ``main`` names; for any other model, the snapshot ``main`` names. Looked
     up offline; anything else (a model given as a directory, no hub library,
     a provider that doesn't load from the hub) is unknown.
     """
@@ -141,9 +144,12 @@ def model_revision(key: str, model: str) -> str:
         from huggingface_hub import try_to_load_from_cache
     except ImportError:
         return ""
+    from smriti._vendored.memsearch.revisions import pinned_revision
+
+    revision = pinned_revision(model)
     for filename in ("config.json", "tokenizer.json"):
         try:
-            found = try_to_load_from_cache(repo, filename)
+            found = try_to_load_from_cache(repo, filename, revision=revision)
         except (ValueError, OSError) as exc:  # not a hub id, or an unreadable cache
             log.debug("no hub revision for %s: %s", repo, exc)
             return ""

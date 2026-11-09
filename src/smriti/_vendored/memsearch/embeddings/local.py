@@ -44,7 +44,13 @@ class LocalEmbedding:
             sys.stderr = io.StringIO()
             from sentence_transformers import SentenceTransformer
 
-            self._st_model = SentenceTransformer(model, device=_detect_device(), trust_remote_code=True)
+            from ..revisions import pinned_revision
+
+            # smriti: the model loads at its pinned commit (main for a model
+            # with no pin).
+            self._st_model = SentenceTransformer(model, device=_detect_device(),
+                                                 revision=pinned_revision(model),
+                                                 trust_remote_code=True)
         finally:
             sys.stderr = old_stderr
             if prev_tqdm is None:

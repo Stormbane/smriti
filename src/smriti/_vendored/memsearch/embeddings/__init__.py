@@ -6,7 +6,8 @@ Upstream: https://github.com/zilliztech/memsearch/blob/main/src/memsearch/embedd
 Vendored on: 2026-04-12
 Modifications from upstream: vendored module paths and a stdlib-only stub provider;
 in onnx.py, an int64 token feed, no CPU memory arena, and batches bounded by their
-attention (utils.batched_embed's length and max_attention).
+attention (utils.batched_embed's length and max_attention); in onnx.py and local.py,
+a default model loads at its pinned commit (../revisions.py).
 License: see smriti/NOTICE.md and smriti/src/smriti/_vendored/memsearch/LICENSE
 ---
 """

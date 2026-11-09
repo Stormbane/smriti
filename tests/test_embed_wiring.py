@@ -23,7 +23,9 @@ from typing import Any
 import pytest
 
 import smriti.store.indexer as indexer
+from smriti._vendored.memsearch.embeddings import DEFAULT_MODELS
 from smriti._vendored.memsearch.embeddings.stub import StubEmbedding
+from smriti._vendored.memsearch.revisions import pinned_revision
 from smriti.core.tree import tree_root
 from smriti.embed import provider as embedding
 from smriti.embed.client import ServiceEmbedding, spawn_service, stop_service
@@ -337,6 +339,9 @@ def test_with_the_real_model_vectors_match_and_a_warm_first_search_is_fast(
                 db.close()
         texts = ["flowers near the water", "a light kept burning", "baking in winter"]
         expected = embedding.embed(local, texts, "query")
+        # A default model loads at its pinned commit, the snapshot its identity names.
+        pin = pinned_revision(DEFAULT_MODELS.get(provider, ""))
+        assert pin is None or expected.identity.revision == pin, expected.identity
 
         paths = service_paths(runtime_dir(), root)
         monkeypatch.setenv("SMRITI_EMBED_SERVICE", "1")
