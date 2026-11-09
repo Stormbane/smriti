@@ -6,8 +6,9 @@ says otherwise (see :func:`day_tz`). It needs no tz database: the base
 install carries no runtime dependencies and Windows has no system tzdata.
 
 Every clock that names a day asks here: the day-log, the digests and the
-nightly (``smriti.daylog.model`` re-exports these names), and the store's
-dated paths, so a journal entry and that moment's turns fall on the same day.
+nightly (``smriti.daylog.model`` re-exports these names), the store's dated
+paths, and the dates of a project's findings, decisions and feature specs,
+so a journal entry and that moment's turns fall on the same day.
 """
 
 from __future__ import annotations

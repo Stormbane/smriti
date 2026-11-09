@@ -32,6 +32,20 @@ def _slugify(text: str, max_len: int = 60) -> str:
     return slug[:max_len] or "untitled"
 
 
+def _today() -> str:
+    """Today's date in the day zone (:func:`smriti.core.dayzone.day_tz`).
+
+    The writer and the day-log name days by it, so a finding, a decision or
+    a spec is dated as a journal entry and that moment's turns are, not by
+    the machine's clock when a zone is configured.
+    """
+    from datetime import datetime, timezone
+
+    from smriti.core.dayzone import day_tz
+
+    return datetime.now(timezone.utc).astimezone(day_tz()).strftime("%Y-%m-%d")
+
+
 def _project_mirror(project: str) -> Path | None:
     """Return path to mirrors/{project}/ if it exists, else None."""
     from smriti.core.safe_names import safe_name
@@ -121,8 +135,6 @@ def handle_add_todo(arguments: Arguments) -> str:
 
 def handle_record_finding(arguments: Arguments) -> str:
     """Write {date}-{slug}.md under mirrors/{project}/findings/."""
-    from datetime import datetime
-
     from smriti.core.files import edit_lock
     from smriti.core.memwrite import create_memory, mask, write_memory
 
@@ -143,7 +155,7 @@ def handle_record_finding(arguments: Arguments) -> str:
 
     findings_dir = mirror / "findings"
     findings_dir.mkdir(parents=True, exist_ok=True)
-    date_str = datetime.now().astimezone().strftime("%Y-%m-%d")
+    date_str = _today()
     slug = _slugify(title)
     path = findings_dir / f"{date_str}-{slug}.md"
 
@@ -240,8 +252,6 @@ def handle_record_finding(arguments: Arguments) -> str:
 
 def handle_record_decision(arguments: Arguments) -> str:
     """Write {date}-{slug}.md under mirrors/{project}/decisions/."""
-    from datetime import datetime
-
     from smriti.core.memwrite import create_memory, mask
 
     project = arguments.get("project", "").strip()
@@ -261,7 +271,7 @@ def handle_record_decision(arguments: Arguments) -> str:
 
     decisions_dir = mirror / "decisions"
     decisions_dir.mkdir(parents=True, exist_ok=True)
-    date_str = datetime.now().astimezone().strftime("%Y-%m-%d")
+    date_str = _today()
     slug = _slugify(title)
     path = decisions_dir / f"{date_str}-{slug}.md"
     source = one_line(mask(arguments.get("source", "")))
@@ -292,8 +302,6 @@ def handle_record_decision(arguments: Arguments) -> str:
 
 def handle_record_feature(arguments: Arguments) -> str:
     """Open a feature spec at {project}/.ai/features/active/{slug}.md."""
-    from datetime import datetime
-
     project = arguments.get("project", "").strip()
     slug = arguments.get("slug", "").strip()
     title = one_line(arguments.get("title", ""))
@@ -322,7 +330,7 @@ def handle_record_feature(arguments: Arguments) -> str:
     features_active = base / "active"
     features_active.mkdir(parents=True, exist_ok=True)
     path = features_active / f"{slug}.md"
-    date_str = datetime.now().astimezone().strftime("%Y-%m-%d")
+    date_str = _today()
     why_now = arguments.get("why_now", "").strip()
     constraints = arguments.get("constraints", "").strip()
     owner = arguments.get("owner", "both").strip().lower()
@@ -364,8 +372,6 @@ def handle_record_feature(arguments: Arguments) -> str:
 
 def handle_update_feature_status(arguments: Arguments) -> str:
     """Move a feature between active/shipped/abandoned and update frontmatter."""
-    from datetime import datetime
-
     project = arguments.get("project", "").strip()
     slug = arguments.get("slug", "").strip()
     new_status = arguments.get("new_status", "").strip().lower()
@@ -415,7 +421,7 @@ def handle_update_feature_status(arguments: Arguments) -> str:
             r"^status:[ \t]*\S*", f"status: {new_status}", text, count=1, flags=re.MULTILINE
         )
         if new_status == "shipped":
-            date_str = datetime.now().astimezone().strftime("%Y-%m-%d")
+            date_str = _today()
             text = re.sub(
                 r"^shipped:[ \t]*\S*", f"shipped: {date_str}", text, count=1, flags=re.MULTILINE
             )
