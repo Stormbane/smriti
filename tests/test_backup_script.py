@@ -8,6 +8,7 @@ import sys
 import time
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -101,58 +102,191 @@ def test_pgrep_status_other_than_none_found_counts_as_running(
     assert backup.git_running() is expect
 
 
-def test_run_lock_is_exclusive_and_released_only_by_its_owner(
+# The run lock (H15.6): an OS lock held for the run, never a file whose
+# existence is the lock. "Held" below is a RunLock; a refusal is its reason.
+
+
+def _holds(backup: ModuleType, result: object) -> bool:
+    return isinstance(result, getattr(backup, "RunLock", ()))
+
+
+def _identity(path: Path) -> tuple[int, int]:
+    st = path.stat()
+    return st.st_ino, st.st_size
+
+
+def test_a_second_contender_is_refused_while_the_first_holds_the_lock(
         backup: ModuleType, tmp_path: Path) -> None:
     repo = _repo(tmp_path)
-    token = backup.acquire_run_lock(repo)
-    assert token is not None
-    assert backup.acquire_run_lock(repo) is None  # held by this live process
-    backup.release_run_lock(repo, "someone else's token")
-    assert (repo / ".git" / backup.RUN_LOCK_NAME).exists()
-    backup.release_run_lock(repo, token)
-    assert not (repo / ".git" / backup.RUN_LOCK_NAME).exists()
+    first = backup.acquire_run_lock(repo)
+    assert _holds(backup, first)
+    assert backup.acquire_run_lock(repo) == backup.RUN_LOCK_BUSY
+    backup.release_run_lock(first)
+    again = backup.acquire_run_lock(repo)
+    assert _holds(backup, again)
+    backup.release_run_lock(again)
 
 
-def test_run_lock_of_a_dead_owner_is_broken(backup: ModuleType, tmp_path: Path,
-                                            monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_live_holder_is_never_taken_over_however_old_its_lock(
+        backup: ModuleType, tmp_path: Path) -> None:
+    """The old lock was taken from a live owner after RUN_LOCK_MAX_AGE_S."""
     repo = _repo(tmp_path)
-    (repo / ".git" / backup.RUN_LOCK_NAME).write_text("999999 deadbeef", encoding="ascii")
+    holder = backup.acquire_run_lock(repo)
+    path = repo / ".git" / backup.RUN_LOCK_NAME
+    old = time.time() - backup.RUN_LOCK_MAX_AGE_S - 3600
+    os.utime(path, (old, old))
+    seen = _identity(path)
+    contender = backup.acquire_run_lock(repo)
+    assert _identity(path) == seen  # not deleted and replaced
+    assert not _holds(backup, contender)
+    backup.release_run_lock(holder)
+
+
+def test_a_contender_that_judges_the_holder_dead_still_cant_take_its_lock(
+        backup: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The check-then-unlink interleaving: a contender read a dead owner's token,
+    another run took the lock, and the contender's unlink deleted the new owner's.
+    Whatever a contender believes about the holder, the OS lock stands."""
+    repo = _repo(tmp_path)
+    holder = backup.acquire_run_lock(repo)
+    path = repo / ".git" / backup.RUN_LOCK_NAME
+    seen = _identity(path)
     monkeypatch.setattr(backup, "pid_alive", lambda pid: False)
-    assert backup.acquire_run_lock(repo) is not None
+    contender = backup.acquire_run_lock(repo)
+    assert _identity(path) == seen
+    assert not _holds(backup, contender)
+    backup.release_run_lock(holder)
 
 
-def test_run_lock_of_a_live_owner_is_not_broken_by_age_alone(
+def test_no_contender_ever_deletes_the_lock_file(
         backup: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
-    _lock(repo / ".git" / backup.RUN_LOCK_NAME, 3600).write_text("4242 cafe", encoding="ascii")
-    old = time.time() - 3600
-    os.utime(repo / ".git" / backup.RUN_LOCK_NAME, (old, old))
-    monkeypatch.setattr(backup, "pid_alive", lambda pid: True)
-    assert backup.acquire_run_lock(repo) is None
-
-
-def test_a_fresh_empty_run_lock_counts_as_busy(backup: ModuleType, tmp_path: Path,
-                                               monkeypatch: pytest.MonkeyPatch) -> None:
-    # Another backup has created the lock but not yet written its token.
-    repo = _repo(tmp_path)
-    (repo / ".git" / backup.RUN_LOCK_NAME).write_text("", encoding="ascii")
+    path = repo / ".git" / backup.RUN_LOCK_NAME
+    path.write_text("999999 deadbeef", encoding="ascii")  # a crashed older script's token
     monkeypatch.setattr(backup, "pid_alive", lambda pid: False)
-    assert backup.acquire_run_lock(repo) is None
-    assert (repo / ".git" / backup.RUN_LOCK_NAME).exists()
+    deleted: list[str] = []
+    real_unlink = os.unlink
+
+    def unlink(target: Any, *args: Any, **kwargs: Any) -> None:
+        deleted.append(os.path.basename(os.fspath(target)))
+        real_unlink(target, *args, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", unlink)
+    monkeypatch.setattr(os, "remove", unlink)
+    first = backup.acquire_run_lock(repo)  # takes the crashed run's lock without a delete
+    assert backup.RUN_LOCK_NAME not in deleted
+    assert _holds(backup, first)
+    assert not _holds(backup, backup.acquire_run_lock(repo))
+    backup.release_run_lock(first)
+    assert backup.RUN_LOCK_NAME not in deleted
+    assert path.exists()  # kept after release: the next run takes the same file
 
 
-def test_an_old_empty_run_lock_is_broken(backup: ModuleType, tmp_path: Path) -> None:
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows can't delete a file another handle has open")
+def test_a_lock_file_deleted_before_it_was_locked_is_let_go(
+        backup: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An older script deletes a lock file it judged dead. A run that opened the
+    file before that delete must not go on holding a lock on a file no path names,
+    while the next run creates another and locks that."""
     repo = _repo(tmp_path)
-    _lock(repo / ".git" / backup.RUN_LOCK_NAME, backup.RUN_LOCK_INIT_GRACE_S + 60)
-    assert backup.acquire_run_lock(repo) is not None
+    path = repo / ".git" / backup.RUN_LOCK_NAME
+    real_lock = backup._lock
+    calls: list[int] = []
+
+    def lock_after_a_delete(fd: int) -> None:
+        calls.append(fd)
+        if len(calls) == 1:
+            path.unlink()
+        real_lock(fd)
+
+    monkeypatch.setattr(backup, "_lock", lock_after_a_delete)
+    lock = backup.acquire_run_lock(repo)
+    assert _holds(backup, lock) and len(calls) == 2
+    assert os.fstat(lock.fd).st_ino == path.stat().st_ino
+    monkeypatch.setattr(backup, "_lock", real_lock)
+    assert backup.acquire_run_lock(repo) == backup.RUN_LOCK_BUSY
+    backup.release_run_lock(lock)
 
 
-def test_the_lock_never_exists_without_its_token(backup: ModuleType, tmp_path: Path) -> None:
+_HOLDER = """
+import importlib.util, sys, time
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("held_backup", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+lock = mod.acquire_run_lock(Path(sys.argv[2]))
+print("busy" if isinstance(lock, str) else "held", flush=True)
+time.sleep(120)
+"""
+
+
+def test_a_lock_whose_holder_died_is_taken(backup: ModuleType, tmp_path: Path) -> None:
+    """The OS drops a crashed holder's lock: no token to judge, nothing to break."""
+    import subprocess
+
     repo = _repo(tmp_path)
-    token = backup.acquire_run_lock(repo)
-    assert token is not None
-    assert (repo / ".git" / backup.RUN_LOCK_NAME).read_text(encoding="ascii") == token
-    assert not list((repo / ".git").glob(f"{backup.RUN_LOCK_NAME}.*.tmp"))
+    proc = subprocess.Popen([sys.executable, "-c", _HOLDER, str(_SCRIPT), str(repo)],
+                            stdout=subprocess.PIPE, text=True)
+    try:
+        assert proc.stdout is not None and proc.stdout.readline().strip() == "held"
+        assert backup.acquire_run_lock(repo) == backup.RUN_LOCK_BUSY  # a live holder
+    finally:
+        proc.kill()
+        proc.wait()
+    # Windows drops a dead process's locks soon after it ends, not at once.
+    deadline = time.monotonic() + 10
+    lock = backup.acquire_run_lock(repo)
+    while not _holds(backup, lock) and time.monotonic() < deadline:
+        time.sleep(0.1)
+        lock = backup.acquire_run_lock(repo)
+    assert _holds(backup, lock)
+    backup.release_run_lock(lock)
+
+
+@pytest.mark.parametrize(("alive", "age_s", "busy"), [
+    (True, 60, True),  # an older script's run still going as this one is deployed
+    (False, 60, False),  # a crashed run's token
+    (True, 6 * 3600 + 60, False),  # its pid alive after six hours: reused
+])
+def test_an_older_scripts_token_is_honoured_while_its_run_goes(
+        backup: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        alive: bool, age_s: float, busy: bool) -> None:
+    """Before H15.6 the lock was the file holding "<pid> <hex>"; such a run
+    overlapping the upgrade still excludes the new script."""
+    repo = _repo(tmp_path)
+    (repo / ".git" / backup.RUN_LOCK_NAME).write_text("4242 cafe", encoding="ascii")
+    old = time.time() - age_s
+    os.utime(repo / ".git" / backup.RUN_LOCK_NAME, (old, old))
+    monkeypatch.setattr(backup, "pid_alive", lambda pid: alive)
+    lock = backup.acquire_run_lock(repo)
+    if busy:
+        assert lock == backup.RUN_LOCK_BUSY
+        assert (repo / ".git" / backup.RUN_LOCK_NAME).read_text(encoding="ascii") == "4242 cafe"
+    else:
+        assert _holds(backup, lock)
+        backup.release_run_lock(lock)
+
+
+def test_a_holders_token_reads_as_a_live_owner_to_an_older_script(
+        backup: ModuleType, tmp_path: Path) -> None:
+    """The older script reads the file's first field as its owner's pid. On
+    Windows it can't read the locked file at all, which it takes as busy too."""
+    repo = _repo(tmp_path)
+    lock = backup.acquire_run_lock(repo)
+    assert _holds(backup, lock)
+    os.lseek(lock.fd, 0, os.SEEK_SET)
+    fields = os.read(lock.fd, 256).decode("ascii").split()
+    assert fields[0] == str(os.getpid()) and fields[2] == backup.RUN_LOCK_KIND
+    backup.release_run_lock(lock)
+
+
+def test_a_lock_that_cant_be_opened_skips_the_run_and_says_why(
+        backup: ModuleType, tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    (repo / ".git" / backup.RUN_LOCK_NAME).mkdir()  # a directory can't be opened as the lock
+    reason = backup.acquire_run_lock(repo)
+    assert isinstance(reason, str) and reason.startswith("the run lock can't be opened")
 
 
 def test_run_lock_works_in_a_linked_worktree(backup: ModuleType, tmp_path: Path) -> None:
@@ -173,12 +307,14 @@ def test_run_lock_works_in_a_linked_worktree(backup: ModuleType, tmp_path: Path)
     git("worktree", "add", "-q", str(linked))
     assert (linked / ".git").is_file()
 
-    token = backup.acquire_run_lock(linked)
-    assert token is not None
+    lock = backup.acquire_run_lock(linked)
+    assert _holds(backup, lock)
     assert (main / ".git" / backup.RUN_LOCK_NAME).exists()  # shared across worktrees
-    assert backup.acquire_run_lock(main) is None
-    backup.release_run_lock(linked, token)
-    assert not (main / ".git" / backup.RUN_LOCK_NAME).exists()
+    assert backup.acquire_run_lock(main) == backup.RUN_LOCK_BUSY
+    backup.release_run_lock(lock)
+    second = backup.acquire_run_lock(main)
+    assert _holds(backup, second)
+    backup.release_run_lock(second)
 
 
 @pytest.mark.parametrize("without_psutil", [False, True])
@@ -228,16 +364,20 @@ def _run_script(repo: Path, *args: str) -> float:
     return time.monotonic() - start
 
 
-def test_default_run_detaches_and_the_worker_still_commits(tmp_path: Path) -> None:
+def test_default_run_detaches_and_the_worker_still_commits(backup: ModuleType,
+                                                           tmp_path: Path) -> None:
     repo = _real_repo(tmp_path)
     _run_script(repo)
     deadline = time.time() + 60
     while _commits(repo) < 2 and time.time() < deadline:
         time.sleep(0.5)
     assert _commits(repo) == 2, "the detached worker never committed"
-    while (repo / ".git" / "smriti-backup.lock").exists() and time.time() < deadline:
+    lock = backup.acquire_run_lock(repo)  # the worker let go of the run lock
+    while not _holds(backup, lock) and time.time() < deadline:
         time.sleep(0.2)
-    assert not (repo / ".git" / "smriti-backup.lock").exists()
+        lock = backup.acquire_run_lock(repo)
+    assert _holds(backup, lock)
+    backup.release_run_lock(lock)
 
 
 def test_foreground_commits_before_returning(tmp_path: Path) -> None:

@@ -39,7 +39,7 @@ no git process is running.
 from __future__ import annotations
 
 import argparse
-import contextlib
+import errno
 import json
 import os
 import subprocess
@@ -49,17 +49,22 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 LOCK_STALE_S = 15 * 60
 LOG_NAME = "smriti-backup.jsonl"
 LOG_MAX_BYTES = 200_000
 LOG_KEEP_LINES = 1000
-# One backup at a time. The run lock is broken only when its owner is dead,
-# or after RUN_LOCK_MAX_AGE_S: far beyond any real run, and only there to
-# survive PID reuse after a crash.
+# One backup at a time: an OS lock on RUN_LOCK_NAME in the git common dir,
+# held for the run (see acquire_run_lock). The file is never deleted.
 RUN_LOCK_NAME = "smriti-backup.lock"
+# For the token an older backup.py, whose lock was this file's existence, left
+# in it: a run of one this old is a crashed one whose pid was reused (no run
+# lasts near that long).
 RUN_LOCK_MAX_AGE_S = 6 * 3600
-RUN_LOCK_INIT_GRACE_S = 60
+# The third field of this script's token, so a later run tells it from an older script's.
+RUN_LOCK_KIND = "os-lock"
+RUN_LOCK_BUSY = "another backup is running"
 # CREATE_NO_WINDOW: a hidden console the child (and every git it runs)
 # inherits. Without it, a console-less parent's git calls each get a fresh
 # visible console -- with Windows Terminal as the default terminal, a blank
@@ -186,81 +191,141 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
-def acquire_run_lock(cwd: Path) -> str | None:
-    """Take the one-backup-at-a-time lock. Returns its token, or None if busy.
+if sys.platform == "win32":
+    import msvcrt
 
-    The token is written to a temp file first and then hard-linked into
-    place, so the lock never exists without its owner's token. Filesystems
-    without hard links fall back to O_EXCL, where a fresh empty lock (an
-    owner mid-write) counts as busy.
+    def _lock(fd: int) -> None:
+        """Lock byte 0 of *fd*'s file, or raise OSError at once."""
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+
+    def _unlock(fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+    def _held_elsewhere(exc: OSError) -> bool:
+        """Whether a failed :func:`_lock` means another holder (not a lock that can't work)."""
+        return exc.errno in (errno.EACCES, errno.EDEADLOCK)
+
+else:
+    import fcntl
+
+    def _lock(fd: int) -> None:
+        """Lock *fd*'s file, or raise OSError at once."""
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _unlock(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+    def _held_elsewhere(exc: OSError) -> bool:
+        """Whether a failed :func:`_lock` means another holder (not a lock that can't work)."""
+        return isinstance(exc, BlockingIOError) or exc.errno in (errno.EAGAIN, errno.EACCES)
+
+
+class RunLock(NamedTuple):
+    """The run lock, held until :func:`release_run_lock` or the process ends.
+
+    Not a dataclass: one fails to build in a module loaded from its file
+    without a ``sys.modules`` entry, as the tests load this script.
+    """
+
+    fd: int
+    path: Path
+
+
+def acquire_run_lock(cwd: Path) -> RunLock | str:
+    """Take the one-backup-at-a-time lock for this run, or say why not.
+
+    An OS lock (``msvcrt.locking`` on Windows, ``flock`` elsewhere) on
+    RUN_LOCK_NAME in the git common dir, so every worktree shares it, as the
+    package's locks are (``smriti.core.oslock``; this script can't import
+    smriti). The kernel drops it when its holder exits or crashes: a crashed
+    run leaves nothing to break, and a live one is never taken over, however
+    long it runs. Nothing deletes the file, since a contender that did could
+    leave two holders of two files. Never waits: a busy lock is a skipped run.
+
+    An older backup.py made the lock the file's existence, holding "<pid> <hex>",
+    broken by a contender that judged its owner dead and deleted it: between
+    that check and the delete a third run could take the lock, and the delete
+    removed the new owner's. That token of a live owner (a run of the older
+    script still going when this one is deployed) is honoured, unless it is
+    RUN_LOCK_MAX_AGE_S old. This run's token, "<pid> <hex> os-lock", in turn
+    reads to an older script as a live owner's while this run holds the lock.
+    A file that such a script deleted between this run's open and its lock
+    is let go, and the one at the path locked instead.
     """
     path = git_dirs(cwd)[1] / RUN_LOCK_NAME
-    token = f"{os.getpid()} {uuid.uuid4().hex}"
-    tmp = path.with_name(f"{RUN_LOCK_NAME}.{uuid.uuid4().hex}.tmp")
-    try:
-        tmp.write_text(token, encoding="ascii")
-    except OSError:
-        return None
-    try:
-        for _ in range(2):
-            try:
-                os.link(tmp, path)
-                return token
-            except FileExistsError:
-                if not _break_dead_run_lock(path):
-                    return None
-            except OSError:
-                return _acquire_excl(path, token)
-        return None
-    finally:
-        with contextlib.suppress(OSError):
-            tmp.unlink()
-
-
-def _acquire_excl(path: Path, token: str) -> str | None:
-    for _ in range(2):
-        try:
-            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            if not _break_dead_run_lock(path):
-                return None
-            continue
-        with os.fdopen(fd, "w", encoding="ascii") as f:
-            f.write(token)
-        return token
-    return None
-
-
-def _break_dead_run_lock(path: Path) -> bool:
-    try:
-        held = path.read_text(encoding="ascii")
-        age = time.time() - path.stat().st_mtime
-    except OSError:
-        return True  # vanished in between: just retry
-    first = held.split()[0] if held.split() else ""
-    if not first.isdigit():
-        if age < RUN_LOCK_INIT_GRACE_S:
-            return False  # empty or partial: its owner may still be writing the token
-        owner_alive = False
+    for _ in range(3):
+        lock = _take(path)
+        if isinstance(lock, str) or _is_the_file(lock.fd, path):
+            break
+        release_run_lock(lock)  # deleted or replaced since the open
     else:
-        owner_alive = pid_alive(int(first))
-    if owner_alive and age < RUN_LOCK_MAX_AGE_S:
+        return RUN_LOCK_BUSY
+    if isinstance(lock, str):
+        return lock
+    fd = lock.fd
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        held = os.read(fd, 256).decode("ascii", errors="replace")
+        if _older_run_alive(held, os.fstat(fd).st_mtime):
+            release_run_lock(lock)
+            return RUN_LOCK_BUSY
+        token = f"{os.getpid()} {uuid.uuid4().hex} {RUN_LOCK_KIND}\n".encode("ascii")
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, token)
+    except OSError:
+        pass  # the OS lock is held; the token only informs an older script
+    return lock
+
+
+def _take(path: Path) -> RunLock | str:
+    """Open *path* and lock it, or say why not."""
+    try:
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as exc:
+        return f"the run lock can't be opened: {exc.strerror or exc}"
+    try:
+        _lock(fd)
+    except OSError as exc:
+        os.close(fd)
+        if _held_elsewhere(exc):
+            return RUN_LOCK_BUSY
+        return f"the run lock can't be taken: {exc.strerror or exc}"
+    return RunLock(fd, path)
+
+
+def _is_the_file(fd: int, path: Path) -> bool:
+    """Whether *path* still names the file open as *fd*."""
+    try:
+        held, named = os.fstat(fd), os.stat(path)
+    except OSError:
         return False
-    try:
-        if path.read_text(encoding="ascii") == held:  # still the lock we judged dead
-            path.unlink()
-    except OSError:
-        pass
-    return True
+    return (held.st_dev, held.st_ino) == (named.st_dev, named.st_ino)
 
 
-def release_run_lock(cwd: Path, token: str) -> None:
-    path = git_dirs(cwd)[1] / RUN_LOCK_NAME
+def _older_run_alive(held: str, mtime: float) -> bool:
+    """Whether *held* is the token of an older backup.py, and that run still goes.
+
+    That script wrote "<pid> <hex>" and deleted the file when done, so a
+    token it left is a crashed run's unless its pid is alive, and a pid
+    alive after RUN_LOCK_MAX_AGE_S has been reused.
+    """
+    fields = held.split()
+    if len(fields) != 2 or not fields[0].isdigit():
+        return False
+    return time.time() - mtime < RUN_LOCK_MAX_AGE_S and pid_alive(int(fields[0]))
+
+
+def release_run_lock(lock: RunLock) -> None:
+    """Release the run lock. The file stays: the next run takes the same one."""
     try:
-        if path.read_text(encoding="ascii") == token:  # only ever our own
-            path.unlink()
+        _unlock(lock.fd)
     except OSError:
         pass
+    finally:
+        os.close(lock.fd)
 
 
 def _identity(path: Path) -> tuple[int, int, int]:
@@ -440,9 +505,9 @@ def main() -> int:
             return 0
         log_event(cwd, event="detach_failed", tag=args.tag)  # fall through: run here
 
-    token = acquire_run_lock(cwd)
-    if token is None:
-        log_event(cwd, event="skipped", tag=args.tag, reason="another backup is running")
+    lock = acquire_run_lock(cwd)
+    if isinstance(lock, str):
+        log_event(cwd, event="skipped", tag=args.tag, reason=lock)
         return 0
     try:
         clear_stale_locks(cwd)
@@ -468,7 +533,7 @@ def main() -> int:
                     print(f"[backup] push failed (will retry next trigger): {out}",
                           file=sys.stderr)
     finally:
-        release_run_lock(cwd, token)
+        release_run_lock(lock)
     return 0
 
 
