@@ -19,7 +19,9 @@ security backport series or guaranteed response time.
   the launching user's filesystem permissions; it is not a sandbox for hostile
   agents. `smriti.core.safe_names` validates MCP `project`, `slug`, and `file`
   arguments as single path segments, including Windows device-name checks. Nested
-  write branches have a separate containment check in the writer. These checks
+  write branches have a separate containment check in the writer, which also
+  refuses an entry whose dated directory or day file resolves outside the tree
+  (a junction or symlink at `notes/2026`, say). These checks
   prevent path traversal; they cannot decide whether an otherwise valid request
   was induced by a prompt injection.
 - The ordinary memory tree is local **plain text**. Its SQLite search index also

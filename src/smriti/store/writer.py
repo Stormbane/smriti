@@ -71,8 +71,7 @@ def _journal_path(root: Path, branch: str, now: datetime) -> Path:
     week = _week_of_month(now.day)
 
     entry_dir = root / branch / year_str / month_str / f"week{week}"
-    entry_dir.mkdir(parents=True, exist_ok=True)
-    return entry_dir / f"{mmdd_str}.md"
+    return _made_inside(root, branch, entry_dir, f"{mmdd_str}.md")
 
 
 def _flat_path(root: Path, branch: str, now: datetime) -> Path:
@@ -84,8 +83,34 @@ def _flat_path(root: Path, branch: str, now: datetime) -> Path:
     mmdd_str = now.strftime("%m-%d")
 
     entry_dir = root / branch / year_str
+    return _made_inside(root, branch, entry_dir, f"{mmdd_str}.md")
+
+
+def _made_inside(root: Path, branch: str, entry_dir: Path, name: str) -> Path:
+    """``entry_dir / name``, with its directories made, once it is known to stay in *root*.
+
+    :func:`_checked_branch` checks the branch, but the path adds dated parts
+    to it, and any of those that already exists could be a junction or
+    symlink out of the tree (``notes/2026``, or the day's file itself),
+    which the write would follow. The directory is checked before it is
+    made, so nothing is made through a link either, and the file after, so
+    a linked day file is caught too. The error is :class:`UnsafeName`, as
+    for the branch.
+    """
+    from smriti.core.safe_names import UnsafeName
+
+    base = root.resolve()
+
+    def check(path: Path) -> None:
+        if not path.resolve().is_relative_to(base):
+            where = path.relative_to(root).as_posix()
+            raise UnsafeName(f"invalid branch {branch!r}: {where} resolves outside the memory tree")
+
+    check(entry_dir)
     entry_dir.mkdir(parents=True, exist_ok=True)
-    return entry_dir / f"{mmdd_str}.md"
+    path = entry_dir / name
+    check(path)
+    return path
 
 
 def _checked_branch(root: Path, branch: str) -> str:

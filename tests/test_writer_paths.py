@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import os
+import sys
+from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+from smriti.core.dayzone import day_tz
 from smriti.core.safe_names import UnsafeName
 from smriti.store.writer import write_entry
 
@@ -80,3 +84,80 @@ def test_branch_through_a_link_out_of_the_tree_is_rejected(tmp_path: Path) -> No
     with pytest.raises(ValueError, match="outside the memory tree"):
         write_entry("x", branch="mirrors/notes", root=root, reindex=False)
     assert not any(outside.iterdir())
+
+
+def _link_dir(link: Path, target: Path) -> None:
+    """A directory link at ``link``: a symlink, or on Windows without the
+    privilege a junction (which needs none); skip where neither can be made."""
+    try:
+        os.symlink(target, link, target_is_directory=True)
+        return
+    except (OSError, NotImplementedError):
+        if sys.platform != "win32":
+            pytest.skip("symlinks not permitted here")
+    import _winapi
+
+    try:
+        _winapi.CreateJunction(str(target), str(link))
+    except OSError:
+        pytest.skip("neither a symlink nor a junction can be made here")
+
+
+def _today(root: Path) -> datetime:
+    return datetime.now(timezone.utc).astimezone(day_tz(root))
+
+
+@pytest.mark.parametrize("branch,dated", [
+    ("notes", lambda now: f"notes/{now:%Y}"),
+    ("projects/smriti", lambda now: f"projects/smriti/{now:%Y}"),
+    ("journal", lambda now: f"journal/{now:%Y}"),
+    ("journal", lambda now: f"journal/{now:%Y}/{now:%m}"),
+], ids=["notes-year", "project-year", "journal-year", "journal-month"])
+def test_a_dated_directory_linked_out_of_the_tree_is_refused(
+        tmp_path: Path, branch: str, dated: Callable[[datetime], str]) -> None:
+    """H15.5: the branch was checked, but not the year (or month) directory the
+    writer adds to it: a link there sent the entry, and the directories made
+    for it, outside the tree."""
+    root = tmp_path / "tree"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    link = root / dated(_today(root))
+    link.parent.mkdir(parents=True)
+    _link_dir(link, outside)
+
+    with pytest.raises(UnsafeName, match="resolves outside the memory tree"):
+        write_entry("x", branch=branch, root=root, reindex=False)
+    assert list(outside.iterdir()) == []
+
+
+def test_a_day_file_linked_out_of_the_tree_is_refused(tmp_path: Path) -> None:
+    """H15.5: the day's file itself, a symlink to a file elsewhere, was appended to."""
+    root = tmp_path / "tree"
+    outside = tmp_path / "outside.md"
+    outside.write_text("someone else's file\n", encoding="utf-8")
+    day = root / "notes" / f"{_today(root):%Y}" / f"{_today(root):%m-%d}.md"
+    day.parent.mkdir(parents=True)
+    try:
+        os.symlink(outside, day)
+    except (OSError, NotImplementedError):
+        pytest.skip("file symlinks not permitted here")
+
+    with pytest.raises(UnsafeName, match="resolves outside the memory tree"):
+        write_entry("x", branch="notes", root=root, reindex=False)
+    assert outside.read_text(encoding="utf-8") == "someone else's file\n"
+
+
+def test_a_link_that_stays_inside_the_tree_is_followed(tmp_path: Path) -> None:
+    """A link is refused only when it leads out: one to elsewhere in the tree still writes."""
+    root = tmp_path / "tree"
+    archive = root / "archive"
+    archive.mkdir(parents=True)
+    year = root / "notes" / f"{_today(root):%Y}"
+    year.parent.mkdir()
+    _link_dir(year, archive)
+
+    path = write_entry("kept", branch="notes", root=root, reindex=False)
+
+    [entry] = archive.iterdir()
+    assert entry.name == path.name and "kept" in entry.read_text(encoding="utf-8")
