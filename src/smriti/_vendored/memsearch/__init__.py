@@ -19,6 +19,8 @@ sovereignty-first design. smriti writes its own versions of
 those components.
 
 Modifications from upstream:
-- None yet. Files copied verbatim. Modifications will be recorded
-  per-file in comment blocks at the top of each modified file.
+- Recorded per file: in the docstring at the top of a modified module,
+  or, in embeddings/ (whose modules carry no header of their own), in
+  its __init__ and in comments where the code differs. embeddings/stub.py
+  is smriti's own.
 """

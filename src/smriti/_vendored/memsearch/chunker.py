@@ -4,7 +4,14 @@
 Vendored from zilliztech/memsearch (MIT License, (c) 2025 Zilliz Inc.)
 Upstream: https://github.com/zilliztech/memsearch/blob/main/src/memsearch/chunker.py
 Vendored on: 2026-04-12
-Modifications from upstream: None yet (verbatim copy).
+Modifications from upstream:
+  - _split_large_section: a line longer than max_chunk_size is cut into
+    pieces at word boundaries (_split_long_line) instead of joining a chunk
+    whole, so no chunk holds such a line: upstream let it through, and one
+    24,000-character line became one chunk (H15.10). Every other line is
+    chunked as upstream does.
+  - MAX_CHUNK_SIZE and OVERLAP_LINES name chunk_markdown's defaults, and
+    max_chunk_chars says how long a chunk can be with them.
 License: see smriti/NOTICE.md and smriti/src/smriti/_vendored/memsearch/LICENSE
 ---
 """
@@ -16,6 +23,10 @@ import re
 from dataclasses import dataclass, field
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+
+# chunk_markdown's defaults (smriti: named, for callers that size what they show).
+MAX_CHUNK_SIZE = 1500
+OVERLAP_LINES = 2
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 # Minimum meaningful text length after stripping metadata noise.
@@ -86,18 +97,36 @@ def compute_chunk_id(
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def max_chunk_chars(
+    max_chunk_size: int = MAX_CHUNK_SIZE,
+    overlap_lines: int = OVERLAP_LINES,
+) -> int:
+    """The longest chunk :func:`chunk_markdown` makes with these settings (smriti).
+
+    A chunk is at most *max_chunk_size* characters, with one exception: a
+    chunk that starts with the lines it repeats from the chunk before it
+    (at most *overlap_lines* of them) and holds the one line that didn't fit
+    beside them. That chunk is at most *overlap_lines* + 1 lines, each at
+    most *max_chunk_size* characters (a longer line is cut into pieces),
+    joined by newlines. With *overlap_lines* 0 no chunk exceeds the size.
+    """
+    return (overlap_lines + 1) * max_chunk_size + overlap_lines
+
+
 def chunk_markdown(
     text: str,
     source: str = "",
     *,
-    max_chunk_size: int = 1500,
-    overlap_lines: int = 2,
+    max_chunk_size: int = MAX_CHUNK_SIZE,
+    overlap_lines: int = OVERLAP_LINES,
 ) -> list[Chunk]:
     """Split markdown *text* into chunks, breaking on headings.
 
     Chunks that exceed *max_chunk_size* characters are split further at
     paragraph boundaries.  A small *overlap_lines* context is carried
-    forward to preserve continuity.
+    forward to preserve continuity.  A line longer than *max_chunk_size* is
+    cut at word boundaries (smriti); :func:`max_chunk_chars` gives the
+    longest chunk that can result.
     """
     lines = text.split("\n")
     # Find all heading positions
@@ -168,6 +197,7 @@ def _split_large_section(
     chunks: list[Chunk] = []
     current_lines: list[str] = []
     current_start = 0
+    carried = 0  # smriti: how many of current_lines the last chunk already holds
 
     def _emit(content: str, start_line: int, end_line: int) -> None:
         if content:
@@ -183,6 +213,33 @@ def _split_large_section(
             )
 
     for i, line in enumerate(lines):
+        # smriti: a line longer than max_size never joins a chunk whole
+        # (upstream added it like any other line, so it became part of a
+        # chunk of any size). The lines before it go first: as the start of
+        # its first piece when they take at most half of it, else as a
+        # chunk of their own (or not at all, when the last chunk already
+        # holds them all). Then the line goes in pieces cut at word
+        # boundaries, and nothing is carried past it.
+        if len(line) > max_size:
+            head = "\n".join(current_lines).lstrip()
+            room = max_size
+            if head.strip() and len(head) + 1 <= max_size // 2:
+                room = max_size - len(head) - 1
+            else:
+                if head.strip() and len(current_lines) > carried:
+                    _emit(head.strip(), base_line + current_start + 1, base_line + i)
+                head = ""
+            for n, part in enumerate(_split_long_line(line, max_size, room)):
+                if n == 0 and head:
+                    _emit((head + "\n" + part).strip(),
+                          base_line + current_start + 1, base_line + i + 1)
+                else:
+                    _emit(part, base_line + i + 1, base_line + i + 1)
+            current_lines = []
+            current_start = i + 1
+            carried = 0
+            continue
+
         current_lines.append(line)
         text = "\n".join(current_lines)
 
@@ -195,6 +252,7 @@ def _split_large_section(
             overlap_start = max(0, len(current_lines) - overlap)
             current_lines = current_lines[overlap_start:]
             current_start = i + 1 - len(current_lines)
+            carried = len(current_lines)
             continue
 
         # Forced line-boundary split: no paragraph break found but text is
@@ -206,6 +264,7 @@ def _split_large_section(
             _emit(content, base_line + current_start + 1, base_line + i)
             overlap_start = max(0, len(current_lines) - overlap)
             current_lines = current_lines[overlap_start:]
+            carried = len(current_lines)
             current_lines.append(line)  # re-add the rolled-back line
             current_start = i - len(current_lines) + 1
             continue
@@ -221,6 +280,7 @@ def _split_large_section(
                 )
             current_lines = []
             current_start = i + 1
+            carried = 0
             continue
 
         if is_last_line:
@@ -265,6 +325,45 @@ def _split_long_text(text: str, max_size: int) -> list[str]:
             # No sentence boundary found — hard split at max_size
             parts.append(text[:max_size])
             text = text[max_size:]
+    if text:
+        parts.append(text)
+    return parts
+
+
+# smriti: where a line longer than the chunk size is cut. A sentence end
+# (Latin punctuation before whitespace, or an ideographic full stop,
+# exclamation or question mark) is preferred; whitespace will do. Each
+# pattern matches up to the LAST such place in the text it is given.
+_LAST_SENTENCE_END_RE = re.compile(r"(?s:.*)(?:[.!?](?=\s)|[。！？])")
+_LAST_SPACE_RE = re.compile(r"(?s:.*)\s")
+
+
+def _split_long_line(line: str, max_size: int, first: int) -> list[str]:
+    """Cut a line longer than the chunk size into pieces (smriti).
+
+    The first piece is at most *first* characters, every other at most
+    *max_size*. A piece ends at the last sentence end in the second half of
+    its room, else at the last whitespace in it, so no word is cut; a
+    "word" longer than the room (a URL, a hash, text without spaces) is cut
+    at the room. The whitespace at a cut belongs to neither piece.
+    """
+    parts: list[str] = []
+    text = line.strip()
+    room = max(1, first)
+    while len(text) > room:
+        # text[room] is in view, so a full stop at room - 1 before a space
+        # counts; an ideographic one at room itself would end past the room.
+        m = _LAST_SENTENCE_END_RE.match(text, room // 2, room + 1)
+        if m and m.end() > room:
+            m = _LAST_SENTENCE_END_RE.match(text, room // 2, room)
+        if m:
+            cut = m.end()
+        else:
+            m = _LAST_SPACE_RE.match(text, 0, room + 1)
+            cut = m.end() - 1 if m and m.end() > 1 else room
+        parts.append(text[:cut].rstrip())
+        text = text[cut:].lstrip()
+        room = max_size
     if text:
         parts.append(text)
     return parts
