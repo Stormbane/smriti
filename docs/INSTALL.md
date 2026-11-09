@@ -117,12 +117,14 @@ on. Until hardening H11.1 such an install captured every transcript on
 the machine. The installer asks two questions before it changes anything:
 
 1. **"Capture conversations into the day-log?"** Yes sets
-   `"capture": true` in `<root>/.smriti/daylog.json`, which turns on the
-   default sources, and removes an empty `"sources": []`; a list of your
-   own sources is left alone. No sets `"sources": []` (which an older
-   `smriti logd` still running also reads as nothing) and drops
-   `"capture": true`. Only those keys change: the file's other keys are
-   kept, and `extra_sources` still adds its own sources. A running
+   `"capture": true` in `<root>/.smriti/daylog.json` (replacing a
+   `false`), which turns on the default sources, and removes an empty
+   `"sources": []`; a list of your own sources is left alone, and a
+   `"capture": false` beside it is removed. No sets `"capture": false`,
+   which captures nothing, `extra_sources` included, and `"sources": []`
+   (which an older `smriti logd` still running also reads as nothing).
+   Only those keys change: the file's other keys are kept, `extra_sources`
+   too, and it applies again when capture is turned back on. A running
    `smriti logd` rereads `daylog.json` when it changes, so the choice
    reaches it on its next pass, within a few seconds.
 2. **"Is `<url>` a private repository that only you can read?"** Asked
@@ -157,7 +159,7 @@ How each question is settled, in order:
 | A flag | The flag | The flag (ignored, with a note, when there is no remote) |
 | Answered before, by a flag or at a prompt | Kept; not asked again | Kept, while the backup pushes to the same remote with the same push URLs; another upstream remote, or adding, removing or changing a URL, asks again |
 | A terminal (stdin and stdout) | Asked. A new root needs `y` or `n`; on an existing one, Enter keeps what `daylog.json` does now | Asked; needs `y` or `n` |
-| No terminal, no flag, new root | **Off**: `"sources": []`, with a note | Not confirmed private: the summary says so and prints the git-crypt steps |
+| No terminal, no flag, new root | **Off**: `"capture": false`, with a note | Not confirmed private: the summary says so and prints the git-crypt steps |
 | No terminal, no flag, existing root | `daylog.json` is left as it is, with a note saying whether it captures | The same |
 
 An existing root is one with `.smriti/daylog.json`, `.smriti/wake.py` or
@@ -302,8 +304,8 @@ defaults apply, and capture is off.
 
 | Key | Default | What it does |
 |---|---|---|
-| `capture` | off | `true` captures from the default sources: Claude Code transcripts (`~/.claude/projects/*/*.jsonl`), Codex rollouts (`~/.codex/sessions/*/*/*/rollout-*.jsonl`) and voice transcripts (`<root>/heartbeat/voice-transcripts/*/*.md`); the installer's `--capture` sets it. `false` captures nothing, whatever `sources` and `extra_sources` list |
-| `sources` | none | Capture globs, `[{"name", "kind", "glob"}]`; replaces the default sources, `capture` or not. `[]` captures nothing (the installer's `--no-capture`) |
+| `capture` | off | `true` captures from the default sources: Claude Code transcripts (`~/.claude/projects/*/*.jsonl`), Codex rollouts (`~/.codex/sessions/*/*/*/rollout-*.jsonl`) and voice transcripts (`<root>/heartbeat/voice-transcripts/*/*.md`); the installer's `--capture` sets it. `false` captures nothing, whatever `sources` and `extra_sources` list (the installer's `--no-capture`) |
+| `sources` | none | Capture globs, `[{"name", "kind", "glob"}]`; replaces the default sources, `capture` or not. `[]` captures none of them (`extra_sources` still applies) |
 | `extra_sources` | none | Capture globs added to whichever of the above applies |
 | `notify_cmd` | none | The command `smriti morning` pipes its message to; no command, no morning |
 | `location` | none | Where the user lives, for the morning's local headlines |

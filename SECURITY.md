@@ -259,8 +259,9 @@ sources: Claude Code transcripts, Codex rollouts, and voice transcript files) or
 `"sources"` list of its own; without either, or without the file, nothing is
 captured, and `smriti logd` and `smriti status` say so. The installer asks
 whether to capture conversations, or takes `--capture` (which writes
-`"capture": true`) / `--no-capture` (which writes `"sources": []`); with neither a
-terminal nor a flag, a new memory root captures nothing, and an existing one keeps
-what its `daylog.json` says (`extra_sources` still adds explicit sources). There is
+`"capture": true`) / `--no-capture` (which writes `"capture": false`, capturing
+nothing, `extra_sources` included); with neither a terminal nor a flag, a new memory
+root captures nothing, and an existing one keeps what its `daylog.json` says
+(`extra_sources` still adds explicit sources, unless it says `"capture": false`). There is
 no blanket anonymisation of captured conversations; captured turns, and everything
 smriti writes into the tree, are scrubbed of credential-shaped strings.

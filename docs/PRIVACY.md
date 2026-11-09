@@ -60,7 +60,8 @@ The installer (`python -m smriti.install`, or `scripts/install.py` in a checkout
 before it changes anything:
 
 1. *Capture conversations into the day-log?* Yes writes `"capture": true`
-   into `<root>/.smriti/daylog.json`, no writes `"sources": []`; either
+   into `<root>/.smriti/daylog.json`, no writes `"capture": false` (which
+   captures nothing, `extra_sources` included) and `"sources": []`; either
    keeps its other keys. Capture is off until the file turns it on: with
    no `daylog.json`, or one with neither `"capture": true` nor `"sources"`,
    nothing is captured, and `smriti logd` and `smriti status` say so.

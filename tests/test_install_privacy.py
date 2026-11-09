@@ -25,6 +25,7 @@ from types import ModuleType
 
 import pytest
 
+from smriti.daylog.config import load_config
 from smriti.install import core, privacy
 
 HAS_GIT = shutil.which("git") is not None
@@ -138,7 +139,7 @@ def decide_and_apply(root: Path, **kwargs: object) -> privacy.PrivacyPlan:
 
 
 class TestCaptureChoice:
-    def test_no_capture_writes_empty_sources_and_keeps_other_keys(self, root: Path) -> None:
+    def test_no_capture_turns_capture_off_and_keeps_other_keys(self, root: Path) -> None:
         before = {
             "user_name": "Sam",
             "agent_name": "Ari",
@@ -152,11 +153,12 @@ class TestCaptureChoice:
 
         assert plan.capture == privacy.Choice(False, privacy.FLAG)
         after = read_daylog(root)
-        assert after == {**before, "sources": []}
+        assert after == {**before, "capture": False, "sources": []}
+        assert privacy.capture_sources(root) == []  # extra_sources kept, and off
 
     def test_no_capture_creates_daylog_when_missing(self, root: Path) -> None:
         decide_and_apply(root, capture=False)
-        assert read_daylog(root) == {"sources": []}
+        assert read_daylog(root) == {"capture": False, "sources": []}
         assert privacy.capture_sources(root) == []
 
     def test_capture_removes_empty_sources_and_keeps_other_keys(self, root: Path) -> None:
@@ -178,12 +180,12 @@ class TestCaptureChoice:
         assert {spec.name for spec in privacy.capture_sources(root)} == {
             "claude", "codex", "voice"}
 
-    def test_no_capture_drops_capture_true(self, root: Path) -> None:
+    def test_no_capture_turns_capture_true_to_false(self, root: Path) -> None:
         write_daylog(root, {"capture": True, "user_name": "Sam"})
 
         decide_and_apply(root, capture=False)
 
-        assert read_daylog(root) == {"user_name": "Sam", "sources": []}
+        assert read_daylog(root) == {"capture": False, "user_name": "Sam", "sources": []}
 
     def test_capture_leaves_custom_sources_alone(self, root: Path) -> None:
         custom = {"sources": [{"name": "mine", "kind": "claude_jsonl", "glob": "/a/*.jsonl"}]}
@@ -195,21 +197,59 @@ class TestCaptureChoice:
         assert path.read_bytes() == before
 
     def test_a_flag_matching_the_file_rewrites_nothing(self, root: Path) -> None:
-        path = write_daylog(root, {"sources": [], "user_name": "Sam"})
+        path = write_daylog(root, {"capture": False, "sources": [], "user_name": "Sam"})
         before = path.read_bytes()
 
         decide_and_apply(root, capture=False)
 
         assert path.read_bytes() == before
 
-    def test_extra_sources_still_captured_after_no_capture(self, root: Path) -> None:
-        write_daylog(root, {"extra_sources": [
-            {"name": "phone", "kind": "voice_md", "glob": "/phone/*.md"},
-        ]})
+    @pytest.mark.parametrize("before", [
+        {},
+        {"capture": True},
+        {"sources": []},
+        {"sources": [{"name": "mine", "kind": "claude_jsonl", "glob": "/a/*.jsonl"}]},
+    ])
+    def test_no_capture_captures_nothing_extra_sources_included(
+            self, root: Path, before: dict[str, object]) -> None:
+        """H15.3: "Capture nothing" left extra_sources captured. This replaces
+        the test that pinned it (test_extra_sources_still_captured_after_no_capture)."""
+        extra = [{"name": "phone", "kind": "voice_md", "glob": "/phone/*.md"}]
+        write_daylog(root, {**before, "extra_sources": extra, "user_name": "Sam"})
+
         plan = decide_and_apply(root, capture=False)
 
-        text = privacy.summary(root, plan)
-        assert "captured:  voice transcripts" in text
+        assert privacy.capture_sources(root) == []
+        assert load_config(root).capture_off == '.smriti/daylog.json says "capture": false'
+        assert "captured:  nothing" in privacy.summary(root, plan)
+        after = read_daylog(root)
+        assert after["extra_sources"] == extra and after["user_name"] == "Sam"
+
+        # Turned back on, the default sources apply again, the extras with them.
+        decide_and_apply(root, capture=True)
+
+        names = {spec.name for spec in privacy.capture_sources(root)}
+        assert names == {"claude", "codex", "voice", "phone"}
+        assert read_daylog(root) == {"capture": True, "extra_sources": extra,
+                                     "user_name": "Sam"}
+
+    def test_capture_turns_an_explicit_false_back_on(self, root: Path) -> None:
+        write_daylog(root, {"capture": False, "user_name": "Sam"})
+
+        decide_and_apply(root, capture=True)
+
+        assert read_daylog(root) == {"capture": True, "user_name": "Sam"}
+        assert {spec.name for spec in privacy.capture_sources(root)} == {
+            "claude", "codex", "voice"}
+
+    def test_capture_beside_its_own_sources_drops_an_explicit_false(self, root: Path) -> None:
+        mine = [{"name": "mine", "kind": "claude_jsonl", "glob": "/a/*.jsonl"}]
+        write_daylog(root, {"capture": False, "sources": mine})
+
+        decide_and_apply(root, capture=True)
+
+        assert read_daylog(root) == {"sources": mine}
+        assert [spec.name for spec in privacy.capture_sources(root)] == ["mine"]
 
     def test_malformed_daylog_is_refused_before_any_question(self, root: Path) -> None:
         path = privacy.daylog_path(root)
@@ -232,7 +272,7 @@ class TestNoTerminal:
         plan = decide_and_apply(root)
 
         assert plan.capture == privacy.Choice(False, privacy.DEFAULT)
-        assert read_daylog(root) == {"sources": []}
+        assert read_daylog(root) == {"capture": False, "sources": []}
         text = privacy.summary(root, plan)
         assert "captured:  nothing" in text
         assert "capture is OFF: there was no terminal" in text
@@ -322,7 +362,7 @@ class TestPrompts:
         assert "Claude Code transcripts, Codex rollouts and voice transcripts" in out
         assert f"into {root / 'log'}" in out
         assert "The backup commits them" in out and "pushes them" in out
-        assert read_daylog(root) == {"sources": []}
+        assert read_daylog(root) == {"capture": False, "sources": []}
 
     def test_existing_root_offers_its_current_state(self, root: Path) -> None:
         write_daylog(root, {"user_name": "Sam", "capture": True})
@@ -342,7 +382,7 @@ class TestPrompts:
 
         assert asked == [f"{privacy.CAPTURE_QUESTION} [y/N] "]
         assert plan.capture == privacy.Choice(False, privacy.PROMPT)
-        assert read_daylog(root) == {"user_name": "Sam", "sources": []}
+        assert read_daylog(root) == {"capture": False, "user_name": "Sam", "sources": []}
 
     def test_end_of_input_falls_back_to_the_safe_default(self, root: Path) -> None:
         read, _ = answers()
@@ -1017,7 +1057,7 @@ class TestInstaller:
     ) -> None:
         assert run_installer(installer, root, "--no-capture") == 0
 
-        assert read_daylog(root) == {"sources": []}
+        assert read_daylog(root) == {"capture": False, "sources": []}
         assert (root / ".smriti" / "wake.py").exists()  # the core install ran
         out = capsys.readouterr().out
         assert "captured:  nothing" in out
@@ -1041,7 +1081,7 @@ class TestInstaller:
     ) -> None:
         assert run_installer(installer, root) == 0
 
-        assert read_daylog(root) == {"sources": []}
+        assert read_daylog(root) == {"capture": False, "sources": []}
         assert "capture is OFF: there was no terminal" in capsys.readouterr().out
 
     def test_rerun_keeps_an_existing_daylog(

@@ -11,7 +11,8 @@ choose, and says what follows:
 
 1. Capture conversations into the day-log? "Yes" writes ``"capture": true``
    (the default sources) into ``<root>/.smriti/daylog.json``; "No" writes
-   ``"sources": []``. Either keeps every other key.
+   ``"capture": false`` and ``"sources": []``, which capture nothing,
+   ``extra_sources`` included. Either keeps every other key.
 2. Is the backup remote private? Asked only when there is a remote.
    smriti never sets up git-crypt; it prints the steps instead.
 
@@ -281,14 +282,17 @@ def set_capture(root: Path, enabled: bool) -> str | None:
     """Make ``daylog.json`` capture, or capture nothing. Returns what changed.
 
     Only the ``capture`` and ``sources`` keys are touched, and the file is
-    created if needed. On sets ``"capture": true``, so the default sources
-    apply, and removes an empty ``sources``; a list of the file's own
-    sources is left alone, as it captures already. Off sets ``"sources": []``,
-    which every version of smriti reads as nothing (a logd still running
-    older code included, which would take a missing file or a missing
-    ``sources`` for the defaults), and drops ``"capture": true``.
-    ``extra_sources`` is never touched, so its sources are still captured
-    either way.
+    created if needed. Off sets ``"capture": false``, which outranks every
+    source, ``extra_sources`` included (:mod:`smriti.daylog.config`), and
+    ``"sources": []``, which a logd still running code from before
+    ``"capture"`` existed reads as nothing too, where it would take a
+    missing ``sources`` for the defaults. ``extra_sources`` stays in the file,
+    as every other key does, and captures nothing while capture is off.
+
+    On sets ``"capture": true``, replacing a ``false``, so the default
+    sources apply, and removes an empty ``sources``. A list of the file's
+    own sources is left alone, since it captures already, and only a
+    ``"capture": false`` beside it is removed, so that the list applies.
     """
     path = daylog_path(root)
     data = read_daylog(root) or {}
@@ -313,12 +317,14 @@ def set_capture(root: Path, enabled: bool) -> str | None:
             return None
         _write_json(path, data)
         return f"{' and '.join(changes)} in {path}, so the default sources apply"
+    # "capture": false, not only "sources": [], since extra_sources is added
+    # to whichever sources apply and only "capture": false outranks it.
+    if data.get("capture") is not False:
+        data["capture"] = False
+        changes.append('set "capture": false')
     if sources != []:
         data["sources"] = []
         changes.append('set "sources": []')
-    if data.get("capture") is True:
-        del data["capture"]
-        changes.append('removed "capture": true')
     if not changes:
         return None
     _write_json(path, data)

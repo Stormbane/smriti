@@ -116,8 +116,8 @@ def main(argv: list[str] | None = None) -> int:
         dest="capture",
         action="store_const",
         const=False,
-        help='Capture nothing: set "sources": [] in <root>/.smriti/daylog.json, '
-             "keeping its other keys",
+        help='Capture nothing: set "capture": false and "sources": [] in '
+             "<root>/.smriti/daylog.json (extra_sources included), keeping its other keys",
     )
     remote = parser.add_mutually_exclusive_group()
     remote.add_argument(
