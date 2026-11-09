@@ -44,6 +44,12 @@ introspection work.
 > its old rule, so the upgrade regenerates nothing. The status file has a `backup` step:
 > the last commit and push from the backup log, and a failed one fails the night.
 
+> **Since 2026-11-09 (hardening H15.7a):** a render or digest also records `content_hash`,
+> the hash of its turns as stored, and is stale when a turn is edited in place (the input
+> hash, of turn ids, didn't change with an edit). One written before records none and is
+> judged by its input hash, so the upgrade regenerates nothing. A day-file that holds
+> nothing loses its render and digest; a missing one keeps them. See Design 4.
+
 ## Goal
 
 Replace the over-ambitious sleep pipeline with a narrow cycle built on a
@@ -170,6 +176,9 @@ log needs only a collector, not new instrumentation.
 - Derived artifacts per day: `DD.md` (rendered timeline) and `DD-digest.md`,
   each carrying an `input_hash` (hash of the sorted turn IDs) in frontmatter;
   a digest's is the hash of the turns behind the text it summarised (H12.11).
+  Since H15.7a each also carries `content_hash`, over the turns as stored
+  (id, time, channel, speaker, session and text), which an edit in place
+  changes and the ids don't.
   Rollups: `log/YYYY/MM/weekN.md`, `log/YYYY/MM.md`, `log/YYYY.md`, each with
   a manifest of the input digests they consumed: `members_hash` over their
   content, and `inputs_hash` over their input hashes, the rule before H12.12.
@@ -237,14 +246,32 @@ wake shows as `NIGHTLY SKIPPED for <day>: <reason>`, and exits 1. Target date: t
    differs from the current one (H12.12): the fingerprint of the digest's
    three prompts, the budgets that decide what its calls see, the provider
    chain, and the user's and agent's names. A digest without one, written
-   before H12.12, is judged by its input hash alone.
+   before H12.12, is judged by its input hash alone. A render or digest is
+   stale, too, when its `content_hash` differs from the turns' (H15.7a): a
+   turn edited in place, a correction or a redaction, keeps its id and so
+   the input hash. One written before H15.7a has no `content_hash` and is
+   judged by its input hash alone, so the upgrade redoes no day; an edit to
+   such a day is seen when the day is redone for another reason (deleting its
+   `DD.md` is one: the day is then rendered and digested again).
+
+   A day whose day-file holds nothing (no turn, and no line that isn't one)
+   but still has a render or digest had its turns removed: the nightly
+   removes both (H15.7a), so their text stops being searchable, and the
+   render step lists the day under `emptied` (`not_removed` for one whose
+   file couldn't be deleted, tried again the next night). A missing day-file
+   is not taken that way: a tree restored without its day-files (git-ignored)
+   or with old ones pruned keeps its renders and digests; and nor is one
+   whose lines are all unreadable, which `corrupt_lines` names. To remove a
+   day, empty its day-file rather than delete it.
 
    Every day-file in the tree is a candidate as well (and a dirty day from
    capture's state), and every candidate's render and digest heads are
    compared every night. Since H13.8 the scan doesn't read every day-file to
    hash its turns, which grew with the history: `.smriti/nightly-scan.json`
    records each day-file's size and mtime (from the directory listing, taken
-   before the read), its turns' input hash and its corrupt-line count. The
+   before the read), its turns' input hash, content hash (since H15.7a, the
+   marker's version 2: the first night on it reads every day-file once) and
+   its corrupt-line count. The
    changed, dirty and window days are read every night; any other day-file
    only when its size or mtime differs from the marker's. A missing,
    unreadable or other-version marker means every day-file is read, and so
@@ -287,7 +314,15 @@ wake shows as `NIGHTLY SKIPPED for <day>: <reason>`, and exits 1. Target date: t
    rollup written before H12.12 has only `inputs_hash`, over its members'
    input hashes (a member rollup's file hash), and is judged by that until it
    is regenerated; new rollups write it too, so an older smriti reads them as
-   current.
+   current. That rule can't see a digest rewritten from the same turns, so a
+   member digest that records `content_hash` (written since H15.7a, after any
+   such rollup) makes it stale as well: an edit in place reaches its week.
+   A day emptied of turns loses its digest, so its week is regenerated from
+   the digests left, and its month and year after it. A week with no digest
+   left is no period any more: its rollup is kept, not regenerated or
+   removed (a digest can be missing for other reasons, and the week may be
+   all that is left of its days), and the rollup step lists it under
+   `orphaned`.
 6. **Reindex**: `smriti index` incremental, waiting up to 60 s for another
    writer's lock (an argument to the indexer, not the process environment).
    No qmd refresh: its only consumer, the ambient-recall hook, is off.

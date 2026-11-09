@@ -33,7 +33,14 @@ from pathlib import Path
 from smriti.core.memwrite import write_memory
 from smriti.daylog.config import DEFAULT_AGENT_NAME, DEFAULT_USER_NAME, DaylogConfig
 from smriti.daylog.model import USER, Turn, day_tz
-from smriti.daylog.render import AUTONOMOUS_HEADING, DaySnapshot, input_hash, input_hash_of
+from smriti.daylog.render import (
+    AUTONOMOUS_HEADING,
+    CONTENT_FIELD,
+    DaySnapshot,
+    content_hash_of,
+    input_hash,
+    input_hash_of,
+)
 from smriti.daylog.writer import read_whole_day
 from smriti.llm import LLMError, LLMRequest, get_provider
 
@@ -470,17 +477,17 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]], 
     """Write ``DD-digest.md`` for *day*. Returns None if there is no log.
 
     The digest records the input hash of the turns behind the text it
-    summarised, so it is stale whenever that text is. The nightly
-    passes the *snapshot* it rendered the day from: the rendered text, the
-    turns it was rendered from and their hash, all from one read. Without
-    one, the digest summarises ``DD.md`` as it is and records the hash that
-    file carries; a day-file that can't be read to its end then raises
-    :class:`~smriti.daylog.writer.DayUnreadable`.
+    summarised, and their content hash, so it is stale whenever that text
+    is. The nightly passes the *snapshot* it rendered the day from: the
+    rendered text, the turns it was rendered from and their hashes, all from
+    one read. Without one, the digest summarises ``DD.md`` as it is and
+    records the hashes that file carries; a day-file that can't be read to
+    its end then raises :class:`~smriti.daylog.writer.DayUnreadable`.
 
     A failed call (any part, or the merge) raises, and no digest is written.
     """
     if snapshot is not None:
-        turns, digested = snapshot.turns, snapshot.input_hash
+        turns, digested, content = snapshot.turns, snapshot.input_hash, snapshot.content_hash
         log_text = snapshot.text
         if "\r" in log_text:  # as read_text would give it back from DD.md
             log_text = log_text.replace("\r\n", "\n").replace("\r", "\n")
@@ -493,6 +500,7 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]], 
         except OSError:
             return None
         digested = input_hash_of(log_text) or input_hash(turns)
+        content = content_hash_of(log_text)  # none from a render written before it
     fingerprint = digest_fingerprint(cfg)  # what makes it, as it is before the call
     autonomous = _autonomous_sample(turns)
     notes_cut = 0
@@ -514,6 +522,7 @@ def digest_day(cfg: DaylogConfig, day: str, attempts_log: list[dict[str, str]], 
         "---",
         f"date: {day}",
         f"input_hash: {digested}",
+        *([f"{CONTENT_FIELD}: {content}"] if content else []),
         f"prompt_fp: {fingerprint}",
         f"tz_offset: {_offset_text(_day_offset(day, tz))}",
         f"parts: {coverage.parts}",

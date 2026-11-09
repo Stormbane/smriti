@@ -17,7 +17,17 @@ A rollup in the older format, with no ``members_hash``, has only
 a member that has none, as a rollup does). It is judged by that rule until
 it is regenerated for a reason that rule sees, so an upgrade regenerates
 nothing; from then on it carries the new fields. New rollups write ``inputs_hash`` too,
-so an older smriti still reads them as current.
+so an older smriti still reads them as current. That rule can't see a
+digest rewritten from the same turns, so a member digest that records a
+``content_hash`` (written since digests carried it, so after any rollup in
+the older format) makes it stale too: a turn edited in place, a redaction,
+reaches the week through its digest.
+
+A day whose turns were all removed loses its digest (the nightly), and its
+week's members change: the week is regenerated from the digests left, and
+its month and year after it. A week with no digest left is no period any
+more and keeps its rollup, which nothing regenerates or removes
+(:func:`orphaned_rollups` names them; the nightly's status lists them).
 
 Week convention matches the journal tree: week N covers days
 (N-1)*7+1 .. N*7 of the month (week5 takes the remainder).
@@ -36,7 +46,7 @@ from pathlib import Path
 from smriti.core.memwrite import write_memory
 from smriti.daylog.config import DEFAULT_AGENT_NAME, DaylogConfig
 from smriti.daylog.digest import compose, prompt_fingerprint
-from smriti.daylog.render import head_field, head_of, input_hash_of, read_head
+from smriti.daylog.render import CONTENT_FIELD, head_field, head_of, input_hash_of, read_head
 
 _DIGEST_NAME_RE = re.compile(r"^(\d{2})-digest\.md$")
 _INPUTS_FIELD = "inputs_hash"  # the members' input hashes: the older format's rule
@@ -83,6 +93,11 @@ class _Member:
         if self.data is None:
             return ""
         return input_hash_of(head_of(self.data[:8192])) or _short_hash(self.data)
+
+    def records_content(self) -> bool:
+        """Whether it records a ``content_hash``: a digest written since digests carried it."""
+        return self.data is not None and bool(head_field(head_of(self.data[:8192]),
+                                                         CONTENT_FIELD))
 
 
 def _read_members(paths: Iterable[Path], *, strict: bool = False) -> list[_Member]:
@@ -135,7 +150,10 @@ class Period:
         recorded = head_field(head, _MEMBERS_FIELD)
         if recorded:
             return recorded == _content_manifest(members)
-        # The older format (no members_hash): its own rule, until it is regenerated.
+        # The older format (no members_hash): its own rule, until it is regenerated,
+        # or a member written after it (one that records content_hash) says it changed.
+        if any(m.records_content() for m in members):
+            return False
         return head_field(head, _INPUTS_FIELD) == _input_manifest(members)
 
 
@@ -191,6 +209,25 @@ def enumerate_stale_periods(cfg: DaylogConfig, today: date) -> list[Period]:
             periods.append(Period("year", cfg.log_dir / f"{year:04d}.md", months))
 
     return [p for p in periods if not p.is_current(cfg)]
+
+
+def orphaned_rollups(cfg: DaylogConfig) -> list[Path]:
+    """Week rollups whose week has no digest left, as when its days were emptied.
+
+    No period stands for them, so nothing regenerates or removes them, and
+    a month regenerated since leaves them out. Kept rather than removed: a
+    digest can be missing for reasons other than a day emptied of turns (a
+    tree restored without digests, digests pruned by hand), and the week
+    may be all that is left of its days.
+    """
+    month = "[0-9]" * 4 + "/[0-9][0-9]/"
+    weeks: set[tuple[Path, int]] = set()  # (month directory, week) of every digest
+    for path in cfg.log_dir.glob(month + "*-digest.md"):
+        m = _DIGEST_NAME_RE.match(path.name)
+        if m:
+            weeks.add((path.parent, week_of(int(m.group(1)))))
+    return [path for path in sorted(cfg.log_dir.glob(month + "week[1-5].md"))
+            if (path.parent, int(path.stem[len("week"):])) not in weeks]
 
 
 # Total input budget per rollup kind, in chars. Each input gets an equal share

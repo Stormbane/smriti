@@ -1,9 +1,10 @@
 """Render a day's JSONL into the human-readable timeline (``DD.md``).
 
 Derived artifacts carry an ``input_hash`` — the hash of the day's
-sorted turn ids — in frontmatter. The nightly repair pass compares that
-hash against the current day-file to detect staleness; every derived
-step is re-runnable from its inputs.
+sorted turn ids — in frontmatter, and a ``content_hash`` of the turns
+themselves. The nightly repair pass compares them against the
+current day-file to detect staleness; every derived step is re-runnable
+from its inputs.
 
 The nightly renders a day from one read of its turns
 (:func:`render_snapshot`) and digests that rendered text, so a digest's
@@ -42,8 +43,30 @@ _HEAD_BYTES = 8192
 
 
 def input_hash(turns: list[Turn]) -> str:
+    """The hash of the turns' ids: which turns a derived artifact was made from."""
     ids = sorted(t.id for t in turns)
     return hashlib.sha1("\n".join(ids).encode("utf-8")).hexdigest()[:16]
+
+
+# The frontmatter field of :func:`content_hash`.
+CONTENT_FIELD = "content_hash"
+
+
+def content_hash(turns: list[Turn]) -> str:
+    """The hash of the turns as stored: each one's id, time, channel, speaker, text, session.
+
+    :func:`input_hash` hashes the ids alone, and a turn's id is fixed when it
+    is captured, so a turn edited in place (a correction, a redaction) kept
+    the day's input hash, and its old render and digest would stay
+    current. Renders and digests record this as ``content_hash`` beside
+    ``input_hash``, and one that records it is stale when it differs. One
+    written before artifacts carried it records none and is judged by its
+    input hash alone, so the upgrade regenerates nothing.
+    """
+    # repr: each field quoted and escaped, so no two turns' fields run together.
+    records = sorted(repr((t.id, t.ts.isoformat(), t.channel, t.who, t.session, t.text))
+                     for t in turns)
+    return hashlib.sha1("\n".join(records).encode("utf-8")).hexdigest()[:16]
 
 
 def head_of(data: bytes) -> str:
@@ -78,6 +101,26 @@ def read_input_hash(path: Path) -> str:
     return input_hash_of(read_head(path))
 
 
+def content_hash_of(text: str) -> str:
+    """The content_hash recorded in a derived artifact's text ('' if absent: one
+    written before artifacts carried it)."""
+    return head_field(text[:_HEAD_CHARS], CONTENT_FIELD)
+
+
+def head_is_of(head: str, current: str, content: str) -> bool:
+    """Whether a derived artifact's *head* says it was made from the turns whose
+    input hash is *current* and content hash is *content*.
+
+    The input hash must match. The content hash must too when the head
+    records one; a head written before artifacts carried it is judged by its
+    input hash alone.
+    """
+    if input_hash_of(head) != current:
+        return False
+    recorded = head_field(head, CONTENT_FIELD)
+    return not recorded or recorded == content
+
+
 def _split_autonomous(turns: list[Turn]) -> tuple[list[Turn], list[list[Turn]]]:
     by_session: dict[tuple[str, str], list[Turn]] = {}
     for t in turns:
@@ -103,10 +146,13 @@ class DaySnapshot:
     input_hash: str
     text: str  # DD.md as written (masked), with "\n" line endings
     path: Path
+    content_hash: str = ""  # the turns' content_hash
 
 
-def render_text(cfg: DaylogConfig, day: str, turns: list[Turn], digest: str) -> str:
-    """The timeline of *turns*, with *digest*, their input hash, in its frontmatter."""
+def render_text(cfg: DaylogConfig, day: str, turns: list[Turn], digest: str,
+                content: str = "") -> str:
+    """The timeline of *turns*, with *digest*, their input hash, and *content*, their
+    content hash, in its frontmatter."""
     conversational, autonomous = _split_autonomous(turns)
     tz = day_tz(cfg.root)
 
@@ -114,6 +160,7 @@ def render_text(cfg: DaylogConfig, day: str, turns: list[Turn], digest: str) -> 
         "---",
         f"date: {day}",
         f"input_hash: {digest}",
+        *([f"{CONTENT_FIELD}: {content}"] if content else []),
         "generated_by: smriti nightly (render)",
         "---",
         "",
@@ -153,11 +200,13 @@ def render_snapshot(cfg: DaylogConfig, day: str) -> DaySnapshot | None:
     if not turns:
         return None
     digest = input_hash(turns)
+    content = content_hash(turns)
     out = cfg.day_md(day)
     # Masked like every write of memory text. Capture masked each turn already;
     # this catches days captured before a pattern existed.
-    text = write_memory(out, render_text(cfg, day, turns, digest))
-    return DaySnapshot(day=day, turns=turns, input_hash=digest, text=text, path=out)
+    text = write_memory(out, render_text(cfg, day, turns, digest, content))
+    return DaySnapshot(day=day, turns=turns, input_hash=digest, text=text, path=out,
+                       content_hash=content)
 
 
 def render_day(cfg: DaylogConfig, day: str) -> Path | None:

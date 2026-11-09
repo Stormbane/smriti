@@ -4,10 +4,16 @@ A rollup is stale when a member's content changes, not only the turns behind
 it; provenance is taken from what was read before the call. Artifacts
 written before H12.12 lack the new fields and keep their old rule, so the
 upgrade regenerates nothing by itself.
+
+H15.7a: a render or digest is stale when a turn behind it is edited in place
+(its ``content_hash``), and a day whose day-file holds nothing loses both.
+Artifacts written before H15.7a record no content hash and are judged by
+their input hash alone.
 """
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,7 +26,13 @@ from smriti.daylog.config import DaylogConfig
 from smriti.daylog.digest import digest_fingerprint
 from smriti.daylog.model import AGENT, USER, Turn, parse_ts
 from smriti.daylog.nightly import run_nightly
-from smriti.daylog.render import head_field, read_head, render_day
+from smriti.daylog.render import (
+    head_field,
+    read_head,
+    read_input_hash,
+    render_day,
+    render_snapshot,
+)
 from smriti.daylog.rollup import (
     Period,
     build_rollup,
@@ -83,8 +95,18 @@ def _stale_names(cfg: DaylogConfig) -> list[str]:
     return [p.out_path.name for p in enumerate_stale_periods(cfg, TODAY)]
 
 
+def _drop_fields(path: Path, *names: str) -> None:
+    """Drop frontmatter fields *names* from *path*: an artifact as an older smriti wrote it."""
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    path.write_text("".join(ln for ln in lines if not ln.startswith(tuple(f"{n}:" for n in names))),
+                    encoding="utf-8")
+
+
 def _write_old_format_rollup(period: Period) -> None:
-    """A rollup as smriti wrote it before H12.12: ``inputs_hash`` and nothing newer."""
+    """A rollup as smriti wrote it before H12.12: ``inputs_hash`` and nothing newer,
+    over members as they were then (no ``content_hash``, which came with H15.7a)."""
+    for member in period.inputs:
+        _drop_fields(member, "content_hash")
     period.out_path.write_text(
         f"---\nkind: {period.kind}-rollup\ninputs_hash: {period.manifest_hash()}\n"
         "generated_by: smriti nightly (rollup)\n---\n## Highlights\n- an old week\n",
@@ -161,11 +183,12 @@ def test_an_old_format_rollup_is_current_by_its_old_rule(
     week = _week(cfg)
     _write_old_format_rollup(week)
     assert _stale_names(cfg) == []
-    # Its rule sees input hashes only: a digest rewritten from the same turns
-    # doesn't make it stale, as it never did; nothing is regenerated for lacking
-    # the new field.
+    # Its rule sees input hashes only: a digest an older smriti rewrote from the
+    # same turns doesn't make it stale, as it never did; nothing is regenerated
+    # for lacking the new field. (One rewritten since H15.7a does: below.)
     llm.text = "## Highlights\n- the same day, told differently"
     digest_mod.digest_day(cfg, DAYS[0], [])
+    _drop_fields(cfg.day_digest(DAYS[0]), "content_hash")
     assert _stale_names(cfg) == []
     assert llm.requests[-1].system.startswith("You are Ari's nightly digest writer")
 
@@ -207,11 +230,8 @@ def _fp(path: Path) -> str:
 
 
 def _as_written_before_h12_12(path: Path) -> None:
-    """Drop the fields H12.12 added: the artifact as an older smriti wrote it."""
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    path.write_text("".join(ln for ln in lines
-                            if not ln.startswith(("prompt_fp:", "members_hash:"))),
-                    encoding="utf-8")
+    """Drop the fields H12.12 added, and H15.7a's: the artifact as an older smriti wrote it."""
+    _drop_fields(path, "prompt_fp", "members_hash", "content_hash")
 
 
 def test_a_digest_records_the_fingerprint_of_what_made_it(
@@ -335,3 +355,165 @@ def test_an_old_format_month_follows_its_weeks_files(tmp_path: Path, llm: FakePr
     assert enumerate_stale_periods(cfg, today) == []
     build_rollup(week, [], cfg)  # regenerated, for whatever reason
     assert [p.out_path.name for p in enumerate_stale_periods(cfg, today)] == ["09.md"]
+
+
+# ------------------------------------------------- turns edited or removed (H15.7a)
+
+
+def _edit_turn(cfg: DaylogConfig, day: str, old: str, new: str) -> None:
+    """Edit a turn's text in its day-file in place, keeping its id: a correction, a redaction."""
+    path = cfg.day_jsonl(day)
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    for record in records:
+        if record["text"] == old:
+            record["text"] = new
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+
+
+def _content(path: Path) -> str:
+    return head_field(read_head(path), "content_hash")
+
+
+@pytest.mark.parametrize("day", [DAY, "2026-07-01"], ids=["in-the-window", "outside-it"])
+def test_a_turn_edited_in_place_makes_its_day_stale(
+        tmp_path: Path, llm: FakeProvider, day: str) -> None:
+    """The input hash hashes turn ids, which an edit keeps: the old render and
+    digest stayed current, the old text searchable (Codex, review #8)."""
+    cfg = _cfg(tmp_path)
+    _seed(cfg, day)
+    _night(cfg, NIGHT, rollup_cap=0)
+    ids, content = read_input_hash(cfg.day_md(day)), _content(cfg.day_md(day))
+
+    _edit_turn(cfg, day, f"question on {day}", "question on [redacted]")
+    steps = _night(cfg, NIGHT.replace(minute=30), rollup_cap=0)
+    assert steps["render"]["days"] == [day] and steps["digest"]["days"] == [day]
+    assert content  # the first night's render and digest recorded it
+    text = cfg.day_md(day).read_text(encoding="utf-8")
+    assert "[redacted]" in text and f"question on {day}" not in text
+    assert "[redacted]" in llm.requests[-1].user
+    assert read_input_hash(cfg.day_md(day)) == ids  # the same turns
+    assert _content(cfg.day_md(day)) == _content(cfg.day_digest(day)) != content
+    assert _night(cfg, NIGHT.replace(minute=45), rollup_cap=0)["digest"]["days"] == []
+
+
+def test_a_day_written_before_the_content_hash_is_current_while_its_turns_are(
+        tmp_path: Path, llm: FakeProvider) -> None:
+    """An artifact that records no content_hash is judged by its input hash, as before."""
+    cfg = _cfg(tmp_path)
+    _seed(cfg, DAY)
+    _night(cfg, NIGHT)
+    for path in (cfg.day_md(DAY), cfg.day_digest(DAY)):
+        _drop_fields(path, "content_hash")
+    served = len(llm.requests)
+    steps = _night(cfg, NIGHT.replace(minute=30))
+    assert steps["render"]["days"] == [] and steps["digest"]["days"] == []
+    assert len(llm.requests) == served
+    assert _content(cfg.day_md(DAY)) == _content(cfg.day_digest(DAY)) == ""
+
+    append_turns(cfg, [_turn(f"{DAY}T03:00:00Z", "a late turn")])  # what the old rule sees
+    assert _night(cfg, NIGHT.replace(minute=45))["digest"]["days"] == [DAY]
+    assert _content(cfg.day_md(DAY)) == _content(cfg.day_digest(DAY)) != ""
+
+
+def test_the_upgrade_renders_and_digests_nothing_again(
+        tmp_path: Path, llm: FakeProvider) -> None:
+    """A tree an older smriti wrote: no content_hash anywhere, and a version-1 scan
+    marker. The first night reads every day-file once and rewrites nothing."""
+    cfg = _cfg(tmp_path)
+    days = ("2026-07-01", "2026-07-02", "2026-09-01", DAY)
+    for day in days:
+        _seed(cfg, day)
+    _night(cfg, NIGHT, rollup_cap=0)
+    artifacts = [p for day in days for p in (cfg.day_md(day), cfg.day_digest(day))]
+    for path in artifacts:
+        _drop_fields(path, "content_hash")
+    marker = cfg.root / ".smriti" / "nightly-scan.json"
+    raw = json.loads(marker.read_text(encoding="utf-8"))
+    raw["version"] = 1
+    raw["days"] = {day: entry[:4] for day, entry in raw["days"].items()}
+    marker.write_text(json.dumps(raw), encoding="utf-8")
+    before = {path: path.read_bytes() for path in artifacts}
+    served = len(llm.requests)
+
+    steps = _night(cfg, NIGHT.replace(minute=30), rollup_cap=0)
+    assert steps["render"]["days"] == [] and steps["digest"]["days"] == []
+    assert steps["render"]["scan"]["full"] is True  # the version-1 marker is not trusted
+    assert len(llm.requests) == served
+    assert {path: path.read_bytes() for path in artifacts} == before
+    assert json.loads(marker.read_text(encoding="utf-8"))["version"] == 2
+
+
+def test_a_day_emptied_of_turns_loses_its_render_and_digest(
+        tmp_path: Path, llm: FakeProvider) -> None:
+    cfg = _cfg(tmp_path)
+    for day in ("2026-07-01", DAY):  # outside the window, and in it
+        _seed(cfg, day)
+    _night(cfg, NIGHT)
+    for day in ("2026-07-01", DAY):
+        assert cfg.day_md(day).exists() and cfg.day_digest(day).exists()
+        cfg.day_jsonl(day).write_text("", encoding="utf-8")  # every turn removed
+    steps = _night(cfg, NIGHT.replace(minute=30))
+    for day in ("2026-07-01", DAY):
+        assert not cfg.day_md(day).exists() and not cfg.day_digest(day).exists()
+    assert steps["render"]["ok"] is True
+    assert steps["render"]["emptied"] == ["2026-07-01", DAY]
+    assert "emptied" not in _night(cfg, NIGHT.replace(minute=45))["render"]
+
+
+@pytest.mark.parametrize("how", ["deleted", "garbled"])
+def test_a_day_file_gone_or_garbled_keeps_its_render_and_digest(
+        tmp_path: Path, llm: FakeProvider, how: str) -> None:
+    """Only a day-file that holds nothing says its turns were removed. A missing one
+    can be a tree restored without its day-files (git-ignored), or old ones pruned
+    to keep the digests; a garbled one is damage the status names."""
+    cfg = _cfg(tmp_path)
+    _seed(cfg, DAY)
+    _night(cfg, NIGHT)
+    if how == "deleted":
+        cfg.day_jsonl(DAY).unlink()
+    else:
+        cfg.day_jsonl(DAY).write_text("not a turn\n", encoding="utf-8")
+    steps = _night(cfg, NIGHT.replace(minute=30))
+    assert cfg.day_md(DAY).exists() and cfg.day_digest(DAY).exists()
+    assert "emptied" not in steps["render"]
+
+
+def test_an_emptied_day_leaves_its_week_and_a_week_left_with_none_is_named(
+        tmp_path: Path, llm: FakeProvider) -> None:
+    """The week is regenerated from the digests left (and its month after it). A
+    week with none left keeps its rollup: no period stands for it any more."""
+    cfg = _cfg(tmp_path)
+    for day in (*DAYS, "2026-09-09"):  # two days in week 1, one in week 2
+        _seed(cfg, day)
+    late = datetime(2026, 9, 19, 17, 5, tzinfo=timezone.utc)  # target 09-19: both weeks closed
+    built = _night(cfg, late, rollup_cap=10)["rollups"]["built"]
+    assert sorted(built) == ["week1.md", "week2.md"]
+    month = cfg.log_dir / "2026" / "09"
+    week1, week2 = month / "week1.md", month / "week2.md"
+    for day in (DAYS[0], "2026-09-09"):
+        cfg.day_jsonl(day).write_text("", encoding="utf-8")
+
+    steps = _night(cfg, late.replace(minute=30), rollup_cap=10)
+    assert steps["render"]["emptied"] == [DAYS[0], "2026-09-09"]
+    assert steps["rollups"]["built"] == ["week1.md"]
+    assert steps["rollups"]["orphaned"] == ["2026/09/week2.md"]
+    request = llm.requests[-1].user
+    assert "02-digest.md" in request and "01-digest.md" not in request
+    assert week1.exists() and week2.exists()
+
+
+def test_a_digest_rewritten_since_the_content_hash_makes_an_old_format_week_stale(
+        tmp_path: Path, llm: FakeProvider) -> None:
+    """The old rule sees the members' input hashes, which an edit in place keeps; a
+    member that records content_hash was written after any old-format rollup."""
+    cfg = _cfg(tmp_path)
+    _digested(cfg, *DAYS)
+    _write_old_format_rollup(_week(cfg))
+    assert _stale_names(cfg) == []
+    ids = read_input_hash(cfg.day_digest(DAYS[0]))
+    _edit_turn(cfg, DAYS[0], f"question on {DAYS[0]}", "question on [redacted]")
+    snapshot = render_snapshot(cfg, DAYS[0])
+    assert snapshot is not None
+    digest_mod.digest_day(cfg, DAYS[0], [], snapshot=snapshot)
+    assert read_input_hash(cfg.day_digest(DAYS[0])) == ids
+    assert _stale_names(cfg) == ["week1.md"]

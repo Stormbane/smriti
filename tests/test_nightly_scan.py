@@ -326,5 +326,5 @@ def test_nights_schedule_what_full_scans_schedule(tmp_path: Path) -> None:
     ]
     marker = json.loads((tmp_path / "incremental" / ".smriti" / "nightly-scan.json")
                         .read_text(encoding="utf-8"))
-    assert marker["version"] == 1 and marker["full_scan"] == "2026-09-04"
+    assert marker["version"] == 2 and marker["full_scan"] == "2026-09-04"
     assert sorted(marker["days"]) == [*OLD, "2026-08-10", "2026-08-11", RECENT]

@@ -14,7 +14,7 @@ from smriti.daylog.config import DaylogConfig
 from smriti.daylog.model import AGENT, USER, Turn, parse_ts
 from smriti.daylog.morning import run_morning
 from smriti.daylog.nightly import run_nightly
-from smriti.daylog.render import input_hash, read_input_hash, render_day
+from smriti.daylog.render import content_hash, input_hash, read_input_hash, render_day
 from smriti.daylog.rollup import enumerate_stale_periods, week_of
 from smriti.daylog.writer import append_turns, read_whole_day
 from smriti.llm.types import LLMRequest, LLMResponse
@@ -114,6 +114,7 @@ _LEGACY_DAY = "\n".join(json.dumps(r) for r in [
 _LEGACY_RENDER = """---
 date: 2026-11-03
 input_hash: a1d98fd4f3012c12
+content_hash: c4e0b92b9c75374d
 generated_by: smriti nightly (render)
 ---
 
@@ -270,7 +271,8 @@ def test_a_day_whose_every_reply_is_blank_gets_no_digest_and_stays_stale(
     assert not cfg.day_digest("2026-09-04").exists()
     turns = read_whole_day(cfg.day_jsonl("2026-09-04"))
     assert not _day_is_current(cfg, "2026-09-04", input_hash(turns),
-                               digest_mod.digest_fingerprint(cfg))  # retried next night
+                               digest_mod.digest_fingerprint(cfg),
+                               content_hash(turns))  # retried next night
 
 
 def test_an_is_error_envelope_fails_the_call_and_the_fallback_is_tried(
