@@ -446,7 +446,7 @@ def wake_script_users(memory_root: Path, home: Path) -> list[str]:
             text = config.read_text(encoding="utf-8")
         except FileNotFoundError:
             continue
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             reasons.append(f"{config} can't be read ({exc}), so a hook in it may run it")
             continue
         try:

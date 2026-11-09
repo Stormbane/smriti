@@ -315,6 +315,21 @@ def test_a_hook_config_that_cant_be_read_keeps_wake_py(
     assert f"[wake] kept {root / '.smriti' / 'wake.py'}: {settings} can't be read" in out
 
 
+def test_a_hook_config_that_isnt_utf8_keeps_wake_py(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    # Codex's config, which a core-only install never touches, must not
+    # crash it: undecodable is unreadable, and the script stays.
+    home, root = _earlier_install(tmp_path, monkeypatch)
+    config = home / ".codex" / "config.toml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_bytes(b"model = \"\xff\xfe\"\n")
+    assert _install(home, root, harness="none") == 0
+    out = capsys.readouterr().out
+    assert (root / ".smriti" / "wake.py").exists()
+    assert f"[wake] kept {root / '.smriti' / 'wake.py'}: {config} can't be read" in out
+
+
 def test_a_hand_written_narada_p_that_runs_it_keeps_wake_py(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str]) -> None:
