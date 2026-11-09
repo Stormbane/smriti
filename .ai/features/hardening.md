@@ -727,6 +727,14 @@ a recheck.
     it. Checked live: the wake hook's briefing, `smriti doctor` for both
     harnesses (all hook checks pass), and a `log`-level row through the new
     sender.
+  - **LongMemEval-S rerun** (2026-11-10, `ee317df`, the same vector cache and
+    its 744 new texts): H15.10 and H15.11 accepted. The agent's view shows
+    part of an evidence turn for 0.866 of questions (after: 0.843; keyword
+    only 0.811 against 0.794), and no other measure moved. "Nothing is close"
+    still fired for none of the 30 unanswerable questions (H15.12, left).
+  - **The doctor's project-ledger check** failed every project that keeps
+    only `todo.md`; it now follows the briefing's rule (`83b5267`).
+  H15 is done but for H15.12.
 - **H14.7 done** (2026-11-08, `hardening/h14b`; not yet reviewed or merged). Three
   removals, each its own commit with its tests; the code is in the git history.
   - The private store: `smriti.private`, the CLI's init on every command,
