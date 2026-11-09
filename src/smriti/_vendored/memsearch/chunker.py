@@ -8,7 +8,7 @@ Modifications from upstream:
   - _split_large_section: a line longer than max_chunk_size is cut into
     pieces at word boundaries (_split_long_line) instead of joining a chunk
     whole, so no chunk holds such a line: upstream let it through, and one
-    24,000-character line became one chunk (H15.10). Every other line is
+    24,000-character line became one chunk. Every other line is
     chunked as upstream does.
   - MAX_CHUNK_SIZE and OVERLAP_LINES name chunk_markdown's defaults, and
     max_chunk_chars says how long a chunk can be with them.

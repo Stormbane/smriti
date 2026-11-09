@@ -27,7 +27,7 @@ class OnnxEmbedding:
     # Every text of a batch is padded to its longest, so a batch over this is
     # split by length (utils.batched_embed); upstream embedded 32 texts in
     # one call whatever their length, and one 6,000-token text among them
-    # needed tens of GB (H15.10). Truncation stays at 8,192 tokens: no chunk
+    # needed tens of GB. Truncation stays at 8,192 tokens: no chunk
     # the chunker makes now comes near it, and a lower cap would change the
     # vectors of long texts.
     _MAX_ATTENTION = 32 * 512 * 512

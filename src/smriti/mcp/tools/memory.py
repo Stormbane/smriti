@@ -27,7 +27,7 @@ MAX_TOP_K = 50
 # so every chunk is shown whole. That is a chunk of the chunker's size, or one
 # that starts with the few lines it repeats from the chunk before it (its
 # overlap). A longer chunk, from an index built before the chunker cut long
-# lines (H15.10), is cut, and says so.
+# lines, is cut, and says so.
 PREVIEW_CHARS: int = max_chunk_chars()
 
 
