@@ -408,15 +408,16 @@ def handle_update_feature_status(arguments: Arguments) -> str:
         if current_path is None:
             raise ToolError(f"feature {slug!r} not found in {project}/.ai/features/")
 
-        # Read, mutate frontmatter
+        # Read, mutate frontmatter. A field's value is on its own line: \s*
+        # would run past a blank one's end and take the next key with it.
         text = current_path.read_text(encoding="utf-8")
         text = re.sub(
-            r"^status:\s*\S+", f"status: {new_status}", text, count=1, flags=re.MULTILINE
+            r"^status:[ \t]*\S*", f"status: {new_status}", text, count=1, flags=re.MULTILINE
         )
         if new_status == "shipped":
             date_str = datetime.now().astimezone().strftime("%Y-%m-%d")
             text = re.sub(
-                r"^shipped:\s*\S*", f"shipped: {date_str}", text, count=1, flags=re.MULTILINE
+                r"^shipped:[ \t]*\S*", f"shipped: {date_str}", text, count=1, flags=re.MULTILINE
             )
 
         # Append notes if provided

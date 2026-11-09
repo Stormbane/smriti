@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from smriti.core.tree import tree_root
@@ -59,3 +61,14 @@ def test_notes_are_written_as_given(notes: str) -> None:
     text = spec.read_text(encoding="utf-8")
     assert f"## Implementation notes\n\n{notes}" in text
     assert "_Filled during build._" not in text
+
+
+def test_shipping_keeps_the_owner() -> None:
+    """The shipped date's pattern ran over the blank ``shipped:`` line's end and
+    took the ``owner:`` key of the next line with it."""
+    _update("shipped")
+    spec = tree_root() / "mirrors" / "demo" / "ai" / "features" / "shipped" / "lamps.md"
+    lines = spec.read_text(encoding="utf-8").splitlines()
+    [shipped] = [line for line in lines if line.startswith("shipped:")]
+    assert re.fullmatch(r"shipped: \d{4}-\d{2}-\d{2}", shipped)
+    assert "owner: both" in lines
