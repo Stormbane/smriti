@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -161,3 +162,33 @@ def test_a_link_that_stays_inside_the_tree_is_followed(tmp_path: Path) -> None:
 
     [entry] = archive.iterdir()
     assert entry.name == path.name and "kept" in entry.read_text(encoding="utf-8")
+
+
+def test_writers_racing_to_make_a_day_are_not_refused(tmp_path: Path) -> None:
+    """The final-path check resolved the day's directory before making it.
+    On Windows, resolving a path that another writer creates meanwhile can
+    come back in its extended-length form, which isn't inside the tree, so
+    the first writes of a day, made together, were refused (2 rounds in 3,
+    eight writers at a time). Only paths that exist are resolved now."""
+    for round_ in range(8):  # each round failed 2 times in 3 before
+        root = tmp_path / f"tree{round_}"
+        root.mkdir()
+        start = threading.Barrier(8)
+        errors: list[BaseException] = []
+
+        def write(i: int, root: Path = root, start: threading.Barrier = start,
+                  errors: list[BaseException] = errors) -> None:
+            start.wait()
+            try:
+                write_entry(f"entry {i}", branch="notes", root=root, reindex=False)
+            except Exception as exc:  # noqa: BLE001 — collected, asserted on the main thread
+                errors.append(exc)
+
+        threads = [threading.Thread(target=write, args=(i,)) for i in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert not errors, (round_, errors)
+        [day] = (root / "notes").rglob("*.md")
+        assert all(f"entry {i}" in day.read_text(encoding="utf-8") for i in range(8))

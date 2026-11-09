@@ -92,24 +92,34 @@ def _made_inside(root: Path, branch: str, entry_dir: Path, name: str) -> Path:
     :func:`_checked_branch` checks the branch, but the path adds dated parts
     to it, and any of those that already exists could be a junction or
     symlink out of the tree (``notes/2026``, or the day's file itself),
-    which the write would follow. The directory is checked before it is
-    made, so nothing is made through a link either, and the file after, so
-    a linked day file is caught too. The error is :class:`UnsafeName`, as
-    for the branch.
+    which the write would follow. So the directories are made one at a
+    time, each inside one already checked, and each is checked once it
+    exists, before anything is made in it: nothing is made through a link.
+    The day's file is checked when it is a link (a file that isn't, in a
+    directory inside the tree, is inside it). The error is
+    :class:`UnsafeName`, as for the branch.
+
+    Only paths that exist are resolved: on Windows, resolving one that
+    another writer creates meanwhile can come back in its extended-length
+    form (the ``\\?`` prefix), which doesn't compare as inside the tree.
     """
     from smriti.core.safe_names import UnsafeName
 
-    base = root.resolve()
+    def refuse(path: Path) -> UnsafeName:
+        where = path.relative_to(root).as_posix()
+        return UnsafeName(f"invalid branch {branch!r}: {where} resolves outside the memory tree")
 
-    def check(path: Path) -> None:
-        if not path.resolve().is_relative_to(base):
-            where = path.relative_to(root).as_posix()
-            raise UnsafeName(f"invalid branch {branch!r}: {where} resolves outside the memory tree")
-
-    check(entry_dir)
-    entry_dir.mkdir(parents=True, exist_ok=True)
+    root.mkdir(parents=True, exist_ok=True)
+    base = root.resolve(strict=True)
+    current = root
+    for part in entry_dir.relative_to(root).parts:
+        current = current / part
+        current.mkdir(exist_ok=True)
+        if not current.resolve(strict=True).is_relative_to(base):
+            raise refuse(current)
     path = entry_dir / name
-    check(path)
+    if path.is_symlink() and not path.resolve().is_relative_to(base):
+        raise refuse(path)
     return path
 
 
