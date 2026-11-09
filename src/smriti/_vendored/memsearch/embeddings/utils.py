@@ -57,6 +57,8 @@ async def _embed_within(
     max_attention: int,
 ) -> list[list[float]]:
     """smriti: embed one batch in one call, or, over *max_attention*, in runs by length."""
+    if len(batch) == 1:  # nothing for it to pad: a query, or most writes; don't measure it
+        return await embed_fn(batch)
     lengths = [length(t) for t in batch]
     if len(batch) * max(lengths) ** 2 <= max_attention:
         return await embed_fn(batch)

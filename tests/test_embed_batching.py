@@ -53,6 +53,22 @@ def test_a_long_text_is_embedded_apart_and_the_results_keep_their_order() -> Non
     assert recorder.batches == [[t for t in texts if len(t) < 100], ["L" * 100]]
 
 
+def test_a_single_text_is_embedded_without_being_measured() -> None:
+    # A query, or a write of one chunk: nothing for it to pad, so its length
+    # (a tokenizer pass on the real provider) isn't worth taking.
+    measured: list[str] = []
+
+    def length(text: str) -> int:
+        measured.append(text)
+        return len(text)
+
+    recorder = Recorder()
+    got = asyncio.run(batched_embed(["L" * 5000], recorder, 32, length=length,
+                                    max_attention=8 * 10 * 10))
+    assert got == [_vector("L" * 5000)] and recorder.batches == [["L" * 5000]]
+    assert measured == []
+
+
 def test_a_batch_over_the_bound_goes_in_runs_of_like_length() -> None:
     rng = random.Random(10)
     texts = [f"{i:03d}" + "x" * rng.choice([rng.randint(1, 20), rng.randint(20, 200), 2000])
