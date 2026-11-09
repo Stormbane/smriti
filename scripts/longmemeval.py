@@ -201,8 +201,10 @@ def visible(content: str, limit: int = MCP_PREVIEW_CHARS) -> str:
 
 def preview_chars() -> int:
     """How many characters of a result the imported checkout's ``smriti_read``
-    shows: what its ``preview_chars()`` says, or :data:`MCP_PREVIEW_CHARS` for
-    a checkout from before H15.11, which has none."""
+    shows: what its ``preview_chars()`` says, else its ``PREVIEW_CHARS`` (the
+    commits that had the constant before the function), else
+    :data:`MCP_PREVIEW_CHARS` for a checkout from before H15.11, which has
+    neither."""
     import importlib
 
     try:
@@ -210,7 +212,9 @@ def preview_chars() -> int:
     except ImportError:  # older still: no such module
         return MCP_PREVIEW_CHARS
     says = getattr(memory, "preview_chars", None)
-    return int(says()) if callable(says) else MCP_PREVIEW_CHARS
+    if callable(says):
+        return int(says())
+    return int(getattr(memory, "PREVIEW_CHARS", MCP_PREVIEW_CHARS))
 
 
 def evidence_windows(line: str) -> list[str]:

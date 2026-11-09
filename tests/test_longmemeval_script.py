@@ -174,7 +174,10 @@ def test_the_agent_sees_what_the_checkouts_smriti_read_shows(
     limit = memory.preview_chars()
     assert lme.preview_chars() == limit > lme.MCP_PREVIEW_CHARS  # this one says
     assert lme.visible("x" * 9000, limit) == "x" * limit
-    monkeypatch.delattr(memory, "preview_chars")  # a checkout from before H15.11
+    monkeypatch.delattr(memory, "preview_chars")
+    monkeypatch.setattr(memory, "PREVIEW_CHARS", 4502, raising=False)  # the constant's commits
+    assert lme.preview_chars() == 4502
+    monkeypatch.delattr(memory, "PREVIEW_CHARS")  # a checkout from before H15.11
     assert lme.preview_chars() == lme.MCP_PREVIEW_CHARS == 1000
     monkeypatch.setitem(sys.modules, "smriti.mcp.tools.memory", None)  # older still
     assert lme.preview_chars() == 1000
