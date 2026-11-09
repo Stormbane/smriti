@@ -212,13 +212,28 @@ The embedding service reads three environment variables: `SMRITI_EMBED_SERVICE=0
 - Claude Code: SessionStart runs `wake.py`; UserPromptSubmit touches `.smriti/last-activity`.
 - Codex: SessionStart runs `wake.py` with JSON framing.
 
+## Benchmarks
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/longmemeval-dark.svg">
+  <img alt="LongMemEval-S answer accuracy. smriti with Sonnet 5: 88% (plus or minus 6.4, 100 questions). Published figures: Mastra Observational Memory 94.9% with gpt-5-mini and 84.2% with gpt-4o, Mem0 v3 93.4 to 94.4%, Hindsight 91.4% with Gemini-3, Oblivion 90.6% with GPT-4.1-mini, Nemori 64.2% with gpt-4o-mini." src="docs/img/longmemeval-light.svg">
+</picture>
+
+On [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (questions about a user's past conversations with an assistant, each over its own history of about 50 sessions):
+
+- **Answers.** An agent (Claude Sonnet 5) answering through `smriti_read` alone got 88 of 100 sampled questions right, and declined all 9 that the history can't answer. Counting across conversations was the weakest kind (72%).
+- **Search.** An evidence session is among the first five results for 98.5% of the 470 answerable questions (keyword search alone: 96.2%), the same before and after the hardening.
+- **Not like for like.** The other figures are each system's own, mostly from its makers, with different answering models, graders and dataset releases: the chart places smriti, it doesn't rank it. And smriti searched raw conversations here, where an install searches its nightly digests; how much an install remembers once a day is digested isn't measured yet.
+
+Method, results by question type, what the runs found, and how to reproduce them: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+
 ## Status and limits
 
 - **One setup, being generalised.** smriti grew inside one person's setup with one agent. That setup's MCP tools, wake sections and morning persona are now the optional `reference` profile, a separate package outside smriti's wheel; the core names the two parties from configuration, and its default root is `~/.smriti` (an existing `~/.narada` is kept). Still coupled: Windows paths in project discovery.
 - **Removed:** the April 2026 design's deep pipeline (EXTRACT → JUDGE → CROSSLINK, the cognitive cascade, ingest, consolidation, the task queue and its daemon, and the `sleep`, `queue`, `daemon`, `watch`, `ingest` and `merge-concepts` commands) was removed in November 2026; it remains in the git history. When it ran, it never changed a belief or identity file; it lengthened the pages it touched by 88% and destroyed one source file. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes that design. The encrypted private store (nothing wrote to it), qmd as a recall backend, and the file-touch ambient-recall hook with `smriti recall` (off in the reference setup, because research found that 4-11% of its injections helped; plan 2.4) were removed in November 2026 too.
 - **Legacy:** the Hermes harness (`--harness hermes`); the PreCompact staging hook.
 - **Retrieval quality** on the reference tree is moderate: 0.67 hit@5 on the MCP path, 0.81 with reranking. The plan targets 0.95.
-- **On LongMemEval** ([`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)), search over raw conversations puts an evidence session in the first five for 98.5% of answerable questions (keyword search alone: 96.2%), the same before and after the hardening; an agent answering through `smriti_read` got 88 of 100 sampled questions right. An install searches digests rather than raw conversations, which this doesn't measure.
+- **On LongMemEval**, search finds the conversation and an agent answers 88% of sampled questions ([Benchmarks](#benchmarks)); what an install keeps after its digests isn't measured.
 - **Not yet true** (see [`docs/SELF.md`](docs/SELF.md)):
   - search results carry no date or provenance;
   - capture records no gaps;

@@ -71,7 +71,7 @@ src/smriti/
   llm/                   providers: claude_cli, codex_cli, anthropic_api, openai_api, ollama; test_stub (tests only)
   eval/                  evaluation: search cases, the quality set, digest measures, synthetic fixture
   _vendored/memsearch/   vendored MIT code (see NOTICE.md)
-scripts/                 install.py, setup_project.py, doc_facts.py, bench.py, wheel_smoke.py, longmemeval.py
+scripts/                 install.py, setup_project.py, doc_facts.py, bench.py, wheel_smoke.py, longmemeval.py, longmemeval_chart.py
 memory_template/         skeleton for a new memory root (a wheel carries it, under smriti/_data/)
 narada/                  wake.py, backup.py, narada-p.sh, copied into <root>/.smriti/ by the installer (and the wheel)
 project_template/        skeleton for a project that uses smriti

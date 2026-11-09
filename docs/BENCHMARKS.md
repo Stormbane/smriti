@@ -134,6 +134,11 @@ session was among what it saw for 90 of the 91 answerable questions.
 
 ### For context
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="img/longmemeval-dark.svg">
+  <img alt="LongMemEval-S answer accuracy: smriti 88% among published figures from 64.2% to 94.9%." src="img/longmemeval-light.svg">
+</picture>
+
 Published LongMemEval-S results are mostly answer accuracy, with GPT-4o as the
 grader and each system's own answering model, and mostly reported by the
 systems' makers: Mastra Observational Memory 94.9% (gpt-5-mini) and 84.2%
@@ -159,4 +164,6 @@ python scripts/longmemeval.py report <run> [<another run>]
 ```
 
 Without `--vectors` the checkout's own model computes every vector (slow on a
-CPU). See the script's docstring for what each measure counts.
+CPU). See the script's docstring for what each measure counts. The chart is
+drawn by `python scripts/longmemeval_chart.py` (needs matplotlib), which holds
+each published figure with its source.
