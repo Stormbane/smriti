@@ -120,37 +120,48 @@ def _row(cid: str, chunk: Any, source: str, distance: int, vector: bytes | None)
 
 
 def _insert_chunk(conn: IndexDB, cid: str, chunk: Any, source: str, distance: int,
-                  indexed_at: str, vector: list[float] | None) -> None:
+                  indexed_at: str, vector: list[float] | None) -> bool:
     """Insert one chunk and its vector (index_file's path; see :func:`_insert_row`)."""
     blob = serialize_f32(vector) if vector is not None else None
-    _insert_row(conn, _row(cid, chunk, source, distance, blob), indexed_at)
+    return _insert_row(conn, _row(cid, chunk, source, distance, blob), indexed_at)
 
 
-def _insert_row(conn: IndexDB, row: _Row, indexed_at: str) -> None:
+def _insert_row(conn: IndexDB, row: _Row, indexed_at: str) -> bool:
     """Insert one chunk and its vector: the one insert path for index_tree and index_file.
 
     A chunk whose vector is pending (None) is still indexed for keyword search.
+    A chunk of the same id (one file can make two alike: the same lines, the
+    same text) is replaced; returns True when one was.
     """
     cid, source, heading, level, content, start, end, content_hash, distance, blob = row
+    # Delete, then insert. INSERT OR REPLACE removed the old row without
+    # firing the FTS delete trigger (SQLite fires none for REPLACE unless
+    # recursive_triggers is on), so the keyword index kept an entry for a
+    # row that was gone; vec0 has no triggers at all.
+    old = conn.execute("SELECT rowid FROM chunks WHERE id = ?", (cid,)).fetchone()
+    if old is not None:
+        if conn.has_vec:
+            conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (old[0],))
+        conn.execute("DELETE FROM chunks WHERE rowid = ?", (old[0],))
     conn.execute(
-        """INSERT OR REPLACE INTO chunks
+        """INSERT INTO chunks
            (id, source, heading, heading_level, content,
             start_line, end_line, content_hash, trunk_distance, indexed_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (cid, source, heading, level, content, start, end, content_hash, distance, indexed_at),
     )
     if not conn.has_vec:
-        return
+        return old is not None
     rowid = conn.execute("SELECT rowid FROM chunks WHERE id = ?", (cid,)).fetchone()[0]
-    # Guard against orphaned vec rows: INSERT OR REPLACE on chunks frees a
-    # rowid without any trigger cleaning its chunks_vec row (vec0 has no
-    # triggers), and an index written in parts can hold more such orphans.
-    # When SQLite recycles one of those rowids the plain INSERT hits "UNIQUE
-    # constraint failed on chunks_vec" and the whole incremental index fails.
+    # Guard against orphaned vec rows: an index written by an older version
+    # (INSERT OR REPLACE above, or a write in parts) can hold a chunks_vec row
+    # for a rowid SQLite now recycles, and the plain INSERT would hit "UNIQUE
+    # constraint failed on chunks_vec" and fail the whole incremental index.
     # Delete-then-insert is idempotent.
     conn.execute("DELETE FROM chunks_vec WHERE rowid = ?", (rowid,))
     if blob is not None:
         conn.execute("INSERT INTO chunks_vec (rowid, embedding) VALUES (?, ?)", (rowid, blob))
+    return old is not None
 
 
 def _insert_vector(conn: IndexDB, rowid: int, vector: Sequence[float]) -> None:
@@ -538,10 +549,9 @@ def _commit(conn: IndexDB, ours: EmbeddingIdentity, dim: int, full: bool, root: 
     written = [(src, st) for src, st in plan.adopted + read_sources if src not in keep]
     for src, st in written:
         _record_source(conn, src, st)
-    chunks = 0
+    chunks = 0  # the rows written: two alike chunks of one file are one row
     for row in staged.rows():
-        if row[1] not in keep:
-            _insert_row(conn, row, now)
+        if row[1] not in keep and not _insert_row(conn, row, now):
             chunks += 1
     if not conn.has_vec:
         # No vectors were stored: what this run wrote is pending, so the
@@ -691,15 +701,16 @@ def _commit_file(db: Path, path: Path, root: Path, rel_source: str, st: os.stat_
         model = identity.model if identity is not None else ""
         vectors: list[list[float] | None] = (
             list(embedded.vectors) if embedded is not None else [None] * len(chunks))
+        written = 0  # the rows: two alike chunks of one file are one
         for c, vector in zip(chunks, vectors, strict=True):
             cid = compute_chunk_id(c.source, c.start_line, c.end_line, c.content_hash, model)
-            _insert_chunk(conn, cid, c, rel_source, dist, now, vector)
+            written += not _insert_chunk(conn, cid, c, rel_source, dist, now, vector)
         others = conn.execute(
             "SELECT 1 FROM sources WHERE vectors = 0 AND source != ? LIMIT 1", (rel_source,)
         ).fetchone() is not None
         conn.commit()
         conn.close()
-        return FileIndexed(len(chunks), reason if pending else "", others)
+        return FileIndexed(written, reason if pending else "", others)
     except BaseException:  # noqa: BLE001 — rolled back and closed on any exit; re-raised
         try:
             conn.rollback()
