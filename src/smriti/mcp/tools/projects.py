@@ -431,7 +431,10 @@ def handle_update_feature_status(arguments: Arguments) -> str:
                 rf"^{re.escape(section_title)}\n\n_Filled during build\._", re.MULTILINE
             )
             if stub_re.search(text):
-                text = stub_re.sub(f"{section_title}\n\n{notes}", text)
+                # A function, not a template: the notes are the agent's text,
+                # and a template would read C:\Users or \g<0> in them as escapes.
+                filled = f"{section_title}\n\n{notes}"
+                text = stub_re.sub(lambda _stub: filled, text)
             else:
                 text = text.rstrip() + f"\n\n{section_title}\n\n{notes}\n"
 

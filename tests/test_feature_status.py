@@ -43,3 +43,19 @@ def test_a_move_back_and_a_repeat() -> None:
     assert _update("reviewing") == (
         "Moved feature lamps: shipped/ -> active/ (status=reviewing)")
     assert _where() == ["active/lamps.md"]
+
+
+@pytest.mark.parametrize("notes", [
+    r"Built under C:\Users\sam\lamps; see \g<0> and \1 and \n as typed.",
+    r"Kept \g<0> and \n as typed.",
+    "A plain note.",
+])
+def test_notes_are_written_as_given(notes: str) -> None:
+    r"""H15.2: the notes went in as a regex replacement template: a backslash
+    escape like ``\U`` raised re.error, and ``\g<0>`` was replaced by the stub."""
+    handle_update_feature_status({"project": "demo", "slug": "lamps",
+                                  "new_status": "shipped", "notes": notes})
+    spec = tree_root() / "mirrors" / "demo" / "ai" / "features" / "shipped" / "lamps.md"
+    text = spec.read_text(encoding="utf-8")
+    assert f"## Implementation notes\n\n{notes}" in text
+    assert "_Filled during build._" not in text
