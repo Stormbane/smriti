@@ -1,12 +1,13 @@
-"""H15.9: smriti's default models load at a pinned commit.
+"""H15.9: smriti's default models load at a pinned commit, and run no repository code.
 
 A model fetched from the Hugging Face Hub by its name alone is whatever the
 repository's ``main`` holds: an upstream change, or a compromised repository,
 would change what runs and what the index's vectors are. The default models
 (the onnx and local embedding providers' and the reranker's) load at the
 commit in ``smriti._vendored.memsearch.revisions``, from the cache and from
-the Hub alike. The identity an index records names that commit's snapshot, so
-pinning the commit the cache already held changes no index.
+the Hub alike, and the sentence-transformers paths don't trust a repository's
+code. The identity an index records names that commit's snapshot, so pinning
+the commit the cache already held changes no index.
 
 The Hub's functions and the model runtimes are faked: no network, no model.
 """
@@ -199,7 +200,7 @@ def sentence_transformers(monkeypatch: pytest.MonkeyPatch) -> types.SimpleNamesp
     return types.SimpleNamespace(made=made)
 
 
-def test_the_local_provider_loads_at_its_pin(
+def test_the_local_provider_loads_at_its_pin_and_trusts_no_repository_code(
         sentence_transformers: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     from smriti._vendored.memsearch.embeddings import local
 
@@ -210,6 +211,7 @@ def test_the_local_provider_loads_at_its_pin(
     assert default == DEFAULT_MODELS["local"]
     assert default_kw["revision"] == PINNED_REVISIONS[DEFAULT_MODELS["local"]]
     assert named == "someone/their-own-model" and named_kw["revision"] is None
+    assert default_kw["trust_remote_code"] is False and named_kw["trust_remote_code"] is False
 
 
 def test_the_torch_reranker_loads_at_its_pin(
@@ -221,6 +223,7 @@ def test_the_torch_reranker_loads_at_its_pin(
     reranker._load_torch_model(RERANKER)
     [(model, kwargs)] = sentence_transformers.made
     assert model == RERANKER and kwargs["revision"] == PINNED_REVISIONS[RERANKER]
+    assert not kwargs.get("trust_remote_code", False)
 
 
 def test_the_onnx_reranker_loads_at_its_pin(monkeypatch: pytest.MonkeyPatch) -> None:
