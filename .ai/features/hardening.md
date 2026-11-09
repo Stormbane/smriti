@@ -677,6 +677,29 @@ a recheck.
 - **H12**: done (merged by 5323e58; H12.8 dropped). H12.10: outside review #6 at `5323e58`; its findings are H13.
 - **H13**: done (merged by 32ebc04; all CI green). H13.7 (fsync) measured and not kept: it slowed writes beyond noise. H13.13: outside review #7 at `9247509`; its findings are H14.
 - **H14**: done (H14.7 and H14.8 merged by `46e4b11`, H14.1-H14.6 by `4504f98`; Codex's diff reviews found nothing to fix; all CI green). H14.9: outside review #8 at `aa163e6`: Opus B and B+, Codex B and B, Sonnet B+; its verified findings are the H15 backlog.
+- **H15**: approved by Suti (2026-11-09) and, but for the three decisions, done:
+  H15.1-H15.7, H15.10 and H15.11, in three streams merged by `48537fa`,
+  `6ebbd18` and `af1f9ef`, all CI green. Codex's diff review found one real
+  bug in each stream, each fixed with a test and rechecked: the hook upgrade
+  not written to `settings.json` when the activity hook was already wired (a
+  bug since July, which H15.1 would have made hit every install); text before
+  a long whitespace-only line dropped by the new chunker split; a day-file
+  removed between the scan's listing and its read taken as emptied. The
+  streams found more on their own: shipping a feature deleted its `owner:`
+  key; the writer's new path check refused writers racing to make a day's
+  folder on Windows; an empty `claude -p` result was published as its raw
+  JSON envelope; a macOS framework build reports a resolved
+  `sys.executable`, which failed the new hook test on macOS CI (fixed by
+  `b193d15`). The int8 model's vectors depend on the batch they're embedded
+  in, so the batching fix keeps every batch of 32 as before and only splits
+  one over the size bound. Bench (master against the merged result, 4 rounds,
+  copies of the reference tree, a game running on the machine): MCP start,
+  reads, the wake, index and memory at parity, the top 5 and the wake text
+  the same; `smriti status` and writes within run-to-run noise (12 alternating
+  `status` runs: 247.5 against 254 ms). Waiting on Suti: H15.8, H15.9 and
+  H15.12; a LongMemEval-S rerun to check H15.10 and H15.11; and a reinstall
+  of the reference install to refresh the hook command and the deployed
+  `wake.py` and `backup.py`.
 - **H14.7 done** (2026-11-08, `hardening/h14b`; not yet reviewed or merged). Three
   removals, each its own commit with its tests; the code is in the git history.
   - The private store: `smriti.private`, the CLI's init on every command,
