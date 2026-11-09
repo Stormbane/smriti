@@ -234,6 +234,112 @@ def test_by_default_a_failed_digest_does_not_fall_back(
     assert not cfg.day_digest("2026-09-04").exists()
 
 
+# ------------------------------------- a reply is checked before it is published (H15.4)
+
+
+def test_a_blank_reply_is_a_failed_attempt_and_the_fallback_is_tried(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A whitespace digest was written with the day's current input hash, so it was
+    current and never retried (Codex, review #8)."""
+    cfg = _cfg(tmp_path)
+    cfg.nightly_fallback = "codex_cli"
+    _seed_day(cfg)
+    render_day(cfg, "2026-09-04")
+    good = FakeProvider("## Highlights\n- from the fallback")
+    providers = {"claude_cli": FakeProvider(" \n\t "), "codex_cli": good}
+    monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: providers[name])
+    attempts: list[dict[str, str]] = []
+    out = digest_mod.digest_day(cfg, "2026-09-04", attempts)
+    assert out is not None and "from the fallback" in out.read_text(encoding="utf-8")
+    assert attempts == [{"provider": "claude_cli", "outcome": "error: claude_cli returned an "
+                                                              "empty reply"},
+                        {"provider": "codex_cli", "outcome": "ok"}]
+
+
+def test_a_day_whose_every_reply_is_blank_gets_no_digest_and_stays_stale(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from smriti.daylog.nightly import _day_is_current
+
+    cfg = _cfg(tmp_path)
+    _seed_day(cfg)
+    monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: FakeProvider(""))
+    status = run_nightly(cfg, now=datetime(2026, 9, 4, 17, 30, tzinfo=timezone.utc),
+                         reindex=False, witness=False)
+    digest_step = status["steps"]["digest"]  # type: ignore[index]
+    assert digest_step["ok"] is False and "2026-09-04" in digest_step["errors"]
+    assert not cfg.day_digest("2026-09-04").exists()
+    turns = read_whole_day(cfg.day_jsonl("2026-09-04"))
+    assert not _day_is_current(cfg, "2026-09-04", input_hash(turns),
+                               digest_mod.digest_fingerprint(cfg))  # retried next night
+
+
+def test_an_is_error_envelope_fails_the_call_and_the_fallback_is_tried(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """claude -p can exit 0 with ``is_error: true``; its result is then the error."""
+    import subprocess
+
+    from smriti.llm.providers import claude_cli
+
+    envelope = {"type": "result", "subtype": "success", "is_error": True,
+                "result": "API Error: 500 Internal server error"}
+
+    def fake_run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(envelope), stderr="")
+
+    monkeypatch.setattr(claude_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda _name: "claude")
+    monkeypatch.setattr("smriti.llm.workdir.llm_workdir", lambda: tmp_path)
+    cfg = _cfg(tmp_path)
+    cfg.nightly_fallback = "codex_cli"
+    _seed_day(cfg)
+    render_day(cfg, "2026-09-04")
+    good = FakeProvider("## Highlights\n- from the fallback")
+    providers = {"claude_cli": claude_cli.ClaudeCliProvider(), "codex_cli": good}
+    monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: providers[name])
+    attempts: list[dict[str, str]] = []
+    out = digest_mod.digest_day(cfg, "2026-09-04", attempts)
+    text = out.read_text(encoding="utf-8") if out is not None else ""
+    assert "from the fallback" in text and "API Error" not in text
+    assert [a["provider"] for a in attempts] == ["claude_cli", "codex_cli"]
+    assert "API Error: 500" in attempts[0]["outcome"]
+    assert attempts[0]["outcome"].startswith("error: claude -p reported an error (success)")
+
+
+def test_a_blank_rollup_is_not_written(tmp_path: Path,
+                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import date
+
+    from smriti.daylog.rollup import build_rollup
+    from smriti.llm.types import LLMError
+
+    cfg = _cfg(tmp_path)
+    _seed_day(cfg, "2026-09-01")
+    render_day(cfg, "2026-09-01")
+    monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: FakeProvider())
+    digest_mod.digest_day(cfg, "2026-09-01", [])
+    [week] = [p for p in enumerate_stale_periods(cfg, date(2026, 9, 20)) if p.kind == "week"]
+    monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: FakeProvider("\n\n"))
+    with pytest.raises(LLMError):
+        build_rollup(week, [], cfg)
+    assert not week.out_path.exists()
+
+
+def test_a_blank_morning_message_is_not_sent_and_the_day_stays_open(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from smriti.llm.types import LLMError
+
+    cfg = _cfg(tmp_path)
+    cfg.notify_cmd, sent = _notify_to_file(tmp_path)
+    monkeypatch.setattr(digest_mod, "get_provider", lambda name=None: FakeProvider("   "))
+    now = datetime(2026, 9, 4, 21, 0, tzinfo=timezone.utc)  # 07:00 UTC+10 09-05
+    with pytest.raises(LLMError):
+        run_morning(cfg, now=now)
+    assert not sent.exists()
+    assert not (cfg.morning_ledger_dir / "2026-09-05").exists()  # a later run may retry
+    status = json.loads((cfg.log_dir / ".morning-status.json").read_text(encoding="utf-8"))
+    assert status["phase"] == "compose" and status["sent"] is False
+
+
 @pytest.mark.parametrize(("env", "configured", "chain"), [
     (None, "", ["claude_cli"]),
     (None, "codex_cli", ["claude_cli", "codex_cli"]),

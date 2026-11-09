@@ -342,6 +342,76 @@ def test_claude_cli_takes_its_timeout_from_the_environment(
     assert seen["timeout"] == 7  # a request's own timeout wins
 
 
+def _claude_answering(monkeypatch, tmp_path, stdout: str):
+    """A ClaudeCliProvider whose ``claude -p`` exits 0 and prints *stdout*."""
+    import subprocess
+
+    from smriti.llm.providers import claude_cli as mod
+
+    def fake_run(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "claude")
+    monkeypatch.setattr("smriti.llm.workdir.llm_workdir", lambda: tmp_path)
+    return mod.ClaudeCliProvider()
+
+
+def test_claude_cli_an_is_error_envelope_fails_though_the_cli_exits_0(monkeypatch, tmp_path):
+    """H15.4 (Codex, review #8): its result is the error, and was taken as the answer."""
+    import json as _json
+
+    from smriti.llm.types import LLMError, LLMRequest, RateLimitExceeded
+
+    provider = _claude_answering(monkeypatch, tmp_path, _json.dumps(
+        {"type": "result", "subtype": "success", "is_error": True,
+         "result": "API Error: 500 Internal server error"}))
+    with pytest.raises(LLMError, match=r"reported an error \(success\): API Error: 500") as err:
+        provider.call(LLMRequest(system="S", user="the prompt text"))
+    assert not isinstance(err.value, RateLimitExceeded)
+    assert "the prompt text" not in str(err.value)
+
+
+def test_claude_cli_an_is_error_envelope_at_a_limit_is_a_rate_limit(monkeypatch, tmp_path):
+    import json as _json
+
+    from smriti.llm.types import LLMRequest, RateLimitExceeded
+
+    provider = _claude_answering(monkeypatch, tmp_path, _json.dumps(
+        {"type": "result", "subtype": "success", "is_error": True,
+         "result": "Claude AI usage limit reached|1760000000"}))
+    with pytest.raises(RateLimitExceeded):
+        provider.call(LLMRequest(system="S", user="hi"))
+
+
+@pytest.mark.parametrize("stdout", [
+    '{"type": "result", "subtype": "success", "is_error": false, "result": ""}',
+    '{"type": "result", "subtype": "success", "is_error": false, "result": " \\n "}',
+    '{"type": "result", "subtype": "success", "is_error": false}',
+    '["not", "an", "envelope"]',
+])
+def test_claude_cli_an_envelope_with_no_reply_is_an_error_not_the_reply(
+        monkeypatch, tmp_path, stdout):
+    """The envelope itself was the fallback for an empty result: a digest of JSON."""
+    from smriti.llm.types import LLMError, LLMRequest
+
+    provider = _claude_answering(monkeypatch, tmp_path, stdout)
+    with pytest.raises(LLMError):
+        provider.call(LLMRequest(system="S", user="hi"))
+
+
+def test_claude_cli_a_result_envelope_gives_its_result(monkeypatch, tmp_path):
+    import json as _json
+
+    from smriti.llm.types import LLMRequest
+
+    provider = _claude_answering(monkeypatch, tmp_path, _json.dumps(
+        {"type": "result", "subtype": "success", "is_error": False, "result": "the digest",
+         "total_cost_usd": 0.5}))
+    response = provider.call(LLMRequest(system="S", user="hi"))
+    assert response.text == "the digest" and response.cost_usd == 0.5
+
+
 def test_llm_workdir_carries_the_isolation_settings(tmp_path, monkeypatch):
     import json as _json
 

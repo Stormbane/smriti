@@ -270,7 +270,12 @@ wake shows as `NIGHTLY SKIPPED for <day>: <reason>`, and exits 1. Target date: t
    attempt and outcome recorded in the night's status), no tools, text in →
    text out → `DD-digest.md` with `input_hash` and `prompt_fp`, masked as it
    is written. Highlights, decisions, threads, a light summary of autonomous
-   activity.
+   activity. A reply is checked before it is published (H15.4): an empty or
+   whitespace one is a failed attempt, and so is a `claude -p` envelope that
+   says `is_error: true` though the CLI exited 0; the next provider is tried,
+   and when all fail no digest is written, so the day stays stale and the
+   next night retries it. Rollups and the morning message follow the same
+   rule.
 5. **Rollups — scan, not boundary-trigger.** Enumerate all *closed* periods
    (weeks/months/years) missing a rollup or whose members changed;
    generate each with one call, newest first, capped per night (default 2)

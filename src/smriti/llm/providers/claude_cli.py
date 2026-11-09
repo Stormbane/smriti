@@ -49,6 +49,22 @@ def _env_timeout() -> int:
     return DEFAULT_TIMEOUT_S
 
 
+def _rate_signal(data: dict[str, object]) -> str:
+    """The rate-limit message of an ``is_error`` envelope ('' if it isn't one).
+
+    claude -p reports errors as JSON when --output-format json is set; a
+    limit shows ``is_error: true`` and a human message.
+    """
+    if not data.get("is_error"):
+        return ""
+    blob = " ".join(
+        str(v) for v in (
+            data.get("result"), data.get("error"), data.get("message"), data.get("subtype"),
+        ) if v
+    ).lower()
+    return blob[:300] if any(m in blob for m in _RATE_MARKERS) else ""
+
+
 class ClaudeCliProvider:
     name = "claude_cli"
 
@@ -183,10 +199,7 @@ class ClaudeCliProvider:
         except json.JSONDecodeError:
             return LLMResponse(text=result.stdout.strip(), elapsed_ms=elapsed_ms)
 
-        text = data.get("result") or data.get("content") or data.get("text") or ""
-        if not text:
-            text = result.stdout.strip()
-
+        text = self._reply(data)
         return LLMResponse(
             text=text,
             model=data.get("model", ""),
@@ -196,6 +209,33 @@ class ClaudeCliProvider:
             elapsed_ms=elapsed_ms,
         )
 
+    @staticmethod
+    def _reply(data: object) -> str:
+        """The reply text in ``claude -p``'s JSON envelope; raises when it holds none.
+
+        An envelope that says ``is_error`` is a failed call even when the CLI
+        exited 0: its ``result`` is then the error, not an answer. An empty
+        result is no reply. Neither is passed on as text, and nor is the
+        envelope itself. The error names the envelope's subtype and its
+        first characters of result, which is the CLI's message, not the
+        prompt.
+        """
+        if not isinstance(data, dict):
+            raise LLMError("claude -p returned JSON that isn't a result envelope")
+        if data.get("is_error"):
+            signal = _rate_signal(data)
+            if signal:
+                raise RateLimitExceeded(signal)
+            subtype = str(data.get("subtype") or "no subtype")
+            said = " ".join(str(data.get("result") or data.get("error") or "").split())
+            raise LLMError(f"claude -p reported an error ({subtype[:60]}): "
+                           f"{said[:200] or '(no message)'}")
+        for key in ("result", "content", "text"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        raise LLMError("claude -p returned an empty result")
+
     def _raise_for_failure(self, result: subprocess.CompletedProcess[str]) -> None:
         stderr = (result.stderr or "")[:500]
         stdout_full = result.stdout or ""
@@ -203,20 +243,11 @@ class ClaudeCliProvider:
 
         # claude -p emits errors as JSON when --output-format=json is set;
         # rate-limits show ``is_error: true`` plus a human message.
-        rl_signal = ""
         try:
             data = json.loads(stdout_full) if stdout_full.strip() else {}
         except json.JSONDecodeError:
             data = {}
-        if isinstance(data, dict):
-            blob = " ".join(
-                str(v) for v in (
-                    data.get("result"), data.get("error"),
-                    data.get("message"), data.get("subtype"),
-                ) if v
-            ).lower()
-            if data.get("is_error") and blob and any(m in blob for m in _RATE_MARKERS):
-                rl_signal = blob[:300]
+        rl_signal = _rate_signal(data) if isinstance(data, dict) else ""
         if not rl_signal:
             combined = (stderr + " " + stdout).lower()
             if any(m in combined for m in _RATE_MARKERS):

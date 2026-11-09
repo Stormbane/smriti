@@ -195,6 +195,12 @@ def compose(
     morning's fallback call, :func:`smriti.daylog.morning.compose_message`);
     a seat other than claude_cli gets no flags of smriti's, so its own
     isolation is all it has.
+
+    A reply that is empty or only whitespace is a failed attempt, recorded
+    as one, and the next provider is tried: what this returns is published
+    (a digest, a rollup, the morning message), and a blank digest would be
+    written with the day's current input hash, so judged current and never
+    retried.
     """
     last_error: Exception | None = None
     if providers is not None:
@@ -213,8 +219,11 @@ def compose(
             response = provider.call(
                 LLMRequest(system=system, user=user, max_tokens=4096, cli_args=cli_args)
             )
+            text = response.text.strip()
+            if not text:
+                raise LLMError(f"{name} returned an empty reply")
             attempts_log.append({"provider": name, "outcome": "ok"})
-            return response.text.strip()
+            return text
         except Exception as exc:  # noqa: BLE001 — record and try the fallback
             attempts_log.append({"provider": name, "outcome": f"error: {exc}"[:200]})
             last_error = exc
