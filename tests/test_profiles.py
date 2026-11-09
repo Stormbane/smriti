@@ -429,7 +429,8 @@ def test_the_current_directory_is_not_searched(
 def test_the_running_scripts_directory_is_not_searched(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`python <root>/.smriti/wake.py` puts the memory tree's .smriti first on the
+    """A script run from the memory tree's .smriti (as an earlier install's wake
+    hook ran `python <root>/.smriti/wake.py`) puts that directory first on the
     path: a profile must never come from there, and its mtime moves with every
     index write."""
     import smriti.profiles as profiles

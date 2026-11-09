@@ -14,8 +14,9 @@ Required pieces:
 1. ``install.py`` — exposes ``run_<harness>(memory_root, **opts)``.
    Responsibilities:
      - Patch the harness's settings/config file (JSON for Claude Code,
-       TOML for Codex) to wire the SessionStart hook to the entity's
-       ``wake.py`` with the appropriate ``SMRITI_WAKE_FRAMING``
+       TOML for Codex) to wire the SessionStart hook to the package's
+       wake (``make_wake_hook_command``: ``python -P -m smriti.wake``)
+       with the appropriate ``SMRITI_WAKE_FRAMING``
        (``raw`` for stdout-injection harnesses,
        ``codex-json`` for Codex's ``hookSpecificOutput`` shape).
      - Register the smriti MCP server using

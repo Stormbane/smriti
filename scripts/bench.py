@@ -15,10 +15,11 @@ given is only ever read.
 What is measured, per round: MCP startup and ``initialize``; ``tools/list``,
 first and warm; the first ``smriti_read`` and the time until a read gets
 vector results; warm reads (p50 and p90 over three passes of the queries);
-``smriti_write`` (p50 and max of five); the wake hook (median of three,
-run from a copy of ``<checkout>/narada/.smriti/wake.py`` placed in the
-copy's ``.smriti/``, never from the checkout, since it touches a file
-beside itself); ``smriti status``; a CLI ``smriti read``; ``smriti index``
+``smriti_write`` (p50 and max of five); the wake hook (median of three:
+``python -P -m smriti.wake``, or, for a checkout from before the wake ran
+from the package, a copy of its ``narada/.smriti/wake.py`` placed in the
+tree copy's ``.smriti/``, never run from the checkout, since it touches a
+file beside itself); ``smriti status``; a CLI ``smriti read``; ``smriti index``
 with nothing changed and with five new files; the MCP server's memory and
 the embedding service's, when one runs (with psutil installed). Any
 embedding service a round starts is stopped at its end, so each round
@@ -200,7 +201,8 @@ def check_writable(copy: Path) -> None:
     """Refuse a copy whose written paths are links, so no write escapes into another tree.
 
     The bench writes the root's ``index.md`` (index upkeep), everything under
-    ``.smriti/`` (index, metrics, the wake script) and ``bench/``. A link there,
+    ``.smriti/`` (index, metrics, the wake's ``last-activity``, an older
+    checkout's wake script) and ``bench/``. A link there,
     kept as a link by the copy, would write through to wherever it points.
     """
     bad = [p for p in (copy, copy / "index.md") if _is_link(p)]
@@ -421,19 +423,23 @@ def measure_mcp(side: Side, queries: Sequence[str], out: dict[str, Any]) -> None
         mcp.close()
 
 
-def place_wake(side: Side) -> Path | None:
-    """The checkout's wake.py, copied into the tree copy's .smriti/; None if it has none.
+def place_wake(side: Side) -> list[str] | None:
+    """The arguments that run the checkout's wake hook; None if it has none.
 
-    Run from the copy, never from the checkout: the script touches
-    ``last-activity`` beside itself.
+    ``-P -m smriti.wake``, as the hook runs it. A checkout from before the
+    wake ran from the package has a ``narada/.smriti/wake.py`` instead: it is
+    copied into the tree copy's .smriti/ and run from there, never from the
+    checkout, since the script touches ``last-activity`` beside itself.
     """
+    if (side.checkout / "src" / "smriti" / "wake" / "__main__.py").is_file():
+        return ["-P", "-m", "smriti.wake"]
     source = side.checkout / "narada" / ".smriti" / "wake.py"
     if not source.is_file():
         return None
     wake = side.tree / ".smriti" / "wake.py"
     wake.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, wake)
-    return wake
+    return [str(wake)]
 
 
 def measure_cli(side: Side, queries: Sequence[str], round_no: int, wake_cwd: Path,
@@ -448,7 +454,7 @@ def measure_cli(side: Side, queries: Sequence[str], round_no: int, wake_cwd: Pat
     if wake is not None:
         wakes = []
         for _ in range(3):
-            ms, done = run(side, [str(wake)], cwd=wake_cwd, SMRITI_WAKE="1")
+            ms, done = run(side, wake, cwd=wake_cwd, SMRITI_WAKE="1")
             wakes.append(ms)
             checked("wake", done)
         out["wake_ms"] = statistics.median(wakes)
@@ -506,7 +512,7 @@ def warm_up(side: Side, wake_cwd: Path) -> None:
         mcp.close()
     wake = place_wake(side)
     if wake is not None:
-        run(side, [str(wake)], cwd=wake_cwd, SMRITI_WAKE="1")
+        run(side, wake, cwd=wake_cwd, SMRITI_WAKE="1")
     run(side, ["-m", "smriti", "status"])
 
 

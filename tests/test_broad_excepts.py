@@ -87,7 +87,7 @@ def test_the_scan_reads_the_tree() -> None:
     """It finds the source, and broad handlers in it, so an empty pass means something."""
     paths = list(_sources())
     assert any(p.as_posix().endswith("smriti/mcp/server.py") for p in paths)
-    assert any(p.parts[-3:] == ("narada", ".smriti", "wake.py") for p in paths)
+    assert any(p.parts[-3:] == ("smriti", "wake", "__main__.py") for p in paths)
     handlers = sum(
         1 for p in paths for n in ast.walk(ast.parse(p.read_text(encoding="utf-8")))
         if isinstance(n, ast.ExceptHandler) and _caught(n.type) & BROAD)

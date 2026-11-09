@@ -3,7 +3,7 @@
 Wires smriti into OpenAI's Codex CLI:
     - Patches ``~/.codex/config.toml``:
         * ``[features] hooks = true`` (enables the hooks system)
-        * ``[[hooks.SessionStart]]`` -> wake.py with
+        * ``[[hooks.SessionStart]]`` -> ``python -m smriti.wake`` with
           ``SMRITI_WAKE_FRAMING=codex-json`` so identity is force-loaded
           before the first user turn (this is the equivalent of Claude
           Code's CLAUDE.md + SessionStart combo)
@@ -94,14 +94,15 @@ def _wake_style() -> str:
 # 32 KiB cap — things only this harness has.
 CODEX_ADDENDUM = """## Session wake (Codex CLI)
 
-On SessionStart, `{memory_rel}/.smriti/wake.py` runs via the hook
-configured in `~/.codex/config.toml` under `[[hooks.SessionStart]]`.
-The hook emits `hookSpecificOutput.additionalContext` JSON, which
+On SessionStart, the hook configured in `~/.codex/config.toml` under
+`[[hooks.SessionStart]]` runs `python -m smriti.wake` from the installed
+smriti package, with the briefing for `{memory_rel}`. The hook emits
+`hookSpecificOutput.additionalContext` JSON, which
 Codex appends to the developer context before the first user turn.
 This means identity is loaded at the protocol level — there is no
 request the agent can choose to skip.
 
-The wake script is silent unless `SMRITI_WAKE=1` is set in its
+The wake is silent unless `SMRITI_WAKE=1` is set in its
 environment (the hook command sets it). `SMRITI_WAKE_FRAMING=codex-json`
 selects the Codex-shaped output (vs. Claude Code's raw stdout).
 
@@ -196,7 +197,7 @@ def _wire_config(data: dict[str, Any], notes: list[str], memory_root: Path,
         notes.append("[features] hooks = true")
         changed = True
 
-    # 2. SessionStart hook -> wake.py with codex-json framing.
+    # 2. SessionStart hook -> the package's wake with codex-json framing.
     wake_cmd = make_wake_hook_command(
         memory_root,
         home=home,
@@ -255,7 +256,7 @@ def _wire_config(data: dict[str, Any], notes: list[str], memory_root: Path,
             })
         if session_start != retained_groups:
             hooks["SessionStart"] = retained_groups
-            notes.append("[[hooks.SessionStart]] -> wake.py (canonical)")
+            notes.append("[[hooks.SessionStart]] -> python -m smriti.wake (canonical)")
             changed = True
 
     # 3. MCP server registration, with the memory root in its env. Superset

@@ -1,8 +1,8 @@
 """Where the installer finds the files it copies: in the package, or in the checkout.
 
-The installer copies three things it doesn't generate: the scripts deployed
-into ``<root>/.smriti/`` (``narada/.smriti/``: wake.py and
-narada-p.sh), the memory tree's skeleton (``memory_template/``), and it names
+The installer copies three things it doesn't generate: the script deployed
+into ``<root>/.smriti/`` (``narada/.smriti/``: narada-p.sh, run by hand),
+the memory tree's skeleton (``memory_template/``), and it names
 ``docs/PRIVACY.md``. They are kept at the top of the checkout, where the
 documentation points and where the installer's auto-upgrade compares a
 deployed script against.

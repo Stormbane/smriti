@@ -18,7 +18,6 @@ def _make_entity_and_project(tmp_path: Path) -> tuple[Path, Path, Path]:
     smriti_dir = memory_root / ".smriti"
     smriti_dir.mkdir(parents=True)
     (smriti_dir / "wake-context.md").write_text("# Narada\nI am Narada.\n")
-    (smriti_dir / "wake.py").write_text("# wake shim\n", encoding="utf-8")
     project = tmp_path / "beautiful-tree"
     ai = project / ".ai"
     ai.mkdir(parents=True)
@@ -149,26 +148,38 @@ def _claude_settings(home: Path, wake_cmd: str) -> None:
     (claude / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
 
 
-def test_doctor_finds_the_wake_script_after_a_quoted_interpreter(tmp_path) -> None:
-    """H15.1: the wake hook names its interpreter by a quoted path. The target
-    check found scripts only after a bare python, so a deleted wake.py
-    passed it."""
+def test_doctor_finds_a_hook_script_after_a_quoted_interpreter(tmp_path) -> None:
+    """H15.1: hooks name their interpreter by a quoted path. The target check
+    found scripts only after a bare python, so a deleted script passed it."""
     home, memory_root, project = _make_entity_and_project(tmp_path)
-    _claude_settings(home, make_wake_hook_command(
-        memory_root, home=home, framing="raw", interpreter="/opt/py env/bin/python3"))
-    (memory_root / ".smriti" / "wake.py").unlink()
+    _claude_settings(home, "'/opt/py env/bin/python3' \"$HOME/.claude/hooks/gone.py\"")
 
     checks = {c.name: c
               for c in claude_code_checks(memory_root=memory_root, project=project, home=home)}
 
     assert checks["Claude hook targets exist"].passed is False
-    assert "wake.py" in checks["Claude hook targets exist"].detail
+    assert "gone.py" in checks["Claude hook targets exist"].detail
 
 
-def test_doctor_fails_a_wake_hook_that_runs_python_from_path(tmp_path) -> None:
-    """H15.1: every install before it wrote a bare python, which the harness
-    looks up on its own PATH; doctor says so, and a reinstall pins it."""
+def test_the_wake_hook_needs_no_file_in_the_memory_tree(tmp_path) -> None:
+    """H15.8: the hook runs the package's wake, so the tree holds no script for it."""
     home, memory_root, project = _make_entity_and_project(tmp_path)
+    _claude_settings(home, make_wake_hook_command(memory_root, home=home, framing="raw"))
+
+    checks = {c.name: c
+              for c in claude_code_checks(memory_root=memory_root, project=project, home=home)}
+
+    assert checks["Claude wake hook"].passed is True
+    assert checks["Claude hook targets exist"].passed is True
+    assert not (memory_root / ".smriti" / "wake.py").exists()
+
+
+def test_doctor_fails_an_earlier_installs_wake_hook(tmp_path) -> None:
+    """Installs before H15.1 wrote a bare python, which the harness looks up on
+    its own PATH, and before H15.8 ran the tree's wake.py; doctor names both
+    gaps, and a reinstall closes them."""
+    home, memory_root, project = _make_entity_and_project(tmp_path)
+    (memory_root / ".smriti" / "wake.py").write_text('"""smriti wake"""\n', encoding="utf-8")
     _claude_settings(home, 'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/.narada" '
                            'python "$HOME/.narada/.smriti/wake.py"')
 
@@ -176,5 +187,7 @@ def test_doctor_fails_a_wake_hook_that_runs_python_from_path(tmp_path) -> None:
               for c in claude_code_checks(memory_root=memory_root, project=project, home=home)}
 
     assert checks["Claude wake hook"].passed is False
-    assert checks["Claude wake hook"].detail == f"runs python from PATH, not {sys.executable}"
+    assert checks["Claude wake hook"].detail == (
+        "runs $HOME/.narada/.smriti/wake.py from the memory tree, not smriti.wake from the "
+        f"installed package; runs python from PATH, not {sys.executable}")
     assert checks["Claude hook targets exist"].passed is True

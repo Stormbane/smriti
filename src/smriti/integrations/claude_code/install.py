@@ -165,8 +165,9 @@ def patch_settings_json(memory_root: Path, home: Path | None = None) -> bool:
 
     SessionStart wiring goes through the canonical hook model:
     an EQUIVALENT wake hook (any command form) is left untouched, a
-    DEFICIENT one (right wake.py, wrong semantics) is upgraded in
-    place, UNRELATED hooks are never modified. False when the change
+    DEFICIENT one (ours, wrong semantics: an earlier install's hook that
+    runs the tree's wake.py among them) is upgraded in place, UNRELATED
+    hooks are never modified. False when the change
     couldn't be saved (Claude Code kept rewriting the file).
     """
     home = _home(home)
@@ -195,7 +196,7 @@ def _wire_hooks(data: dict[str, Any], notes: list[str], memory_root: Path, home:
         )
         return verdict
 
-    # SessionStart: wake.py via the canonical hook model. Exactly ONE
+    # SessionStart: the package's wake via the canonical hook model. Exactly ONE
     # active smriti wake hook survives: the first equivalent one wins,
     # else the first deficient one is upgraded in place; every other
     # smriti wake hook (stale legacy, duplicate) is removed — two
@@ -236,7 +237,7 @@ def _wire_hooks(data: dict[str, Any], notes: list[str], memory_root: Path, home:
         rebuilt_groups.append(
             {"matcher": "", "hooks": [{"type": "command", "command": wake_cmd}]}
         )
-        notes.append("SessionStart -> wake.py")
+        notes.append("SessionStart -> python -m smriti.wake")
     elif deficient_upgraded:
         notes.append("SessionStart wake hook upgraded to canonical form")
     else:
@@ -280,12 +281,13 @@ def install_hook_scripts(home: Path | None = None) -> None:
 # location, and SMRITI_WAKE gating — things only this harness has.
 CLAUDE_CODE_ADDENDUM = """## Session wake (Claude Code)
 
-On SessionStart, `{memory_rel}/.smriti/wake.py` runs via the hook
-configured in `~/.claude/settings.json`. It is silent unless
-`SMRITI_WAKE=1` is set in its environment — the SessionStart hook sets
-this so interactive sessions wake fully, while `claude -p` and other
-headless callers stay clean. The hook output is truncated at 10,000
-characters by Claude Code, so the briefing budget defaults to 9,500.
+On SessionStart, the hook configured in `~/.claude/settings.json` runs
+`python -m smriti.wake` from the installed smriti package, which prints
+the briefing for `{memory_rel}`. It is silent unless `SMRITI_WAKE=1` is
+set in its environment — the SessionStart hook sets this so interactive
+sessions wake fully, while `claude -p` and other headless callers stay
+clean. The hook output is truncated at 10,000 characters by Claude
+Code, so the briefing budget defaults to 9,500.
 """
 
 

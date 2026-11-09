@@ -4,7 +4,10 @@ The canonical wake-hook model is shared by installers and doctor —
 generator and classifier live together precisely so these tests can
 pin the roundtrip: whatever any style generates must classify
 EQUIVALENT, and the live PowerShell form found on Windows machines
-must never be misread as broken (the 2026-07-16 audit's false-FAIL).
+must never be misread (the 2026-07-16 audit's false-FAIL). The hook runs
+the installed package's wake, ``<python> -P -m smriti.wake``; an earlier
+install's hook, which ran the memory tree's ``wake.py``, is ours and
+deficient, so a reinstall replaces it.
 """
 
 from __future__ import annotations
@@ -56,7 +59,7 @@ def _classify(cmd: str, framing: str = "raw",
 
 # The exact command shape found live in ~/.codex/config.toml on the
 # Windows machine during the 2026-07-16 audit (regenerated here so the
-# test is entity-name-agnostic).
+# test is entity-name-agnostic): an earlier install's, running the tree's wake.py.
 def _live_style_ps_command() -> str:
     script = (
         "$ProgressPreference='SilentlyContinue'; "
@@ -71,11 +74,23 @@ def _live_style_ps_command() -> str:
     return f"powershell.exe -NoProfile -NonInteractive -EncodedCommand {encoded}"
 
 
+# The Claude Code hook an earlier install wrote, with the installing interpreter.
+def _earlier_sh_command(python: str = sys.executable) -> str:
+    return (f'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/.narada" SMRITI_WAKE_AUDIENCE="coding" '
+            f"'{python}' \"$HOME/.narada/.smriti/wake.py\"")
+
+
+TREE_WAKE_GAP = ("runs $HOME/.narada/.smriti/wake.py from the memory tree, "
+                 "not smriti.wake from the installed package")
+
+
 class TestGeneration:
     def test_sh_form_shape(self):
         cmd = make_wake_hook_command(ROOT, home=HOME, framing="raw", style="sh")
         assert "SMRITI_WAKE=1" in cmd
         assert 'SMRITI_ROOT="$HOME/.narada"' in cmd
+        assert cmd.endswith(" -P -m smriti.wake")
+        assert "wake.py" not in cmd
         assert "\\" not in cmd
 
     def test_powershell_form_is_encoded(self):
@@ -106,20 +121,19 @@ class TestGeneration:
         if style == "sh" and interpreter.startswith("C:"):
             expected = interpreter.replace("\\", "/")  # sh holds no backslash
         assert spec.interpreter == expected
-        assert spec.wake_path == ".narada/.smriti/wake.py"
+        assert spec.wake_path == "" and spec.flags == ("-P",)
         assert _classify(cmd, interpreter=interpreter)[0] == EQUIVALENT
 
     def test_sh_form_writes_a_windows_interpreter_with_forward_slashes(self):
         cmd = make_wake_hook_command(ROOT, home=HOME,
                                      interpreter=r"C:\Program Files\Python 3.12\python.exe")
-        assert "'C:/Program Files/Python 3.12/python.exe' \"$HOME/.narada/.smriti/wake.py\"" in cmd
+        assert cmd.endswith("'C:/Program Files/Python 3.12/python.exe' -P -m smriti.wake")
         assert "\\" not in cmd
 
     def test_powershell_form_calls_the_interpreter_by_path(self):
         cmd = make_wake_hook_command(ROOT, home=HOME, style="powershell-encoded",
                                      interpreter=r"C:\Users\O'Neil\py\python.exe")
-        assert ("& 'C:\\Users\\O''Neil\\py\\python.exe' "
-                "(Join-Path $HOME '.narada/.smriti/wake.py')") in _script(cmd)
+        assert _script(cmd).endswith("; & 'C:\\Users\\O''Neil\\py\\python.exe' -P -m smriti.wake")
 
     def test_unknown_style_raises(self):
         with pytest.raises(ValueError, match="style"):
@@ -137,8 +151,9 @@ class TestParse:
         cmd = make_wake_hook_command(ROOT, home=HOME, framing=framing, style=style)
         spec = parse_wake_command(cmd)
         assert spec is not None
-        assert spec.wake_path == ".narada/.smriti/wake.py"
+        assert spec.wake_path == "" and spec.flags == ("-P",)
         assert spec.env["SMRITI_WAKE"] == "1"
+        assert spec.env["SMRITI_ROOT"] == "$HOME/.narada"
         assert spec.env.get("SMRITI_WAKE_AUDIENCE") == "coding"
         if framing == "codex-json":
             assert spec.env["SMRITI_WAKE_FRAMING"] == "codex-json"
@@ -146,6 +161,19 @@ class TestParse:
     def test_non_wake_command_returns_none(self):
         assert parse_wake_command("python ~/.claude/hooks/recall.py") is None
         assert parse_wake_command("echo hello") is None
+        assert parse_wake_command("python -m smriti.wakeup") is None
+        assert parse_wake_command("python -m smriti.wake.other") is None
+
+    @pytest.mark.parametrize("cmd", [_live_style_ps_command(), _earlier_sh_command()])
+    def test_an_earlier_installs_hook_names_the_trees_wake_py(self, cmd):
+        spec = parse_wake_command(cmd)
+        assert spec is not None
+        assert spec.wake_path == ".narada/.smriti/wake.py" and spec.flags == ()
+
+    def test_the_interpreters_options_are_read(self):
+        spec = parse_wake_command("SMRITI_WAKE=1 python -X utf8 -I -m smriti.wake")
+        assert spec is not None
+        assert spec.interpreter == "python" and spec.flags == ("-X", "utf8", "-I")
 
     def test_garbage_encoded_returns_none(self):
         assert parse_wake_command("powershell.exe -EncodedCommand AAAA") is None
@@ -161,12 +189,42 @@ class TestClassify:
 
     def test_live_windows_ps_hook_is_read_as_written(self):
         """The 2026-07-16 audit false-FAIL: the PowerShell encoding must not
-        be misread as broken semantics. Since H15.1 the hook must also name
-        the installing interpreter, so this one, with its bare ``python``, is
-        equivalent only against ``python`` (it was equivalent outright)."""
+        be misread as broken semantics. Run by ``python``, this earlier
+        install's hook lacks only the package's wake: it runs the tree's."""
         verdict, detail = _classify(_live_style_ps_command(), framing="codex-json",
                                     interpreter="python")
-        assert verdict == EQUIVALENT, detail
+        assert (verdict, detail) == (DEFICIENT, TREE_WAKE_GAP)
+
+    def test_an_earlier_installs_hook_for_this_tree_is_deficient(self):
+        """Whatever else it gets right, it runs a script in the memory tree, which a
+        write to the tree or a restore of it could change: a reinstall replaces it."""
+        verdict, detail = _classify(_earlier_sh_command())
+        assert (verdict, detail) == (DEFICIENT, TREE_WAKE_GAP)
+
+    def test_a_hook_without_dash_p_is_deficient(self):
+        cmd = make_wake_hook_command(ROOT, home=HOME).replace(" -P -m", " -m")
+        verdict, detail = _classify(cmd)
+        assert verdict == DEFICIENT
+        assert detail == ("runs without -P, so the current directory comes first on its "
+                          "import path")
+        isolated = make_wake_hook_command(ROOT, home=HOME).replace(" -P -m", " -I -m")
+        assert _classify(isolated)[0] == EQUIVALENT  # -I implies -P
+
+    def test_a_module_hook_for_another_tree_is_unrelated(self):
+        cmd = make_wake_hook_command(HOME / ".tara", home=HOME)
+        verdict, detail = _classify(cmd)
+        assert verdict == UNRELATED
+        assert detail == "wakes $HOME/.tara, not $HOME/.narada"
+
+    @pytest.mark.parametrize("root", [f"{HOME.as_posix()}/.narada", "~/.narada", ""])
+    def test_a_module_hook_naming_this_tree_otherwise_is_ours(self, root):
+        """An absolute or ~ path to this tree, or no SMRITI_ROOT (the default
+        tree): ours, and brought to the canonical form, never a second hook."""
+        env = f'SMRITI_ROOT="{root}" ' if root else ""
+        cmd = f"SMRITI_WAKE=1 {env}'{sys.executable}' -P -m smriti.wake"
+        verdict, detail = _classify(cmd)
+        assert verdict == DEFICIENT
+        assert detail == "SMRITI_ROOT != $HOME/.narada"
 
     @pytest.mark.parametrize("cmd,framing", [
         (_live_style_ps_command(), "codex-json"),
@@ -174,10 +232,11 @@ class TestClassify:
          "raw"),
         ('SMRITI_WAKE=1 SMRITI_ROOT="$HOME/.narada" python3 "$HOME/.narada/.smriti/wake.py"',
          "raw"),
+        ('SMRITI_WAKE=1 SMRITI_ROOT="$HOME/.narada" python -P -m smriti.wake', "raw"),
     ])
     def test_a_hook_running_python_from_path_is_deficient(self, cmd, framing):
-        """H15.1: a bare python is whichever the harness's PATH finds first,
-        which may not have smriti. Deficient, so a reinstall pins it."""
+        """A bare python is whichever the harness's PATH finds first, which may
+        not have smriti. Deficient, so a reinstall pins it."""
         verdict, detail = _classify(cmd, framing=framing, interpreter="/opt/ari/bin/python3")
         assert verdict == DEFICIENT
         assert "from PATH, not /opt/ari/bin/python3" in detail
@@ -209,13 +268,10 @@ class TestClassify:
         assert "framing" in detail
 
     def test_missing_audience_defaults_to_coding_equivalent(self):
-        """The live Claude Code hook predates the audience var; the
-        runner defaults to coding, so it is semantically equivalent."""
-        legacy = (
-            'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/.narada" '
-            'python "$HOME/.narada/.smriti/wake.py"'
-        )
-        verdict, detail = _classify(legacy, framing="raw", interpreter="python")
+        """A hook without the audience var: the runner defaults to coding, so it
+        is semantically equivalent."""
+        cmd = 'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/.narada" python -P -m smriti.wake'
+        verdict, detail = _classify(cmd, framing="raw", interpreter="python")
         assert verdict == EQUIVALENT, detail
 
     def test_missing_smriti_wake_is_deficient(self):
@@ -275,18 +331,25 @@ def _linked_interpreter(tmp_path: Path) -> str:
     return python
 
 
-def _fake_wake(home: Path) -> Path:
-    """A wake.py at ``<home>/.ari/.smriti/`` that reports what ran it."""
-    root = home / ".ari"
-    (root / ".smriti").mkdir(parents=True)
-    (root / ".smriti" / "wake.py").write_text(
+def _fake_wake(tmp_path: Path) -> dict[str, str]:
+    """A stand-in ``smriti.wake`` that reports what ran it; the environment that finds it.
+
+    On PYTHONPATH, which ``-P`` leaves in place (it only keeps the current
+    directory off the import path).
+    """
+    package = tmp_path / "fake" / "smriti" / "wake"
+    package.mkdir(parents=True)
+    (package.parent / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__main__.py").write_text(
         "import json, os, sys\n"
         "print(json.dumps({'executable': sys.executable,\n"
         "                  'root': os.environ.get('SMRITI_ROOT'),\n"
-        "                  'wake': os.environ.get('SMRITI_WAKE')}))\n",
+        "                  'wake': os.environ.get('SMRITI_WAKE'),\n"
+        "                  'cwd_on_path': '' in sys.path or os.getcwd() in sys.path}))\n",
         encoding="utf-8",
     )
-    return root
+    return {**os.environ, "PYTHONPATH": str(tmp_path / "fake")}
 
 
 def _ran(out: subprocess.CompletedProcess[str], root: Path, *, linked: bool = True) -> None:
@@ -296,6 +359,7 @@ def _ran(out: subprocess.CompletedProcess[str], root: Path, *, linked: bool = Tr
         assert LINK_NAME in report["executable"]
     assert Path(report["root"]) == root
     assert report["wake"] == "1"
+    assert report["cwd_on_path"] is False  # -P
 
 
 def _wrapped_interpreter(tmp_path: Path) -> tuple[str, Path]:
@@ -321,11 +385,12 @@ def _wrapped_interpreter(tmp_path: Path) -> tuple[str, Path]:
                     reason="the sh form is run by a POSIX shell")
 def test_the_sh_form_runs_the_named_interpreter(tmp_path: Path) -> None:
     home = tmp_path / "home"
-    root = _fake_wake(home)
+    root = home / ".ari"
+    env = _fake_wake(tmp_path)
     python, mark = _wrapped_interpreter(tmp_path)
     cmd = make_wake_hook_command(root, home=home, interpreter=python)
 
-    out = subprocess.run(["sh", "-c", cmd], env={**os.environ, "HOME": str(home)},
+    out = subprocess.run(["sh", "-c", cmd], env={**env, "HOME": str(home)},
                          capture_output=True, text=True, timeout=60)
 
     _ran(out, root, linked=False)
@@ -336,13 +401,14 @@ def test_the_sh_form_runs_the_named_interpreter(tmp_path: Path) -> None:
                     reason="the encoded form is run by Windows PowerShell")
 def test_the_powershell_form_runs_the_named_interpreter(tmp_path: Path) -> None:
     home = tmp_path / "home"
-    root = _fake_wake(home)
+    root = home / ".ari"
+    env = _fake_wake(tmp_path)
     python = _linked_interpreter(tmp_path)
     cmd = make_wake_hook_command(root, home=home, framing="codex-json",
                                  style="powershell-encoded", interpreter=python)
 
     # PowerShell's $HOME is USERPROFILE.
-    out = subprocess.run(cmd.split(" "), env={**os.environ, "USERPROFILE": str(home)},
+    out = subprocess.run(cmd.split(" "), env={**env, "USERPROFILE": str(home)},
                          capture_output=True, text=True, timeout=120)
 
     _ran(out, root)

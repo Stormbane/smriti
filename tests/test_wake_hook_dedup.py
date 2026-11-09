@@ -170,18 +170,30 @@ def _legacy_command(framing: str, style: str) -> str:
 
 ACTIVITY = 'touch "$HOME/.narada/.smriti/last-activity" 2>/dev/null || true'
 
+# H15.8: the hook runs the package's wake, not the tree's wake.py. The hook on
+# the reference machine before it, and the one H15.1's reinstall writes.
+LIVE_HOOK = 'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/.narada" python "$HOME/.narada/.smriti/wake.py"'
+
+
+def _h15_1_command() -> str:
+    python = installing_interpreter().replace("\\", "/")
+    return ('SMRITI_WAKE=1 SMRITI_ROOT="$HOME/.narada" SMRITI_WAKE_AUDIENCE="coding" '
+            f"'{python}' \"$HOME/.narada/.smriti/wake.py\"")
+
 
 @pytest.mark.parametrize("activity_wired", [False, True], ids=["alone", "activity-wired"])
 @pytest.mark.parametrize("legacy", [
     _legacy_command("raw", "sh"),
     'SMRITI_ROOT="$HOME/.narada" python "$HOME/.narada/.smriti/wake.py"',  # no SMRITI_WAKE too
-], ids=["python-from-path", "no-smriti-wake"])
+    LIVE_HOOK,
+    _h15_1_command(),
+], ids=["python-from-path", "no-smriti-wake", "the-live-hook", "the-trees-wake-py"])
 def test_claude_upgrades_a_deficient_hook_on_disk(fake_home, legacy, activity_wired):
     """The upgrade must reach the file. It rewrote the hook in place, so the
     rebuilt SessionStart list compared equal to the one it was built from;
     with the activity hook already wired nothing else changed, and the
     upgrade was reported but never saved. Since the hook must name its
-    interpreter, that is every existing install."""
+    interpreter, and run the package's wake, that is every existing install."""
     memory_root = fake_home / ".narada"
     settings: dict = {"hooks": {"SessionStart": [
         {"matcher": "", "hooks": [{"type": "command", "command": legacy}]},
@@ -202,6 +214,8 @@ def test_claude_upgrades_a_deficient_hook_on_disk(fake_home, legacy, activity_wi
     spec = parse_wake_command(wake)
     assert spec is not None
     assert spec.interpreter.replace("\\", "/") == installing_interpreter().replace("\\", "/")
+    assert spec.wake_path == "" and spec.flags == ("-P",)  # the package's, not the tree's
+    assert [h["command"] for g in data["hooks"]["SessionStart"] for h in g["hooks"]] == [wake]
     activity = [h["command"] for g in data["hooks"]["UserPromptSubmit"] for h in g["hooks"]]
     assert activity == [ACTIVITY]
     # And a rerun finds nothing left to do.
@@ -247,4 +261,58 @@ def test_codex_upgrades_a_hook_that_runs_python_from_path(tmp_path, monkeypatch)
     assert wake_cmds == [make_wake_hook_command(memory_root, home=home, framing="codex-json",
                                                 style=style)]
     # And a rerun finds nothing left to do.
+    assert codex_install._wire_config(data, [], memory_root, home) is False
+
+
+def test_a_reinstall_turns_the_live_hook_into_the_package_wake_with_others_kept(fake_home):
+    """The reference machine's settings: the wake hook beside another tool's
+    SessionStart hook. The wake hook is rewritten where it stands; the other
+    is left as it was, and there is one wake hook after the reinstall."""
+    memory_root = fake_home / ".narada"
+    other = 'python "$HOME/.claude/hooks/someone_elses.py"'
+    settings_path = fake_home / ".claude" / "settings.json"
+    settings_path.write_text(json.dumps({"hooks": {"SessionStart": [
+        {"matcher": "", "hooks": [{"type": "command", "command": LIVE_HOOK},
+                                  {"type": "command", "command": other, "timeout": 5}]},
+    ]}}), encoding="utf-8")
+
+    assert cc_install.patch_settings_json(memory_root) is True
+
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
+    canonical = make_wake_hook_command(memory_root, home=fake_home, framing="raw")
+    assert data["hooks"]["SessionStart"] == [
+        {"matcher": "", "hooks": [{"type": "command", "command": canonical},
+                                  {"type": "command", "command": other, "timeout": 5}]},
+    ]
+
+
+@pytest.mark.parametrize("style", ["sh", "powershell-encoded"])
+def test_codex_replaces_a_hook_that_runs_the_trees_wake_py(tmp_path, monkeypatch, style):
+    home = use_home(monkeypatch, tmp_path)
+    memory_root = home / ".narada"
+    monkeypatch.setattr(codex_install, "_wake_style", lambda: style)
+    python = installing_interpreter()
+    if style == "sh":
+        legacy = ('SMRITI_WAKE=1 SMRITI_ROOT="$HOME/.narada" SMRITI_WAKE_AUDIENCE="coding" '
+                  'SMRITI_WAKE_FRAMING="codex-json" '
+                  f"'{python.replace(chr(92), '/')}' \"$HOME/.narada/.smriti/wake.py\"")
+    else:
+        script = ("$ProgressPreference='SilentlyContinue'; $ErrorActionPreference='Stop'; "
+                  "$env:SMRITI_WAKE='1'; $env:SMRITI_ROOT=(Join-Path $HOME '.narada'); "
+                  "$env:SMRITI_WAKE_AUDIENCE='coding'; $env:SMRITI_WAKE_FRAMING='codex-json'; "
+                  f"& '{python}' (Join-Path $HOME '.narada/.smriti/wake.py')")
+        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+        legacy = f"powershell.exe -NoProfile -NonInteractive -EncodedCommand {encoded}"
+    data = {"hooks": {"SessionStart": [{"matcher": "startup|resume|clear|compact", "hooks": [
+        {"type": "command", "command": legacy}]}]}}
+    assert classify_wake_hook(legacy, memory_root=memory_root, home=home,
+                              framing="codex-json") == (
+        DEFICIENT, "runs $HOME/.narada/.smriti/wake.py from the memory tree, "
+                   "not smriti.wake from the installed package")
+
+    assert codex_install._wire_config(data, [], memory_root, home) is True
+
+    wake_cmds = [h["command"] for g in data["hooks"]["SessionStart"] for h in g["hooks"]]
+    assert wake_cmds == [make_wake_hook_command(memory_root, home=home, framing="codex-json",
+                                                style=style)]
     assert codex_install._wire_config(data, [], memory_root, home) is False

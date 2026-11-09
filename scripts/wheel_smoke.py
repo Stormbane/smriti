@@ -14,9 +14,10 @@ nothing from a checkout can stand in for the wheel:
 1. the package imports from the venv and reports the wheel's version;
 2. ``python -m smriti.install --harness none``, the privacy questions
    answered by flags, with a projects root holding one project: the
-   memory template, the deployed scripts, the mirror and the recorded
-   projects root are checked;
-3. ``smriti write``, ``smriti read`` and ``smriti status``, with the stub
+   memory template, the deployed script (and none that runs on its own),
+   the mirror and the recorded projects root are checked;
+3. the wake hook's ``python -P -m smriti.wake`` prints the briefing; then
+   ``smriti write``, ``smriti read`` and ``smriti status``, with the stub
    embedder in-process (``SMRITI_EMBED_PROVIDER=stub``,
    ``SMRITI_EMBED_SERVICE=0``);
 4. one ``smriti nightly`` (no witness) that captures a planted Claude Code
@@ -141,9 +142,9 @@ def smoke(wheel: Path, work: Path, extras: str) -> None:
     print(out)
     check((root / "identity.md").is_file(), "the memory template was copied")
     check((root / "journal").is_dir(), "its empty directories were made")
-    for name in ("wake.py", "narada-p.sh"):
-        check((root / ".smriti" / name).is_file(), f".smriti/{name} was deployed")
-    check(not (root / ".smriti" / "backup.py").exists(), ".smriti/backup.py was not deployed")
+    check((root / ".smriti" / "narada-p.sh").is_file(), ".smriti/narada-p.sh was deployed")
+    for name in ("wake.py", "backup.py"):
+        check(not (root / ".smriti" / name).exists(), f".smriti/{name} was not deployed")
     record = json.loads((root / ".smriti" / "install.json").read_text(encoding="utf-8"))
     check(Path(record["projects_root"]) == projects, "the projects root was recorded", str(record))
     check((root / "mirrors" / "kite" / "ai").exists(), "the project's mirror was linked")
@@ -153,7 +154,11 @@ def smoke(wheel: Path, work: Path, extras: str) -> None:
           or "\nprivacy:\n" in out, "the privacy summary was printed", out)
     out = run([python, "-m", "smriti.install", "--harness", "none", "--memory-root", str(root)],
               cwd=work, env=env)
-    check("[wake] wake.py up to date" in out, "a rerun finds the scripts up to date", out)
+    check("[wake] narada-p.sh up to date" in out, "a rerun finds the script up to date", out)
+
+    print("== wake", flush=True)
+    out = run([python, "-P", "-m", "smriti.wake"], cwd=work, env={**env, "SMRITI_WAKE": "1"})
+    check("--- IDENTITY ---" in out, "the package's wake prints the briefing", out)
 
     print("== write, read, status", flush=True)
     out = run([smriti, "write", NOTE, "--branch", "notes", "--title", "Where the awls are"],

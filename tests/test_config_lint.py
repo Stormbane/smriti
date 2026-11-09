@@ -126,7 +126,8 @@ class TestSmritiMCPRegistered:
 
 
 class TestWakeHookWired:
-    """Verify the SessionStart hook calls wake.py with SMRITI_WAKE=1."""
+    """Verify the SessionStart hook runs smriti's wake with SMRITI_WAKE=1 (``smriti
+    doctor`` checks the rest, such as an earlier install's hook to reinstall)."""
 
     def test_session_start_hook_exists(self) -> None:
         settings = CLAUDE_DIR / "settings.json"
@@ -136,12 +137,14 @@ class TestWakeHookWired:
         hooks = data.get("hooks", {})
         session_start = hooks.get("SessionStart", [])
 
+        from smriti.integrations.common.hook_model import parse_wake_command
+
         wake_found = False
         for group in session_start:
             for hook in group.get("hooks", []):
-                cmd = hook.get("command", "")
-                if "wake.py" in cmd and "SMRITI_WAKE" in cmd:
+                spec = parse_wake_command(hook.get("command", ""))
+                if spec is not None and "SMRITI_WAKE" in spec.env:
                     wake_found = True
                     break
 
-        assert wake_found, "SessionStart hook does not call wake.py with SMRITI_WAKE"
+        assert wake_found, "SessionStart hook does not run smriti's wake with SMRITI_WAKE"

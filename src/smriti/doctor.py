@@ -42,7 +42,8 @@ class Check:
 # --- shared helpers -------------------------------------------------------
 
 # The script after the interpreter, which is a python (a bare one from earlier
-# installs) or a quoted path (the wake hook's, now).
+# installs) or a quoted path. The wake hook runs a module (-m smriti.wake), not
+# a script, so it names none.
 _SH_SCRIPT_RE = re.compile(rf'{SH_INTERPRETER}\s+"?((?:\$HOME|~)/[^"\s]+\.py)"?')
 _PS_SCRIPT_RE = re.compile(r"\(Join-Path \$HOME '([^']+\.py)'\)")
 

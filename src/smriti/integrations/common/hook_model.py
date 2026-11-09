@@ -1,19 +1,27 @@
 """Canonical wake-hook model — one classifier for installers AND doctor.
 
-A SessionStart wake hook is "working" only if it (a) targets the
-entity's ``wake.py`` and (b) carries the right environment: SMRITI_WAKE
-on, SMRITI_ROOT at the entity tree, the harness-correct framing, and an
-audience. "Targets wake.py" alone is too weak (a hook can hit the right
-file with the wrong env and silently wake without identity), and exact
-string comparison is too strong (Codex on Windows runs hooks under
-PowerShell, so the live command is a ``-EncodedCommand`` blob that is
-semantically identical to the sh form).
+A SessionStart wake hook runs the installed package's wake,
+``<python> -P -m smriti.wake`` (:data:`WAKE_ARGS`). It is "working" only if
+it also carries the right environment: SMRITI_WAKE on, SMRITI_ROOT at the
+entity tree, the harness-correct framing, and an audience. "Runs the wake"
+alone is too weak (a hook can run it with the wrong env and silently wake
+without identity), and exact string comparison is too strong (Codex on
+Windows runs hooks under PowerShell, so the live command is a
+``-EncodedCommand`` blob that is semantically identical to the sh form).
+
+Earlier installs' hooks ran ``<root>/.smriti/wake.py``, a script the
+installer copied into the memory tree, which agents write to and a restore
+brings back from git: a write or a restore could change what every session
+start ran. Such a hook, for this tree, is ours and DEFICIENT, so a
+reinstall turns it into the module form in place and doctor names the gap.
+One for another tree's ``wake.py`` is UNRELATED, as is a module-form hook
+whose SMRITI_ROOT names another tree.
 
 This module is the single source of truth both sides share:
 
     installers  — leave EQUIVALENT hooks untouched, upgrade DEFICIENT
-                  ones (right wake.py, wrong semantics) with a config
-                  backup, never modify UNRELATED hooks.
+                  ones (ours, wrong semantics) with a config backup,
+                  never modify UNRELATED hooks.
     doctor      — PASS on EQUIVALENT, FAIL with the specific gap on
                   DEFICIENT, ignore UNRELATED.
 
@@ -32,6 +40,7 @@ DEFICIENT, so a reinstall brings it up to date and doctor names the gap.
 from __future__ import annotations
 
 import base64
+import os
 import re
 import shlex
 import sys
@@ -43,6 +52,12 @@ _VALID_FRAMINGS = ("raw", "codex-json")
 EQUIVALENT = "equivalent"
 DEFICIENT = "deficient"
 UNRELATED = "unrelated"
+
+# What the hook runs after the interpreter: the installed package's wake.
+# -P keeps the current directory (a project, or the memory tree itself) off
+# the front of the import path, so no file there can stand in for smriti's.
+WAKE_MODULE = "smriti.wake"
+WAKE_ARGS = ("-P", "-m", WAKE_MODULE)
 
 
 # --- generation -----------------------------------------------------------
@@ -81,7 +96,7 @@ def make_wake_hook_command(
     style: str = "sh",
     interpreter: str | None = None,
 ) -> str:
-    """Command string a harness runs at SessionStart to fire wake.py.
+    """Command string a harness runs at SessionStart: ``<python> -P -m smriti.wake``.
 
     ``style="sh"`` emits the POSIX form (Claude Code runs hook commands
     under a POSIX shell on every platform, including Windows).
@@ -90,9 +105,9 @@ def make_wake_hook_command(
     — required for Codex on Windows, which runs hooks under PowerShell,
     NOT bash; a sh-form command string does not survive there.
 
-    Either form runs wake.py with ``interpreter`` (default: the python
-    running the installer, :func:`installing_interpreter`) by its path,
-    not with a ``python`` looked up on the harness's PATH.
+    Either form runs ``interpreter`` (default: the python running the
+    installer, :func:`installing_interpreter`) by its path, not a
+    ``python`` looked up on the harness's PATH.
     """
     if framing not in _VALID_FRAMINGS:
         raise ValueError(f"unknown wake framing {framing!r}")
@@ -106,7 +121,7 @@ def make_wake_hook_command(
         return (
             f'SMRITI_WAKE=1 SMRITI_ROOT="$HOME/{memory_rel}" '
             f'SMRITI_WAKE_AUDIENCE="{audience}" {framing_var}'
-            f'{_sh_interpreter(python)} "$HOME/{memory_rel}/.smriti/wake.py"'
+            f'{_sh_interpreter(python)} {" ".join(WAKE_ARGS)}'
         ).strip()
 
     if style == "powershell-encoded":
@@ -119,9 +134,7 @@ def make_wake_hook_command(
         ]
         if framing != "raw":
             parts.append(f"$env:SMRITI_WAKE_FRAMING='{framing}'")
-        parts.append(
-            f"{_ps_interpreter(python)} (Join-Path $HOME '{memory_rel}/.smriti/wake.py')"
-        )
+        parts.append(f"{_ps_interpreter(python)} {' '.join(WAKE_ARGS)}")
         script = "; ".join(parts)
         encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
         return (
@@ -138,9 +151,12 @@ def make_wake_hook_command(
 class WakeHookSpec:
     """Semantics extracted from a wake-hook command string."""
 
-    wake_path: str  # normalized, $HOME-relative posix path to wake.py
+    # An earlier install's hook: the $HOME-relative posix path to the tree's
+    # wake.py it runs. "" for a hook that runs the module.
+    wake_path: str = ""
     env: dict[str, str] = field(default_factory=dict)
     interpreter: str = ""  # what runs it: a path, or a bare name looked up on PATH
+    flags: tuple[str, ...] = ()  # the interpreter's options before ``-m smriti.wake``
 
 
 ENCODED_RE = re.compile(r"-EncodedCommand\s+([A-Za-z0-9+/=]+)", re.IGNORECASE)
@@ -148,11 +164,15 @@ _PS_ENV_LITERAL_RE = re.compile(r"\$env:(\w+)\s*=\s*'([^']*)'")
 _PS_ENV_JOINPATH_RE = re.compile(
     r"\$env:(\w+)\s*=\s*\(Join-Path \$HOME '([^']*)'\)"
 )
+# What follows the interpreter: options (``-X``/``-W`` with their values), then
+# ``-m smriti.wake``; or, in an earlier install's hook, the tree's wake.py.
+_FLAGS = r"(?P<flags>(?:-[XW]\s+\S+\s+|-[A-Za-z]+\s+)*)"
+_MODULE = r"-m\s+smriti\.wake(?![\w.])"
 # PowerShell's interpreter: the call operator and a single-quoted path (the
 # generated form), or a bare python (earlier installs).
 _PS_WAKE_RE = re.compile(
-    r"(?:&\s*'(?P<path>(?:[^']|'')*)'|(?P<bare>python3?(?:\.exe)?))"
-    r"\s+\(Join-Path \$HOME '(?P<wake>[^']*wake\.py)'\)"
+    r"(?:&\s*'(?P<path>(?:[^']|'')*)'|(?P<bare>python3?(?:\.exe)?))\s+"
+    rf"(?:{_FLAGS}{_MODULE}|\(Join-Path \$HOME '(?P<wake>[^']*wake\.py)'\))"
 )
 _SH_ENV_RE = re.compile(r'\b(SMRITI_\w+)=("([^"]*)"|\'([^\']*)\'|(\S+))')
 # The POSIX shell's interpreter, one word: single-quoted (the generated form;
@@ -161,7 +181,8 @@ _SH_ENV_RE = re.compile(r'\b(SMRITI_\w+)=("([^"]*)"|\'([^\']*)\'|(\S+))')
 # finds the scripts hooks run with the same pattern.
 SH_INTERPRETER = r"""(?:'[^']*'(?:"'"'[^']*')*|"[^"]*"|[^\s'";&|()<>]*python[\w.]*)"""
 _SH_WAKE_RE = re.compile(
-    rf'(?P<interp>{SH_INTERPRETER})\s+"?\$HOME/(?P<wake>[^"\s]*wake\.py)"?'
+    rf'(?P<interp>{SH_INTERPRETER})\s+'
+    rf'(?:{_FLAGS}{_MODULE}|"?\$HOME/(?P<wake>[^"\s]*wake\.py)"?)'
 )
 
 
@@ -186,11 +207,16 @@ def _interpreter_key(python: str) -> str:
     return python
 
 
+def _flags(found: str | None) -> tuple[str, ...]:
+    return tuple(found.split()) if found else ()
+
+
 def parse_wake_command(command: str) -> WakeHookSpec | None:
     """Extract wake semantics from an sh or PowerShell-encoded command.
 
-    Returns None when the command does not invoke a ``wake.py`` at all
-    (i.e. it is not a wake hook of any lineage — UNRELATED territory).
+    Returns None when the command runs neither ``-m smriti.wake`` nor a
+    ``wake.py`` (i.e. it is not a wake hook of any lineage — UNRELATED
+    territory).
     """
     encoded = ENCODED_RE.search(command)
     if encoded:
@@ -210,8 +236,8 @@ def parse_wake_command(command: str) -> WakeHookSpec | None:
         for name, rel in _PS_ENV_JOINPATH_RE.findall(script):
             if name.startswith("SMRITI_"):
                 env[name] = f"$HOME/{_normalize(rel)}"
-        return WakeHookSpec(wake_path=_normalize(wake.group("wake")), env=env,
-                            interpreter=interpreter)
+        return WakeHookSpec(wake_path=_normalize(wake.group("wake") or ""), env=env,
+                            interpreter=interpreter, flags=_flags(wake.group("flags")))
 
     wake = _SH_WAKE_RE.search(command)
     if not wake:
@@ -219,13 +245,31 @@ def parse_wake_command(command: str) -> WakeHookSpec | None:
     env = {}
     for m in _SH_ENV_RE.finditer(command):
         env[m.group(1)] = m.group(3) or m.group(4) or m.group(5) or ""
-    return WakeHookSpec(wake_path=_normalize(wake.group("wake")), env=env,
-                        interpreter=_sh_unquote(wake.group("interp")))
+    return WakeHookSpec(wake_path=_normalize(wake.group("wake") or ""), env=env,
+                        interpreter=_sh_unquote(wake.group("interp")),
+                        flags=_flags(wake.group("flags")))
 
 
 # --- classification -------------------------------------------------------
 
 _WAKE_ON = {"1", "full", "on", "true", "yes"}
+
+
+def _root_key(value: str, home: Path) -> str:
+    """A root as a hook's SMRITI_ROOT names it, for comparison: ``$HOME`` or
+    ``~`` expanded, in either slash and, on Windows, any case."""
+    path = value.replace("\\", "/")
+    for prefix in ("$HOME/", "${HOME}/", "~/"):
+        if path.startswith(prefix):
+            path = f"{home.as_posix()}/{path[len(prefix):]}"
+            break
+    return os.path.normcase(os.path.normpath(path))
+
+
+def _keeps_cwd_off_the_path(flags: tuple[str, ...]) -> bool:
+    """Whether the interpreter's options include ``-P`` (or ``-I``, which implies it)."""
+    return any(f.startswith("-") and not f.startswith("--") and ("P" in f or "I" in f)
+               for f in flags)
 
 
 def classify_wake_hook(
@@ -245,17 +289,28 @@ def classify_wake_hook(
     doctor should FAIL with ``detail`` naming the gaps. The hook must run
     ``interpreter`` (default: :func:`installing_interpreter`, the python
     classifying it); a bare ``python`` from PATH, or another python, is a gap.
+    So is an earlier install's hook for this tree, which runs the tree's
+    ``wake.py`` instead of the package's module.
     """
     spec = parse_wake_command(command)
     if spec is None:
-        return UNRELATED, "does not invoke a wake.py"
+        return UNRELATED, "does not run smriti's wake"
 
     memory_rel = memory_root.relative_to(home).as_posix()
-    expected_wake = _normalize(f"{memory_rel}/.smriti/wake.py")
-    if spec.wake_path != expected_wake:
-        return UNRELATED, f"targets {spec.wake_path}, not {expected_wake}"
-
     gaps: list[str] = []
+    if spec.wake_path:
+        expected_wake = _normalize(f"{memory_rel}/.smriti/wake.py")
+        if spec.wake_path != expected_wake:
+            return UNRELATED, f"targets {spec.wake_path}, not {expected_wake}"
+        gaps.append(f"runs $HOME/{expected_wake} from the memory tree, "
+                    f"not {WAKE_MODULE} from the installed package")
+    else:
+        named = spec.env.get("SMRITI_ROOT", "")
+        if named and _root_key(named, home) != _root_key(memory_root.as_posix(), home):
+            return UNRELATED, f"wakes {named}, not $HOME/{memory_rel}"
+        if not _keeps_cwd_off_the_path(spec.flags):
+            gaps.append("runs without -P, so the current directory comes first on its "
+                        "import path")
     if spec.env.get("SMRITI_WAKE", "").strip().lower() not in _WAKE_ON:
         gaps.append("SMRITI_WAKE not enabled")
     expected_root = f"$HOME/{memory_rel}"
@@ -284,6 +339,8 @@ __all__ = [
     "DEFICIENT",
     "UNRELATED",
     "SH_INTERPRETER",
+    "WAKE_ARGS",
+    "WAKE_MODULE",
     "WakeHookSpec",
     "installing_interpreter",
     "make_wake_hook_command",

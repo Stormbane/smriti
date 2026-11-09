@@ -1,9 +1,9 @@
 """Harness-neutral SessionStart wake runner.
 
 Both Claude Code's SessionStart hook and Codex's
-``[[hooks.SessionStart]]`` hook point at the same ``wake.py`` shim in
-the entity tree (``<root>/.smriti/wake.py``). Output framing is
-the only thing that differs:
+``[[hooks.SessionStart]]`` hook run the same entry point from the
+installed package, ``python -P -m smriti.wake`` (:mod:`smriti.wake.__main__`).
+Output framing is the only thing that differs:
 
     raw          — print the briefing string verbatim. Claude Code
                    appends it to the session as plain context.
@@ -13,7 +13,7 @@ the only thing that differs:
                    inject context (it also accepts plain text, but the
                    JSON form is explicit and forward-compatible).
 
-The shim selects framing via ``$SMRITI_WAKE_FRAMING`` — set to
+The hook selects framing via ``$SMRITI_WAKE_FRAMING`` — set to
 ``codex-json`` by the Codex install adapter, defaulting to ``raw``
 for everyone else.
 """
@@ -58,8 +58,10 @@ def run(
 
     ``entity_root`` defaults to :func:`smriti.core.tree.tree_root`
     (``$SMRITI_ROOT``, else an existing ``~/.narada``, else ``~/.smriti``).
-    ``script_dir`` is where the ``last-activity`` touch-file lives
-    (typically the directory of the calling shim). Wake doesn't back the
+    The ``last-activity`` touch-file is ``<entity_root>/.smriti/last-activity``;
+    ``script_dir`` names another directory for it, as the ``wake.py`` an
+    earlier install deployed into ``<root>/.smriti/`` passes its own (the
+    same one) until a reinstall replaces its hook. Wake doesn't back the
     tree up: the hourly ``smriti-backup`` task does.
     ``framing`` defaults to ``$SMRITI_WAKE_FRAMING`` or ``raw``.
     """
@@ -73,24 +75,20 @@ def run(
     if framing is None:
         framing = os.environ.get("SMRITI_WAKE_FRAMING", "raw").strip()
 
-    if script_dir is not None:
-        # Heartbeat consumer reads this to know if the user is around.
-        try:
-            (script_dir / "last-activity").touch()
-        except OSError:
-            pass
+    # Heartbeat consumer reads this to know if the user is around.
+    activity_dir = script_dir if script_dir is not None else entity_root / ".smriti"
+    try:
+        (activity_dir / "last-activity").touch()
+    except OSError:
+        pass
 
     try:
         cast(io.TextIOWrapper, sys.stdout).reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, OSError):
         pass
 
-    try:
-        from smriti.wake import briefing
-        from smriti.wake.briefing import consume_handoff, pending_handoff
-    except ImportError:
-        # smriti not on path; fail silent so we never block the session.
-        return 0
+    from smriti.wake import briefing
+    from smriti.wake.briefing import consume_handoff, pending_handoff
 
     audience = os.environ.get("SMRITI_WAKE_AUDIENCE", "coding").strip() or "coding"
     # The Hands section reads the calling harness's MCP config.

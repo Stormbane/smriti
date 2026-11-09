@@ -91,7 +91,7 @@ class TestMCPSpec:
         assert "SMRITI_WAKE=1" in cmd
         assert 'SMRITI_WAKE_AUDIENCE="coding"' in cmd
         assert 'SMRITI_ROOT="$HOME/.narada"' in cmd
-        assert '"$HOME/.narada/.smriti/wake.py"' in cmd
+        assert cmd.endswith(" -P -m smriti.wake") and "wake.py" not in cmd
         # Forward-slash paths only — bash hostility to backslashes.
         assert "\\" not in cmd
 

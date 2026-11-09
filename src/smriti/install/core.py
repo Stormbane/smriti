@@ -1,8 +1,10 @@
 """Core install steps — harness-neutral.
 
 These run regardless of which agent harness will eventually drive
-smriti. They set up the memory tree, copy wake templates, link
-and project mirrors.
+smriti. They set up the memory tree, copy the one script it holds
+(``narada-p.sh``, run by hand), remove the ones earlier installs copied
+there, and link project mirrors. The wake and the backup run from the
+installed package, never from the memory tree.
 
 The files copied come from :mod:`smriti.install.templates`: the
 package's own copies in a wheel, the checkout's otherwise. The projects
@@ -42,10 +44,11 @@ LEGACY_PROJECTS_ROOT = Path("C:/Projects")
 INSTALL_RECORD = "install.json"
 
 # The scripts the installer copies into <root>/.smriti/.
-DEPLOYED = ("wake.py", "narada-p.sh")
+DEPLOYED = ("narada-p.sh",)
 # Scripts earlier installs copied there, which nothing runs any more, each
 # with what runs in its place: a reinstall removes smriti's copies.
 RETIRED = {
+    "wake.py": "the SessionStart hook runs `python -m smriti.wake` from the installed package",
     "backup.py": "`smriti backup` runs the installed package's backup",
 }
 
@@ -118,8 +121,8 @@ class ProjectsRoot:
         """Whether this run should record it: chosen now, not read from the record.
 
         "none" is recorded too, so a rerun keeps it: without the record, the
-        rerun would find the scripts this run deployed and take the install
-        for one made before the record.
+        rerun would take the install for one made before the record
+        (:func:`smriti.install.privacy.is_existing_install`).
         """
         return self.how != "recorded"
 

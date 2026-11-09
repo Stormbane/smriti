@@ -1,4 +1,4 @@
-"""Tests for the wake system (wake.py session-start loader)."""
+"""Tests for the wake system: ``python -P -m smriti.wake``, the session-start loader."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-WAKE_PY = REPO_ROOT / "narada" / ".smriti" / "wake.py"
 
 
 @pytest.fixture()
@@ -40,10 +39,6 @@ def wake_tree(tmp_path: Path) -> Path:
     mirrors_mem.mkdir(parents=True)
     (mirrors_mem / "MEMORY.md").write_text("# Memory\nTest memory index.\n")
 
-    # Copy wake.py as-is — we'll set SMRITI_ROOT in the env to point at this tree
-    import shutil
-    shutil.copy2(WAKE_PY, smriti_dir / "wake.py")
-
     return tmp_path
 
 
@@ -52,12 +47,12 @@ def _run_wake(
 ) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env.pop("SMRITI_WAKE", None)
-    env["SMRITI_ROOT"] = str(wake_tree)  # Point wake.py at the test tree
+    env["SMRITI_ROOT"] = str(wake_tree)  # Point the wake at the test tree
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
     if env_vars:
         env.update(env_vars)
     return subprocess.run(
-        [sys.executable, str(wake_tree / ".smriti" / "wake.py")],
+        [sys.executable, "-P", "-m", "smriti.wake"],
         capture_output=True,
         text=True,
         env=env,
@@ -205,37 +200,71 @@ class TestWakeEdgeCases:
         )
 
 
-class TestWakeWithoutSmriti:
-    """H15.1: run by a python that can't import smriti, wake.py exited 0 and
-    said nothing, and the session started without its briefing unnoticed."""
+class TestWakeRunsThePackage:
+    """The hook runs the installed package's wake: nothing in the memory tree runs,
+    so a write to the tree or a restore of it can't change what a session start runs."""
 
-    @staticmethod
-    def _run_without_smriti(wake_tree: Path, wake: str | None) -> subprocess.CompletedProcess:
+    def test_a_package_planted_in_the_tree_is_not_run(self, wake_tree: Path) -> None:
+        """A session started in the memory tree: without -P its directory would come
+        first on the import path, and a ``smriti`` package there would be imported."""
+        planted = wake_tree / "smriti" / "wake"
+        planted.mkdir(parents=True)
+        (planted.parent / "__init__.py").write_text("", encoding="utf-8")
+        (planted / "__init__.py").write_text("", encoding="utf-8")
+        (planted / "__main__.py").write_text("print('PLANTED')\n", encoding="utf-8")
+
+        result = _run_wake(wake_tree, {"SMRITI_WAKE": "1"}, cwd=str(wake_tree))
+
+        assert result.returncode == 0, result.stderr
+        assert "PLANTED" not in result.stdout
+        assert "I am the test entity" in result.stdout
+
+    def test_the_wake_marks_activity_in_the_tree(self, wake_tree: Path) -> None:
+        assert _run_wake(wake_tree, {"SMRITI_WAKE": "1"}).returncode == 0
+        assert (wake_tree / ".smriti" / "last-activity").exists()
+
+
+class TestWakeWithoutSmriti:
+    """Run by a python that can't import smriti, the wake once exited 0 and said
+    nothing, and the session started without its briefing unnoticed."""
+
+    def test_a_python_without_smriti_says_so_on_stderr(self) -> None:
         env = os.environ.copy()
-        env.pop("SMRITI_WAKE", None)
-        if wake is not None:
-            env["SMRITI_WAKE"] = wake
+        env["SMRITI_WAKE"] = "1"
         # -I ignores PYTHONPATH and the user's site-packages, -S the site
         # packages: smriti (installed, or editable) can't be imported.
-        return subprocess.run(
-            [sys.executable, "-I", "-S", str(wake_tree / ".smriti" / "wake.py")],
-            capture_output=True, text=True, env=env, timeout=30,
-        )
-
-    def test_a_missing_briefing_is_said_on_stderr(self, wake_tree: Path) -> None:
-        result = self._run_without_smriti(wake_tree, "1")
+        result = subprocess.run([sys.executable, "-I", "-S", "-m", "smriti.wake"],
+                                capture_output=True, text=True, env=env, timeout=30)
         assert result.stdout == ""  # stdout goes into the session: nothing there
         lines = result.stderr.splitlines()
         assert len(lines) == 1, result.stderr
-        assert lines[0].startswith("[wake] no memory briefing: ")
-        assert sys.executable in lines[0] and "can't import smriti" in lines[0]
+        assert "No module named 'smriti'" in lines[0]
         # Not 0, so Claude Code shows the line (it drops stderr at 0); neither
         # harness stops a session for a SessionStart hook that fails.
         assert result.returncode == 1
 
-    def test_silent_when_no_briefing_was_asked_for(self, wake_tree: Path) -> None:
-        result = self._run_without_smriti(wake_tree, None)
-        assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    def test_a_wake_that_cant_be_imported_is_said_on_stderr(
+            self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+        import importlib
+
+        entry = importlib.import_module("smriti.wake.__main__")
+        monkeypatch.setitem(sys.modules, "smriti.integrations.common.wake_runner", None)
+        monkeypatch.setenv("SMRITI_WAKE", "1")
+        assert entry.main() == 1
+        out, err = capsys.readouterr()
+        assert out == ""
+        assert err.startswith("[wake] no memory briefing: ") and err.count("\n") == 1
+        assert sys.executable in err and "can't import smriti's wake" in err
+
+    def test_silent_when_no_briefing_was_asked_for(
+            self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+        import importlib
+
+        entry = importlib.import_module("smriti.wake.__main__")
+        monkeypatch.setitem(sys.modules, "smriti.integrations.common.wake_runner", None)
+        monkeypatch.delenv("SMRITI_WAKE", raising=False)
+        assert entry.main() == 0
+        assert capsys.readouterr() == ("", "")
 
 
 class TestIdentityFallback:

@@ -192,8 +192,9 @@ def _search_path() -> list[tuple[str, int]]:
     Each ``sys.path`` entry that is an existing directory or file, once, in
     order, except ``''``, the current directory and the running script's
     directory. Those depend on where a process was started, not on what is
-    installed; and the wake hook's script directory is the tree's
-    ``.smriti``, which changes with every index write. Installing or
+    installed; and a script run from the tree's ``.smriti`` (as an earlier
+    install's wake hook ran ``wake.py``) has a directory that changes with
+    every index write. Installing or
     removing a distribution changes its site directory's mtime (an editable
     install writes its dist-info there too), so the list keys the cache.
     Entries are told apart by what ``os.stat`` says they are, not by

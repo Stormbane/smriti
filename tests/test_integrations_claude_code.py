@@ -170,10 +170,10 @@ class TestPatchSettingsJSON:
         assert "UserPromptSubmit" in data["hooks"]
         assert "PostToolUse" not in data["hooks"]
 
-        # SessionStart -> wake.py command shape.
+        # SessionStart -> the package's wake.
         ss_cmd = data["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         assert "SMRITI_WAKE=1" in ss_cmd
-        assert "wake.py" in ss_cmd
+        assert ss_cmd.endswith(" -P -m smriti.wake") and "wake.py" not in ss_cmd
 
     def test_idempotent_when_all_hooks_already_wired(self, fake_home, capsys):
         memory_root = fake_home / ".narada"

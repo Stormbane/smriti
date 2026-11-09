@@ -98,8 +98,8 @@ def test_an_installed_wheel_reads_its_packaged_copies(tmp_path: Path) -> None:
     for relative in templates.ALL:
         assert found[relative] == str(site / "smriti" / templates.PACKAGED_DIR / relative)
     copied = site / "smriti" / templates.PACKAGED_DIR
-    assert (copied / "narada/.smriti/wake.py").read_bytes() == (
-        REPO / "narada/.smriti/wake.py").read_bytes()
+    assert (copied / "narada/.smriti/narada-p.sh").read_bytes() == (
+        REPO / "narada/.smriti/narada-p.sh").read_bytes()
     assert (copied / "memory_template/journal/.gitkeep").is_file()
 
 

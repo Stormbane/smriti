@@ -350,10 +350,18 @@ def describe_sources(sources: list[SourceSpec]) -> str:
 
 
 def is_existing_install(root: Path) -> bool:
-    """True when smriti was installed here before, or has captured here."""
+    """True when smriti was installed here before, or has captured here.
+
+    Every install records itself in ``.smriti/install.json``; one made
+    before that record left the ``wake.py`` or ``backup.py`` it deployed
+    (until a reinstall removes them).
+    """
+    smriti_dir = root / ".smriti"
     return (
         daylog_path(root).exists()
-        or (root / ".smriti" / "wake.py").exists()
+        or (smriti_dir / "install.json").exists()
+        or (smriti_dir / "wake.py").exists()
+        or (smriti_dir / "backup.py").exists()
         or (root / "log").is_dir()
     )
 

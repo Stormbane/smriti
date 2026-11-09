@@ -68,7 +68,7 @@ class TestPatchConfigTomlFromScratch:
         assert spec is not None
         assert spec.env["SMRITI_WAKE_FRAMING"] == "codex-json"
         assert spec.env["SMRITI_WAKE_AUDIENCE"] == "coding"
-        assert spec.wake_path.endswith(".smriti/wake.py")
+        assert spec.wake_path == "" and spec.flags == ("-P",)  # the package's wake
 
     def test_session_start_matcher_covers_context_resets(self, fake_codex_home):
         codex_install.patch_config_toml(fake_codex_home / ".narada")

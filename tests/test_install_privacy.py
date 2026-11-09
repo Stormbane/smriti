@@ -313,11 +313,15 @@ class TestNoTerminal:
         assert plan.capture == privacy.Choice(False, privacy.KEPT)
         assert path.read_bytes() == before
 
-    def test_existing_install_without_daylog_captures_nothing(self, root: Path) -> None:
+    @pytest.mark.parametrize("left", ["install.json", "wake.py", "backup.py"])
+    def test_existing_install_without_daylog_captures_nothing(self, root: Path,
+                                                              left: str) -> None:
         """An install from before the question. Until H11.1 it captured every
-        transcript on the machine; now it captures nothing until told to."""
+        transcript on the machine; now it captures nothing until told to. An
+        install records itself in install.json; one from before that record
+        left the scripts it deployed (until H15.8's reinstall removes them)."""
         (root / ".smriti").mkdir(parents=True)
-        (root / ".smriti" / "wake.py").write_text("# smriti wake\n", encoding="utf-8")
+        (root / ".smriti" / left).write_text("{}\n", encoding="utf-8")
 
         plan = decide_and_apply(root)
 
@@ -1058,7 +1062,9 @@ class TestInstaller:
         assert run_installer(installer, root, "--no-capture") == 0
 
         assert read_daylog(root) == {"capture": False, "sources": []}
-        assert (root / ".smriti" / "wake.py").exists()  # the core install ran
+        assert (root / ".smriti" / "narada-p.sh").exists()  # the core install ran
+        assert (root / ".smriti" / "install.json").exists()  # and recorded itself
+        assert privacy.is_existing_install(root)
         out = capsys.readouterr().out
         assert "captured:  nothing" in out
         assert "a running smriti logd rereads .smriti/daylog.json when it changes" in out
@@ -1107,7 +1113,7 @@ class TestInstaller:
 
         assert "REFUSED before any change" in capsys.readouterr().err
         assert path.read_text(encoding="utf-8") == "{not json"
-        assert not (root / ".smriti" / "wake.py").exists()
+        assert not (root / ".smriti" / "narada-p.sh").exists()
         assert not (root / "identity.md").exists()
 
     def test_contradictory_flags_are_rejected(self, installer: ModuleType, root: Path) -> None:
