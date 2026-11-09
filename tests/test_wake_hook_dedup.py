@@ -24,6 +24,7 @@ from smriti.integrations.common.hook_model import (
     make_wake_hook_command,
     parse_wake_command,
 )
+from smriti.integrations.common.mcp_spec import registered
 from tests._home import use_home
 
 
@@ -167,17 +168,33 @@ def _legacy_command(framing: str, style: str) -> str:
     return f"powershell.exe -NoProfile -NonInteractive -EncodedCommand {encoded}"
 
 
-def test_claude_upgrades_a_hook_that_runs_python_from_path(fake_home):
-    memory_root = fake_home / ".narada"
-    legacy = _legacy_command("raw", "sh")
-    settings_path = fake_home / ".claude" / "settings.json"
-    settings_path.write_text(json.dumps({"hooks": {"SessionStart": [
-        {"matcher": "", "hooks": [{"type": "command", "command": legacy}]},
-    ]}}), encoding="utf-8")
-    verdict, detail = classify_wake_hook(legacy, memory_root=memory_root, home=fake_home)
-    assert verdict == DEFICIENT and "python from PATH" in detail
+ACTIVITY = 'touch "$HOME/.narada/.smriti/last-activity" 2>/dev/null || true'
 
-    cc_install.patch_settings_json(memory_root)
+
+@pytest.mark.parametrize("activity_wired", [False, True], ids=["alone", "activity-wired"])
+@pytest.mark.parametrize("legacy", [
+    _legacy_command("raw", "sh"),
+    'SMRITI_ROOT="$HOME/.narada" python "$HOME/.narada/.smriti/wake.py"',  # no SMRITI_WAKE too
+], ids=["python-from-path", "no-smriti-wake"])
+def test_claude_upgrades_a_deficient_hook_on_disk(fake_home, legacy, activity_wired):
+    """The upgrade must reach the file. It rewrote the hook in place, so the
+    rebuilt SessionStart list compared equal to the one it was built from;
+    with the activity hook already wired nothing else changed, and the
+    upgrade was reported but never saved. Since the hook must name its
+    interpreter, that is every existing install."""
+    memory_root = fake_home / ".narada"
+    settings: dict = {"hooks": {"SessionStart": [
+        {"matcher": "", "hooks": [{"type": "command", "command": legacy}]},
+    ]}}
+    if activity_wired:
+        settings["hooks"]["UserPromptSubmit"] = [
+            {"matcher": "", "hooks": [{"type": "command", "command": ACTIVITY}]}]
+    settings_path = fake_home / ".claude" / "settings.json"
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
+    verdict, detail = classify_wake_hook(legacy, memory_root=memory_root, home=fake_home)
+    assert verdict == DEFICIENT, detail
+
+    assert cc_install.patch_settings_json(memory_root) is True
 
     data = json.loads(settings_path.read_text(encoding="utf-8"))
     [wake] = _wake_hooks_in(data, memory_root, fake_home)
@@ -185,6 +202,12 @@ def test_claude_upgrades_a_hook_that_runs_python_from_path(fake_home):
     spec = parse_wake_command(wake)
     assert spec is not None
     assert spec.interpreter.replace("\\", "/") == installing_interpreter().replace("\\", "/")
+    activity = [h["command"] for g in data["hooks"]["UserPromptSubmit"] for h in g["hooks"]]
+    assert activity == [ACTIVITY]
+    # And a rerun finds nothing left to do.
+    before = settings_path.read_bytes()
+    cc_install.patch_settings_json(memory_root)
+    assert settings_path.read_bytes() == before
 
 
 def test_codex_upgrades_a_hook_that_runs_python_from_path(tmp_path, monkeypatch):
@@ -194,22 +217,34 @@ def test_codex_upgrades_a_hook_that_runs_python_from_path(tmp_path, monkeypatch)
     style = codex_install._wake_style()
     legacy = _legacy_command("codex-json", style)
     config = home / ".codex" / "config.toml"
+    # Hooks enabled and the server registered already: the wake hook is the
+    # only change, so its upgrade alone must be detected and saved.
+    mcp = registered(None, memory_root)
     config.write_text(
         "[features]\nhooks = true\n\n"
         "[[hooks.SessionStart]]\n"
         'matcher = "startup|resume|clear|compact"\n'
         "[[hooks.SessionStart.hooks]]\n"
         'type = "command"\n'
-        f"command = {json.dumps(legacy)}\n",
+        f"command = {json.dumps(legacy)}\n\n"
+        "[mcp_servers.smriti]\n"
+        f"command = {json.dumps(mcp['command'])}\n"
+        f"args = {json.dumps(mcp['args'])}\n\n"
+        "[mcp_servers.smriti.env]\n"
+        f"SMRITI_ROOT = {json.dumps(mcp['env']['SMRITI_ROOT'])}\n",
         encoding="utf-8",
     )
     verdict, detail = classify_wake_hook(legacy, memory_root=memory_root, home=home,
                                          framing="codex-json")
     assert verdict == DEFICIENT and "python from PATH" in detail
+    assert codex_install._wire_config(tomllib.loads(config.read_text(encoding="utf-8")),
+                                      [], memory_root, home) is True  # the hook alone
 
-    codex_install.patch_config_toml(memory_root)
+    assert codex_install.patch_config_toml(memory_root) is True
 
     data = tomllib.loads(config.read_text(encoding="utf-8"))
     wake_cmds = [h["command"] for g in data["hooks"]["SessionStart"] for h in g["hooks"]]
     assert wake_cmds == [make_wake_hook_command(memory_root, home=home, framing="codex-json",
                                                 style=style)]
+    # And a rerun finds nothing left to do.
+    assert codex_install._wire_config(data, [], memory_root, home) is False

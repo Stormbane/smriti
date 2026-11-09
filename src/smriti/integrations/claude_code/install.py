@@ -219,10 +219,12 @@ def _wire_hooks(data: dict[str, Any], notes: list[str], memory_root: Path, home:
                 wake_kept = True
                 kept_hooks.append(hook)
             elif verdict == DEFICIENT and not equivalent_exists and not wake_kept:
-                hook["command"] = wake_cmd
+                # A new dict, not the hook rewritten in place: the rebuilt
+                # list is compared with session_start below, and an edit to a
+                # hook both lists hold would compare equal and not be saved.
+                kept_hooks.append({**hook, "command": wake_cmd})
                 wake_kept = True
                 deficient_upgraded = True
-                kept_hooks.append(hook)
             elif verdict in (EQUIVALENT, DEFICIENT):
                 duplicates_removed = True  # ours, redundant — drop
             else:
