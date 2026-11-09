@@ -165,7 +165,9 @@ _migrating = mismatched_identity
 # The most chunks index_tree embeds in one call, and holds in memory before
 # its write. A multiple of each in-process provider's own batch (onnx 32,
 # local 512), so every model call sees the texts it saw when a run embedded
-# all its chunks in one call, and the vectors are the same.
+# all its chunks in one call, and the vectors are the same. (The onnx
+# provider splits a batch over its attention bound by length, which depends
+# on that batch's texts only.)
 EMBED_BATCH = 512
 
 

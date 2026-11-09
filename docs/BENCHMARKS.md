@@ -109,9 +109,10 @@ session was among what it saw for 90 of the 91 answerable questions.
   questions; vectors add two points, and more on the stricter measures
   (recall_all@5 0.806 to 0.891).
 - **What reaches the agent is.** Part of an evidence turn is in what
-  `smriti_read` shows for 84% of questions, 57% for preferences. Results are
-  cut at 1,000 characters, and a single long line becomes one chunk of up to
-  24,000 characters, since the chunker splits only at line breaks. One graded
+  `smriti_read` shows for 84% of questions, 57% for preferences. Results were
+  cut at 1,000 characters, and a single long line became one chunk of up to
+  24,000 characters, since the chunker split only at line breaks (H15.10 cuts
+  such a line into chunks of at most 1,500 characters). One graded
   failure was this: the agent saw three of four items and said the fourth was
   cut off.
 - **Counting across sessions is the weak answer type** (72%): most failures
@@ -119,14 +120,17 @@ session was among what it saw for 90 of the 91 answerable questions.
   the sessions. For multi-session questions, recall_all@5 is 0.835 against
   recall_any@5's 0.983: search finds one of the sessions far more often than
   all of them.
-- **A very long line can exhaust memory when it is embedded.** The chunker
-  splits only at line breaks, so a line of 24,000 characters is one chunk of
-  about 6,000 tokens; the onnx provider embeds 32 texts at a time, padded to
-  the longest, so that batch's attention alone needs tens of gigabytes. Both
+- **A very long line could exhaust memory when it was embedded.** The chunker
+  split only at line breaks, so a line of 24,000 characters was one chunk of
+  about 6,000 tokens; the onnx provider embedded 32 texts at a time, padded to
+  the longest, so that batch's attention alone needed tens of gigabytes. Both
   the GPU run and the int8 run hit it on this data (the int8 run was stopped
   for it). A memory tree rarely has such a line (the reference tree's longest
   chunk is 3,481 characters), but a pasted log or a paragraph without breaks
-  would make one.
+  would make one. Since H15.10 the chunker cuts such a line at word boundaries
+  into chunks of at most 1,500 characters, and the onnx provider splits a
+  batch by length when its attention would exceed that of 32 texts of 512
+  tokens.
 - **"Nothing is close" never fired**: for none of the 30 unanswerable questions
   and none of the answerable ones. The model's calibration (chosen on the
   synthetic quality set, for the int8 model) doesn't separate them here. The

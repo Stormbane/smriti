@@ -20,6 +20,17 @@ class OnnxEmbedding:
     """
 
     _DEFAULT_BATCH_SIZE = 32
+    # smriti: the most attention one model call may compute, as a batch's
+    # size times the square of its longest text in tokens: a full batch of
+    # 512-token texts (0.5 GB a copy of the attention scores, in bge-m3's 16
+    # heads, against 74 GB for 32 texts of 6,000 tokens).
+    # Every text of a batch is padded to its longest, so a batch over this is
+    # split by length (utils.batched_embed); upstream embedded 32 texts in
+    # one call whatever their length, and one 6,000-token text among them
+    # needed tens of GB (H15.10). Truncation stays at 8,192 tokens: no chunk
+    # the chunker makes now comes near it, and a lower cap would change the
+    # vectors of long texts.
+    _MAX_ATTENTION = 32 * 512 * 512
 
     def __init__(
         self,
@@ -128,7 +139,13 @@ class OnnxEmbedding:
     async def embed(self, texts: list[str]) -> list[list[float]]:
         from .utils import batched_embed
 
-        return await batched_embed(texts, self._embed_batch, self._batch_size)
+        return await batched_embed(texts, self._embed_batch, self._batch_size,
+                                   length=self._token_count,
+                                   max_attention=self._MAX_ATTENTION)
+
+    def _token_count(self, text: str) -> int:
+        """smriti: the tokens *text* is in a batch, truncated as _encode truncates it."""
+        return len(self._tokenizer.encode(text).ids)
 
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         loop = asyncio.get_running_loop()
