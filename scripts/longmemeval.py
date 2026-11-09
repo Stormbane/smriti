@@ -24,8 +24,9 @@ with vectors and keyword-only:
 
 - the agent's view: the chunks ``smriti_read`` returns by default
   (:data:`AGENT_TOP_K`, search's default candidates, no reranker), each with
-  its session and whether what ``smriti_read`` shows of it (the first
-  :data:`MCP_PREVIEW_CHARS` characters) shows part of an evidence turn;
+  its session and whether what ``smriti_read`` shows of it (as many
+  characters as that checkout's ``smriti_read`` shows: see
+  :func:`preview_chars`) shows part of an evidence turn;
 - a deeper ranking (:data:`DEEP_TOP_K` chunks), reduced to sessions in the
   order they first appear.
 
@@ -95,7 +96,8 @@ from typing import Any
 AGENT_TOP_K = 5  # smriti_read's default top_k
 AGENT_CANDIDATE_K = 20  # search's default candidate_k
 # smriti_read shows each result's content stripped and cut at this many
-# characters (the same in the checkouts measured), so the agent sees no more.
+# characters in a checkout from before H15.11; a later one says how many
+# (smriti.mcp.tools.memory.PREVIEW_CHARS: see preview_chars).
 MCP_PREVIEW_CHARS = 1000
 DEEP_TOP_K = 50
 DEEP_CANDIDATE_K = 50
@@ -192,9 +194,22 @@ def sessions_in_order(sources: Iterable[str], by_source: dict[str, str]) -> list
     return seen
 
 
-def visible(content: str) -> str:
-    """What ``smriti_read`` shows of a result's content."""
-    return content.strip()[:MCP_PREVIEW_CHARS]
+def visible(content: str, limit: int = MCP_PREVIEW_CHARS) -> str:
+    """What ``smriti_read`` shows of a result's content, when it shows *limit* characters."""
+    return content.strip()[:limit]
+
+
+def preview_chars() -> int:
+    """How many characters of a result the imported checkout's ``smriti_read``
+    shows: its ``PREVIEW_CHARS``, or :data:`MCP_PREVIEW_CHARS` for a checkout
+    from before H15.11, which has none."""
+    import importlib
+
+    try:
+        memory = importlib.import_module("smriti.mcp.tools.memory")
+    except ImportError:  # older still: no such module
+        return MCP_PREVIEW_CHARS
+    return int(getattr(memory, "PREVIEW_CHARS", MCP_PREVIEW_CHARS))
 
 
 def evidence_windows(line: str) -> list[str]:
@@ -432,6 +447,7 @@ def worker(spec_path: Path) -> int:
     # A checkout that says why a search was keyword-only (search_with_status)
     # is asked that way; an older one only has search.
     with_status = getattr(search_module, "search_with_status", None)
+    preview = preview_chars()
 
     def run_search(conn: Any, query: str, top_k: int, candidate_k: int,
                    use_vectors: bool) -> tuple[list[Any], dict[str, Any]]:
@@ -475,7 +491,8 @@ def worker(spec_path: Path) -> int:
                 for r in agent:
                     sid = by_source.get(r.source.replace("\\", "/"), "")
                     shown.append({"session": sid, "evidence_turn": sid in evidence and
-                                  shows_evidence(visible(r.content), evidence_of.get(sid, ()))})
+                                  shows_evidence(visible(r.content, preview),
+                                                 evidence_of.get(sid, ()))})
                 modes[mode] = {"agent": shown,
                                "deep": sessions_in_order((r.source for r in deep), by_source),
                                "agent_ms": round((t2 - t1) * 1000, 1),
@@ -485,7 +502,8 @@ def worker(spec_path: Path) -> int:
                 "qid": q["question_id"], "type": q["question_type"],
                 "abstention": is_abstention(q), "evidence": evidence,
                 "evidence_lines": any(evidence_of.get(s) for s in evidence),
-                "sessions": len(files), "index_s": round(index_s, 3),
+                "sessions": len(files), "preview_chars": preview,
+                "index_s": round(index_s, 3),
                 "index": {k: int(v) for k, v in stats.items()},
                 "vector_rows": vector_rows, "misses": missed[0] - missed_before,
                 "hybrid_ok": hybrid_ok(int(stats.get("chunks", 0)), vector_rows,
@@ -720,7 +738,9 @@ def cmd_report(args: argparse.Namespace) -> int:
                   f"{_fmt(row['agent_turn_hit'])} |")
         times = [r["modes"]["hybrid"]["agent_ms"] for r in records]
         source = "from " + Path(meta["vectors"]).name if meta["vectors"] else "computed"
+        previews = sorted({r.get("preview_chars", MCP_PREVIEW_CHARS) for r in records})
         print(f"\n{meta['name']}: commit {meta['commit'][:12]}, vectors {source}, "
+              f"smriti_read shows {'/'.join(map(str, previews))} characters, "
               f"search median {sorted(times)[len(times) // 2]:.0f} ms")
         close = nothing_close(records)
         if close:

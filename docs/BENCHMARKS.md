@@ -41,8 +41,9 @@ answered from the history (abstention).
 Over the 470 answerable questions. Session recall@k: an evidence session among
 the first k sessions of a 50-chunk ranking (any: one of them; all: every
 one). The agent's view is the 5 results `smriti_read` returns by default, and
-of each the 1,000 characters it shows: whether one comes from an evidence
-session, and whether one shows part of an evidence turn.
+of each the 1,000 characters it showed (both checkouts measured cut there; since
+H15.11 it shows a whole chunk): whether one comes from an evidence session, and
+whether one shows part of an evidence turn.
 
 | | recall_any@5 | recall_all@5 | recall_any@10 | recall_all@10 | NDCG@10 | MRR | agent: evidence session | agent: evidence turn |
 |---|---|---|---|---|---|---|---|---|
@@ -111,10 +112,12 @@ session was among what it saw for 90 of the 91 answerable questions.
 - **What reaches the agent is.** Part of an evidence turn is in what
   `smriti_read` shows for 84% of questions, 57% for preferences. Results were
   cut at 1,000 characters, and a single long line became one chunk of up to
-  24,000 characters, since the chunker split only at line breaks (H15.10 cuts
-  such a line into chunks of at most 1,500 characters). One graded
+  24,000 characters, since the chunker split only at line breaks. One graded
   failure was this: the agent saw three of four items and said the fourth was
-  cut off.
+  cut off. Since H15.10 the chunker cuts such a line into chunks of at most
+  1,500 characters, and since H15.11 `smriti_read` shows every chunk the
+  chunker makes whole (at most 4,502 characters, a chunk with the lines it
+  repeats from the one before); these runs predate both.
 - **Counting across sessions is the weak answer type** (72%): most failures
   were short counts, where the agent stopped searching after finding some of
   the sessions. For multi-session questions, recall_all@5 is 0.835 against

@@ -167,6 +167,18 @@ def test_an_evidence_line_cut_by_the_preview_counts_when_enough_shows(lme: Modul
     assert not lme.shows_evidence(too_little, (line,))
 
 
+def test_the_agent_sees_what_the_checkouts_smriti_read_shows(
+        lme: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    from smriti.mcp.tools import memory
+
+    assert lme.preview_chars() == memory.PREVIEW_CHARS > lme.MCP_PREVIEW_CHARS  # this one says
+    assert lme.visible("x" * 9000, memory.PREVIEW_CHARS) == "x" * memory.PREVIEW_CHARS
+    monkeypatch.delattr(memory, "PREVIEW_CHARS")  # a checkout from before H15.11
+    assert lme.preview_chars() == lme.MCP_PREVIEW_CHARS == 1000
+    monkeypatch.setitem(sys.modules, "smriti.mcp.tools.memory", None)  # older still
+    assert lme.preview_chars() == 1000
+
+
 def test_a_chunk_that_continues_a_long_evidence_line_shows_it(lme: ModuleType) -> None:
     # One long line: the chunker can split it, so a later chunk holds only its middle or end.
     line = lme.collapse("Some background on my week, which was busy with work and errands "
