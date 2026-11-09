@@ -22,7 +22,7 @@ from smriti_reference.notify import Delivery, NotifyError, parse_channels, send
 
 @pytest.fixture(autouse=True)
 def _no_real_sender(monkeypatch: pytest.MonkeyPatch, reference_profile: Path) -> None:
-    """Any path that would reach the real notify_suti.py fails the test."""
+    """Any path that would reach the real sender fails the test."""
 
     def _refuse(text: str, level: str) -> Delivery:
         raise AssertionError("tell_suti reached the real sender")
@@ -157,11 +157,16 @@ class TestSend:
             send(cfg, "quiet note", level=level)
         assert not seen.exists()  # refused before the command ran
 
-    def test_feed_only_level_passes_to_level_aware_sender(self, tmp_path: Path) -> None:
-        script = tmp_path / "notify_suti.py"
-        script.write_text(_FAKE_SENDER, encoding="utf-8")
+    def test_feed_only_level_passes_to_level_aware_sender(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A stand-in module, so the real prana.notify can never run here.
+        (tmp_path / "fake_fanout.py").write_text(_FAKE_SENDER, encoding="utf-8")
+        monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+        monkeypatch.setattr(notify, "LEVEL_AWARE_SENDERS", frozenset({"fake_fanout"}))
         seen = tmp_path / "seen.json"
-        cfg = DaylogConfig(root=tmp_path, notify_cmd=[sys.executable, str(script), str(seen)])
+        cmd = [sys.executable, "-m", "fake_fanout", str(seen)]
+        cfg = DaylogConfig(root=tmp_path, notify_cmd=cmd)
         send(cfg, "quiet note", level="log")
         assert json.loads(seen.read_text(encoding="utf-8"))["level"] == "log"
 
@@ -172,15 +177,26 @@ class TestSend:
         monkeypatch.setenv("FAKE_REPORT", "")
         assert send(cfg, "hi").channels == ("notify_cmd",)
 
-    def test_falls_back_to_tree_script(self, tmp_path: Path) -> None:
+    def test_never_falls_back_to_a_script_in_the_tree(self, tmp_path: Path) -> None:
+        # A write to the tree must not choose what runs: without notify_cmd,
+        # nothing is sent, even with the old fan-out script in its old place.
+        script = tmp_path / ".smriti" / "hooks" / "notify_suti.py"
+        script.parent.mkdir(parents=True)
+        script.write_text("", encoding="utf-8")
         cfg = DaylogConfig(root=tmp_path)
         assert notify.notify_command(cfg) == []
         with pytest.raises(NotifyError, match="no notify_cmd"):
             send(cfg, "hi")
-        script = tmp_path / notify.NOTIFY_SCRIPT
-        script.parent.mkdir(parents=True)
-        script.write_text("", encoding="utf-8")
-        assert notify.notify_command(cfg) == [sys.executable, str(script)]
+
+    @pytest.mark.parametrize(("cmd", "aware"), [
+        (["py", "-P", "-m", "prana.notify"], True),
+        (["py", "-m", "prana.notify"], True),
+        (["py", "-m", "prana.notify.telegram"], False),
+        (["py", "/tree/.smriti/hooks/notify_suti.py"], False),
+        (["prana.notify"], False),
+    ])
+    def test_level_aware_is_the_fan_out_module(self, cmd: list[str], aware: bool) -> None:
+        assert notify.level_aware(cmd) is aware
 
     def test_load_config_reads_notify_cmd(self, tmp_path: Path) -> None:
         (tmp_path / ".smriti").mkdir()

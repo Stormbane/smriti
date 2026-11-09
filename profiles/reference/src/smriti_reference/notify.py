@@ -3,8 +3,8 @@
 The core's door to the user is ``smriti.daylog.notify.notify_user``: the
 message on ``notify_cmd``'s stdin. ``send`` is the same door with a level
 and a receipt: it sets ``NOTIFY_LEVEL`` for the fan-out sender
-(``notify_suti.py``: Telegram, then the brain's app feed and push) and
-reports which channels delivered. The ``tell_suti`` MCP tool uses it, and
+(prana's ``python -m prana.notify``: Telegram, then the brain's app feed
+and push) and reports which channels delivered. The ``tell_suti`` MCP tool uses it, and
 the HANDS wake section names the command.
 """
 
@@ -29,16 +29,13 @@ log = logging.getLogger(__name__)
 LEVELS: tuple[str, ...] = ("log", "warn", "message", "error", "emergency")
 FEED_ONLY_LEVELS: tuple[str, ...] = ("log", "warn")
 
-# Senders that honour NOTIFY_LEVEL. A legacy command such as
-# notify_telegram.py ignores it and would put feed-only levels on Telegram,
-# so feed-only levels are refused unless one of these is the command.
-LEVEL_AWARE_SENDERS: frozenset[str] = frozenset({"notify_suti.py"})
+# Senders that honour NOTIFY_LEVEL, as the module a ``-m`` runs. A
+# single-channel command such as ``-m prana.notify.telegram`` ignores it and
+# would put feed-only levels on Telegram, so feed-only levels are refused
+# unless one of these is the command.
+LEVEL_AWARE_SENDERS: frozenset[str] = frozenset({"prana.notify"})
 
-# The fan-out sender, relative to the tree root. Used when daylog.json
-# names no notify_cmd.
-NOTIFY_SCRIPT = Path(".smriti") / "hooks" / "notify_suti.py"
-
-# notify_telegram.py cuts at 4,000 (Telegram's hard limit is 4,096).
+# prana's Telegram sender cuts at 4,000 (Telegram's hard limit is 4,096).
 # Refuse rather than let a message arrive silently truncated.
 MAX_MESSAGE_CHARS = 4000
 
@@ -62,18 +59,22 @@ Sender = Callable[[str, str], Delivery]
 
 
 def notify_command(cfg: DaylogConfig) -> list[str]:
-    """The command that reaches Suti: daylog.json's notify_cmd, else the
-    fan-out script in the tree, else nothing."""
-    if cfg.notify_cmd:
-        return list(cfg.notify_cmd)
-    script = cfg.root / NOTIFY_SCRIPT
-    if script.is_file():
-        return [sys.executable, str(script)]
-    return []
+    """The command that reaches Suti: daylog.json's notify_cmd, or nothing.
+
+    Never a script in the tree, which a write to the tree could change."""
+    return list(cfg.notify_cmd or [])
+
+
+def level_aware(cmd: list[str]) -> bool:
+    """Whether *cmd* runs a sender that honours ``NOTIFY_LEVEL``."""
+    return any(
+        flag == "-m" and module in LEVEL_AWARE_SENDERS
+        for flag, module in zip(cmd, cmd[1:], strict=False)
+    )
 
 
 def parse_channels(stderr: str) -> tuple[str, ...] | None:
-    """Channels from notify_suti.py's last ``delivered via: ...`` line.
+    """Channels from the fan-out sender's last ``delivered via: ...`` line.
     None when the sender printed no such line (an older single-channel
     command); an empty tuple when it said NOTHING."""
     matches = _DELIVERED_RE.findall(stderr or "")
@@ -109,23 +110,19 @@ def send(
         raise NotifyError(f"unknown level {level!r}; use one of {', '.join(LEVELS)}")
     cmd = notify_command(cfg)
     if not cmd:
-        raise NotifyError(
-            f"no notify_cmd in .smriti/daylog.json and no {cfg.root / NOTIFY_SCRIPT}"
-        )
-    if level in FEED_ONLY_LEVELS and not any(
-        Path(part).name in LEVEL_AWARE_SENDERS for part in cmd
-    ):
+        raise NotifyError("no notify_cmd in .smriti/daylog.json")
+    if level in FEED_ONLY_LEVELS and not level_aware(cmd):
         raise NotifyError(
             f"level {level!r} is feed-only, but the notify command "
             f"({Path(cmd[-1]).name}) ignores levels and would send it to Telegram. "
-            "Use level='message', or point notify_cmd at notify_suti.py."
+            "Use level='message', or point notify_cmd at python -m prana.notify."
         )
     env = {
         **os.environ,
         "NOTIFY_LEVEL": level,
         "NOTIFY_SOURCE": source,
         # The child decodes stdin with the locale codepage on Windows
-        # (cp1252) without this; see notify_suti.py.
+        # (cp1252) without this.
         "PYTHONUTF8": "1",
     }
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0

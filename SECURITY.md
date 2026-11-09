@@ -77,9 +77,8 @@ security backport series or guaranteed response time.
   there, and their `wake.py` once no hook smriti manages still runs it (a
   hand-written one is left, and nothing runs it). What `daylog.json` configures
   is the operator's: `notify_cmd` is run by the morning message and the
-  reference profile's `tell_suti`, and without one the reference profile runs
-  `<root>/.smriti/hooks/notify_suti.py`, a script in the tree; keep such a
-  command out of the tree to keep the tree free of code that runs.
+  reference profile's `tell_suti`; keep such a command out of the tree to keep
+  the tree free of code that runs.
 - A profile (`"profile"` in `daylog.json`) is code from an installed package,
   found through the `smriti.profiles` entry-point group of the Python
   environment smriti runs in; nothing is loaded from the memory tree, so the
@@ -186,12 +185,12 @@ listens on loopback only.
   `SMRITI_EMBED_PROVIDER=onnx smriti index --full`.
 - **The reference profile's channels** (only with `"profile": "reference"`). The
   `tell_suti` tool's text, with its level, goes to the fan-out sender
-  (`notify_cmd`, else `<root>/.smriti/hooks/notify_suti.py`), which sends the
-  levels `message`, `error` and `emergency` to Telegram, and every level to the
-  maintainer's app feed and its push notifications; that script, not smriti,
-  does the sending. The morning message goes through it too when `notify_cmd`
-  names it. *When:* each time the agent calls the tool. *Off:* no profile, or
-  neither command.
+  `notify_cmd` names (in the reference install, prana's `python -m
+  prana.notify`), which sends the levels `message`, `error` and `emergency` to
+  Telegram, and every level to the maintainer's app feed and its push
+  notifications; that sender, not smriti, does the sending. The morning message
+  goes through it too. *When:* each time the agent calls the tool. *Off:* no
+  profile, or no `notify_cmd`.
 - **Local by default.** Ollama, for the LLM (`SMRITI_OLLAMA_URL`) or embeddings
   (`SMRITI_EMBED_PROVIDER=ollama`, `OLLAMA_HOST`), is on localhost unless
   pointed elsewhere; then the same text goes there.

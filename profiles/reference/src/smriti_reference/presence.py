@@ -283,7 +283,7 @@ def hands_section(src: WakeSources) -> str:
             "(env NOTIFY_LEVEL=message)."
         )
     else:
-        lines.append("- Message Suti: no sender wired (no notify_cmd, no notify_suti.py).")
+        lines.append("- Message Suti: no sender wired (no notify_cmd in daylog.json).")
     if has("akhada"):
         lines.append(
             "- Health (akhada): log_meal, log_vital, log_workout, set_day_kind; "

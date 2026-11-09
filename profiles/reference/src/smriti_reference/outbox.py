@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 Sender = Callable[[str, str], "Delivery"]
 
 # Tests replace this (or pass ``sender=``) so no real message is sent.
-# None means: the real sender, notify_suti.py via daylog's notify_cmd.
+# None means: the real sender, daylog's notify_cmd (prana's fan-out).
 TELL_SUTI_SENDER: Sender | None = None
 
 
@@ -30,7 +30,7 @@ def _default_tell_suti_sender(text: str, level: str) -> Delivery:
 
 
 def handle_tell_suti(arguments: Arguments, sender: Sender | None = None) -> str:
-    """Message Suti through every channel notify_suti.py fans out to.
+    """Message Suti through every channel the fan-out sender reaches.
 
     Raises on any failure so the caller sees ``isError`` rather than a
     message that silently went nowhere.
@@ -277,7 +277,7 @@ def handle_resolve_outbox(arguments: Arguments) -> str:
 TOOLS = (
     Tool(
         name="tell_suti",
-        description="Send Suti a message now. It goes out through notify_suti.py, which "
+        description="Send Suti a message now. It goes out through prana's notify, which "
             "fans out to Telegram and the phone app (feed and push), and the "
             "result names the channels that delivered. Use it whenever he asks "
             "you to message him, or when something needs his attention away "

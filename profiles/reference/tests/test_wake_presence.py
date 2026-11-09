@@ -29,7 +29,7 @@ from smriti_reference.presence import (
     suti_now_section,
 )
 from smriti.wake.briefing import DEFAULT_BUDGET, IDENTITY_FLOOR, briefing
-from _reference import enable_reference
+from _reference import enable_profile, enable_reference
 
 NOW = datetime(2026, 11, 3, 10, 0, tzinfo=timezone.utc)
 
@@ -95,7 +95,7 @@ def tree(tmp_path: Path) -> Path:
     root = tmp_path / "narada"
     enable_reference(root)
     _write(root / ".smriti" / "wake-context.md", "# Narada\nI am Narada. Test identity.\n")
-    _write(root / ".smriti" / "hooks" / "notify_suti.py", "# fake, never run\n")
+    enable_profile(root, notify_cmd=["py", "-P", "-m", "prana.notify"])  # never run
     _write(root / "brain" / "notes.json", "[]")
     (root / "akhada").mkdir(parents=True)
     (root / "akhada" / "akhada.db").write_bytes(b"")
@@ -198,11 +198,11 @@ class TestHands:
         assert "smriti_read(query)" in text
         assert "Not working: narada-speak" in text
 
-    def test_without_smriti_points_at_the_script(self, tree: Path, tmp_path: Path) -> None:
+    def test_without_smriti_points_at_the_command(self, tree: Path, tmp_path: Path) -> None:
         cfg = _write(tmp_path / "c.json", json.dumps({"mcpServers": {}}))
         text = hands_section(_sources(tree, cfg))
         assert "tell_suti" not in text
-        assert "pipe text on stdin to" in text and "notify_suti.py" in text
+        assert "pipe text on stdin to py -P -m prana.notify" in text
         assert "akhada" not in text
 
     def test_unreadable_config_assumes_smriti(self, tree: Path, tmp_path: Path) -> None:
