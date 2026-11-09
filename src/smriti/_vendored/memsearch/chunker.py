@@ -213,6 +213,12 @@ def _split_large_section(
             )
 
     for i, line in enumerate(lines):
+        # smriti: a line of whitespace alone is a blank line, however long:
+        # a paragraph break, with nothing to cut and nothing to keep. (Cut
+        # as a long line it gave no pieces, and the lines held back to open
+        # the first piece went nowhere.)
+        if len(line) > max_size and not line.strip():
+            line = ""
         # smriti: a line longer than max_size never joins a chunk whole
         # (upstream added it like any other line, so it became part of a
         # chunk of any size). The lines before it go first: as the start of
@@ -345,7 +351,9 @@ def _split_long_line(line: str, max_size: int, first: int) -> list[str]:
     *max_size*. A piece ends at the last sentence end in the second half of
     its room, else at the last whitespace in it, so no word is cut; a
     "word" longer than the room (a URL, a hash, text without spaces) is cut
-    at the room. The whitespace at a cut belongs to neither piece.
+    at the room. The whitespace at a cut belongs to neither piece. Every
+    piece holds text, and a line with any text gives at least one (the
+    caller opens the first with the lines before the line).
     """
     parts: list[str] = []
     text = line.strip()

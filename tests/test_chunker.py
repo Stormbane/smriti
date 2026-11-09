@@ -179,6 +179,119 @@ def test_the_default_bound() -> None:
     assert max_chunk_chars() == (OVERLAP_LINES + 1) * MAX_CHUNK_SIZE + OVERLAP_LINES
 
 
+# A line of whitespace alone, longer than the size: it gave no pieces, and the
+# lines held back to open the first piece were dropped (Codex's diff review).
+DECISION = "Ari decided to take the train."
+BLANK = " " * 1600
+WHITESPACE_CASES = {
+    "between two lines": f"{DECISION}\n{BLANK}\nSam agreed.",
+    "after a heading": f"## Plans\n\n{DECISION}\n{BLANK}\nSam agreed.\n",
+    "right after a heading": f"## Plans\n{BLANK}\n{DECISION}\nSam agreed.\n",
+    "first in the file": f"{BLANK}\n{DECISION}\nSam agreed.",
+    "last in the file": f"{DECISION}\nSam agreed.\n" + "\t" * 1600,
+    "of mixed whitespace": f"{DECISION}\n" + "　 \t " * 500 + "\nSam agreed.",
+    "between long lines": f"{DECISION}\n{_long_line(2000)}\n{BLANK}\n{_long_line(2000, 2)}",
+    "after a long section": "## Plans\n\n" + "\n".join(
+        f"Line {n} of the plan Ari and Sam wrote." for n in range(60))
+        + f"\n{DECISION}\n{BLANK}\nSam agreed.\n",
+}
+
+
+def _words(text: str) -> set[str]:
+    return set(text.split())
+
+
+@pytest.mark.parametrize("text", WHITESPACE_CASES.values(), ids=WHITESPACE_CASES.keys())
+def test_a_long_line_of_whitespace_loses_nothing_around_it(text: str) -> None:
+    chunks = chunk_markdown(text, source="notes/plans.md")
+    assert _words(text) <= set().union(*(_words(c.content) for c in chunks))
+    assert max(len(c.content) for c in chunks) <= max_chunk_chars()
+
+
+def test_a_decision_beside_a_long_line_of_whitespace_is_indexed(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "tree"
+    (root / "notes").mkdir(parents=True)
+    (root / "notes" / "plans.md").write_text(WHITESPACE_CASES["between two lines"],
+                                             encoding="utf-8")
+    monkeypatch.setattr(embedding, "embedder", lambda: StubEmbedding())
+    db = tmp_path / "index.db"
+    indexer.index_tree(root=root, db=db)
+    conn = sqlite3.connect(db)
+    try:
+        found = conn.execute("SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH "
+                             "'decided train'").fetchone()[0]
+    finally:
+        conn.close()
+    assert found == 1
+
+
+_SPACES = " \t　 "
+
+
+def _hostile_document(rng: random.Random, size: int) -> str:
+    """Sections with every kind of line beside every other: blank ones, lines
+    of whitespace alone (some far longer than the size), short and long text,
+    "words" longer than the size, long headings, long lines first and last.
+    Each section has text; every word is unique (``a<n>z``, or ``a<n>q...qz``)."""
+    counter = 0
+
+    def text_line(target: int, token: bool = False) -> str:
+        nonlocal counter
+        if token:  # one "word" of about target characters, with no space to cut at
+            counter += 1
+            return f"a{counter}" + "q" * target + "z"
+        words: list[str] = []
+        length = 0
+        while length < target:
+            counter += 1
+            words.append(f"a{counter}z")
+            length += len(words[-1]) + 1
+        return " ".join(words)
+
+    def any_line() -> str:
+        kind = rng.randrange(7)
+        if kind == 0:
+            return ""
+        if kind == 1:
+            return "".join(rng.choice(_SPACES) for _ in range(rng.randint(1, 3 * size)))
+        if kind == 2:
+            return text_line(rng.randint(1, size // 2))
+        if kind == 3:
+            return text_line(rng.randint(size // 2, size))
+        if kind == 4:
+            return text_line(rng.randint(size + 1, 4 * size))
+        if kind == 5:
+            return text_line(rng.randint(size, 3 * size), token=True)
+        return rng.choice(["  ", "\t", "- " + text_line(rng.randint(1, size))])
+
+    lines: list[str] = []
+    for s in range(rng.randint(1, 4)):
+        heading = text_line(rng.randint(size, 2 * size)) if rng.random() < 0.15 \
+            else f"Section {s}"
+        lines.append("#" * rng.randint(1, 3) + " " + heading)
+        body = [any_line() for _ in range(rng.randint(0, 14))]
+        body.insert(rng.randint(0, len(body)), text_line(rng.randint(1, 2 * size)))
+        lines += body
+    return "\n".join(lines) + rng.choice(["", "\n", "\n" + " " * (2 * size)])
+
+
+@pytest.mark.parametrize("size", [60, 300, MAX_CHUNK_SIZE])
+@pytest.mark.parametrize("overlap", [0, OVERLAP_LINES])
+def test_no_text_is_lost_whatever_the_lines_hold(size: int, overlap: int) -> None:
+    rng = random.Random(size * 7 + overlap)
+    bound = max_chunk_chars(size, overlap)
+    for _ in range(60):
+        text = _hostile_document(rng, size)
+        chunks = chunk_markdown(text, max_chunk_size=size, overlap_lines=overlap)
+        assert all(len(c.content) <= bound for c in chunks)
+        # Every word of the input is in the chunks, in one piece once the
+        # whitespace between chunks is taken away (a cut can split a word
+        # with no space in it, or, as upstream does, an overlap's word).
+        joined = re.sub(r"\s", "", "".join(c.content for c in chunks))
+        assert set(re.findall(r"a\d+q*z", text)) <= set(re.findall(r"a\d+q*z", joined))
+
+
 def test_a_file_with_one_long_line_indexes_into_chunks_within_the_size(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "tree"
